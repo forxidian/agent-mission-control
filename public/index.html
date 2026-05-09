@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent 任务控制台</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">本地多 Agent 控制台</p>
+          <h1>Agent 任务控制台</h1>
+        </div>
+        <div class="topbar-actions">
+          <p id="last-updated" class="timestamp" aria-live="polite">等待数据</p>
+          <p id="monitor-status" class="timestamp" aria-live="polite">监控未启动</p>
+          <button id="notification-button" class="action-button secondary" type="button">开启桌面提醒</button>
+          <button id="notification-test-button" class="action-button secondary" type="button">测试提醒</button>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="刷新看板" title="刷新看板">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M20 6v5h-5"></path>
+              <path d="M4 18v-5h5"></path>
+              <path d="M18.5 9A7 7 0 0 0 6.8 6.4L4 9"></path>
+              <path d="M5.5 15A7 7 0 0 0 17.2 17.6L20 15"></path>
+            </svg>
+          </button>
+          <label class="toggle">
+            <input id="auto-refresh" type="checkbox" checked>
+            <span>自动刷新</span>
+          </label>
+        </div>
+      </header>
+
+      <section id="status-banner" class="status-banner" hidden></section>
+
+      <section id="summary" class="summary-grid" aria-label="看板摘要"></section>
+
+      <section class="controls" aria-label="线程筛选">
+        <label class="search-field">
+          <span>搜索</span>
+          <input id="search-input" type="search" autocomplete="off" placeholder="线程、项目、来源、路径">
+        </label>
+        <label>
+          <span>来源</span>
+          <select id="provider-filter">
+            <option value="all">全部来源</option>
+          </select>
+        </label>
+        <label>
+          <span>状态</span>
+          <select id="status-filter">
+            <option value="all">全部</option>
+            <option value="running">工作中</option>
+            <option value="fresh">活跃</option>
+            <option value="warm">温热</option>
+            <option value="idle">空闲</option>
+            <option value="archived">已归档</option>
+          </select>
+        </label>
+        <label>
+          <span>项目</span>
+          <select id="project-filter">
+            <option value="all">全部项目</option>
+          </select>
+        </label>
+        <label class="toggle">
+          <input id="archive-toggle" type="checkbox">
+          <span>显示归档</span>
+        </label>
+      </section>
+
+      <div class="layout">
+        <section class="panel thread-panel" aria-labelledby="threads-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">线程</p>
+              <h2 id="threads-heading">近期工作</h2>
+            </div>
+            <p id="thread-count" class="panel-note">0 条</p>
+          </div>
+          <div id="threads" class="thread-list" aria-live="polite"></div>
+        </section>
+
+        <aside class="side-rail">
+          <section class="panel" aria-labelledby="inbox-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">通知</p>
+                <h2 id="inbox-heading">待处理</h2>
+              </div>
+              <p id="notification-count" class="panel-note">0 项</p>
+            </div>
+            <div id="inbox" class="inbox-list"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="projects-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">用量</p>
+                <h2 id="projects-heading">项目排行</h2>
+              </div>
+            </div>
+            <div id="projects" class="project-list"></div>
+          </section>
+        </aside>
+      </div>
+
+      <section id="detail" class="detail-panel" aria-live="polite"></section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

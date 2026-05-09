@@ -1,0 +1,31 @@
+.DS_Store
+node_modules/
+coverage/
+dist/
+build/
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.env
+.env.*
+
+# Local agent state and exported diagnostics must stay out of source control.
+.codex/
+.claude/
+.agent-mission-control/
+.codex-mission-control/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.jsonl
+
+# Certificates and keys.
+*.pem
+*.key
+*.p12
+*.pfx

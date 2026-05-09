@@ -1,0 +1,21 @@
+{
+  "name": "agent-mission-control",
+  "description": "Local mission-control dashboard for Codex, OpenCode, Claude Code, and compatible agent sessions.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "agent",
+    "codex",
+    "opencode",
+    "claude",
+    "dashboard"
+  ],
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

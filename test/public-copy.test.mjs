@@ -1,0 +1,156 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+
+test('uses Chinese copy for visible system fields', async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+  ]);
+  const publicCopy = `${html}\n${app}`;
+
+  for (const expected of [
+    'Agent 任务控制台',
+    '本地多 Agent 控制台',
+    '等待数据',
+    '自动刷新',
+    '监控未启动',
+    '监控中',
+    '心跳',
+    '搜索',
+    '来源',
+    '全部来源',
+    '状态',
+    '项目',
+    '全部',
+    '当前重点',
+    '历史',
+    '实时可用 quota',
+    '本周可用 quota',
+    '今日 token',
+    '工作中 Agent',
+    '长期累计',
+    '累计 token',
+    '累计线程',
+    '桌面端',
+    '未检测到',
+    '活跃',
+    '工作中',
+    '温热',
+    '空闲',
+    '已归档',
+    '近期工作',
+    '用量',
+    '项目排行',
+    'token',
+    'tokens',
+    '最近活动',
+    '正在工作',
+    '高 token 用量',
+    '等待验收',
+    '等待授权',
+    '打开线程',
+    '打开并标记已处理',
+    '复制命令',
+    'resume 命令',
+    '本轮耗时',
+    '待处理',
+    '开启桌面提醒',
+    '桌面提醒已开启',
+    '测试提醒',
+    '标记已处理',
+    '稍后提醒',
+  ]) {
+    assert.match(publicCopy, new RegExp(expected));
+  }
+
+  assert.match(html, /id="auto-refresh" type="checkbox" checked/);
+
+  assert.equal(publicCopy.includes('令牌'), false, 'token should not be translated as 令牌');
+
+  for (const oldCopy of [
+    'Local read-only console',
+    'Waiting for data',
+    'Refresh dashboard',
+    'Auto',
+    'Thread, project, path',
+    'All projects',
+    'Recent Work',
+    'Attention',
+    'No matching threads',
+    'Selected thread',
+    'Rate limit',
+  ]) {
+    assert.equal(publicCopy.includes(oldCopy), false, `leftover English UI copy: ${oldCopy}`);
+  }
+});
+
+test('does not expose per-thread rate limit copy', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  for (const staleThreadCopy of [
+    '限流用量',
+    '速率限制',
+    '速率限制已用量',
+  ]) {
+    assert.equal(app.includes(staleThreadCopy), false, `stale per-thread quota copy: ${staleThreadCopy}`);
+  }
+});
+
+test('clamps long thread and notification titles in list views', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  assert.match(styles, /\.thread-title[\s\S]*-webkit-line-clamp: 2/);
+  assert.match(styles, /\.inbox-title[\s\S]*-webkit-line-clamp: 4/);
+});
+
+test('prioritizes today token usage while retaining historical usage in thread rows', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function tokenUsageMarkup\(thread\)/);
+  assert.match(app, /<span class="token-label">今日<\/span>/);
+  assert.match(app, /<strong>\$\{escapeHtml\(formatTokens\(thread\.todayTokenUsage\)\)\}<\/strong>/);
+  assert.match(app, /历史 \$\{escapeHtml\(formatTokens\(thread\.tokensUsed\)\)\}/);
+  assert.match(styles, /\.token-history/);
+});
+
+test('opens thread deep links without waiting for the local server round trip', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('async function openThread');
+  const end = app.indexOf('async function updateNotification', start);
+  const openThreadSource = app.slice(start, end);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(openThreadSource, /window\.location\.href = thread\.appDeepLink/);
+  assert.ok(
+    openThreadSource.indexOf('window.location.href = thread.appDeepLink') < openThreadSource.indexOf('fetch(`/api/threads/'),
+    'Codex deep link path should run before the server opener fallback',
+  );
+});
+
+test('formats token totals with compact M and B units for consistent scanning', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const match = app.match(/function formatTokens\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(match, 'formatTokens should exist');
+
+  const context = { result: null };
+  vm.runInNewContext(`
+    ${match[0]}
+    result = [
+      formatTokens(0),
+      formatTokens(40_000),
+      formatTokens(403_337),
+      formatTokens(1_000_000),
+      formatTokens(47_200_000),
+      formatTokens(2_015_000_000),
+      formatTokens(12_500_000_000)
+    ];
+  `, context);
+
+  assert.deepEqual(Array.from(context.result), ['0M', '<0.1M', '0.4M', '1M', '47.2M', '2.02B', '12.5B']);
+});
