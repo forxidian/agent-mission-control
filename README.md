@@ -4,7 +4,7 @@
 
 它默认只监听 `127.0.0.1`，只读取本机状态文件，不写入 Codex / OpenCode / Claude 的工作数据，也不发送遥测。
 
-![Agent Mission Control mock screenshot](docs/assets/agent-mission-control-mock.svg)
+![Agent Mission Control mock screenshot](docs/assets/agent-mission-control-real-ui.png)
 
 截图使用虚构数据，只展示界面形态。
 
@@ -84,6 +84,15 @@ npm test
 ```
 
 项目刻意保持轻依赖：当前没有外部 npm 依赖，主要使用 Node.js 内置 test runner、浏览器原生 API 和系统命令。
+
+生成 README 演示图：
+
+```bash
+npm run screenshot:mock
+```
+
+这个命令会启动真实前端和 mock API，并用 Chrome headless 截图。
+如果 Chrome 不在默认 macOS 路径，可以通过 `CHROME_PATH` 指定浏览器可执行文件；如果端口被占用，可以通过 `PORT` 指定临时端口。
 
 ## 开源准备
 

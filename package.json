@@ -12,6 +12,8 @@
     "dashboard"
   ],
   "scripts": {
+    "mock": "node scripts/mock-dashboard-server.mjs",
+    "screenshot:mock": "node scripts/capture-mock-screenshot.mjs",
     "start": "node src/server.mjs",
     "test": "node --test"
   },
