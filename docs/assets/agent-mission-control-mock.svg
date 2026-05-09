@@ -1,0 +1,165 @@
+<svg width="1280" height="820" viewBox="0 0 1280 820" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Mission Control mock dashboard screenshot</title>
+  <desc id="desc">A mocked local agent dashboard showing thread status, token usage, projects, and pending notifications with fictional data.</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1280" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2f7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .bg { fill: url(#page); }
+      .window { fill: #ffffff; stroke: #d8dee8; filter: url(#shadow); }
+      .chrome { fill: #f1f5f9; }
+      .dot-red { fill: #ef4444; }
+      .dot-yellow { fill: #f59e0b; }
+      .dot-green { fill: #22c55e; }
+      .title { fill: #0f172a; font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .eyebrow { fill: #64748b; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+      .panel { fill: #ffffff; stroke: #dbe3ee; }
+      .soft-panel { fill: #f8fafc; stroke: #e2e8f0; }
+      .label { fill: #64748b; font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #64748b; font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .text { fill: #172033; font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .heading { fill: #0f172a; font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .number { fill: #0f172a; font: 800 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .button { fill: #0f172a; }
+      .buttonText { fill: #ffffff; font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .outlineButton { fill: #ffffff; stroke: #cbd5e1; }
+      .outlineText { fill: #334155; font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillBlue { fill: #dbeafe; }
+      .pillBlueText { fill: #1d4ed8; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillGreen { fill: #dcfce7; }
+      .pillGreenText { fill: #15803d; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillAmber { fill: #fef3c7; }
+      .pillAmberText { fill: #b45309; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillSlate { fill: #e2e8f0; }
+      .pillSlateText { fill: #475569; font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .barTrack { fill: #e2e8f0; }
+      .barBlue { fill: url(#accent); }
+      .barGreen { fill: #16a34a; }
+      .barAmber { fill: #f59e0b; }
+      .divider { stroke: #e2e8f0; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="820"/>
+  <rect class="window" x="48" y="42" width="1184" height="736" rx="22"/>
+  <rect class="chrome" x="48" y="42" width="1184" height="54" rx="22"/>
+  <circle class="dot-red" cx="80" cy="69" r="7"/>
+  <circle class="dot-yellow" cx="104" cy="69" r="7"/>
+  <circle class="dot-green" cx="128" cy="69" r="7"/>
+  <text class="small" x="614" y="74" text-anchor="middle">127.0.0.1:4629</text>
+
+  <g transform="translate(84 128)">
+    <text class="eyebrow" x="0" y="0">LOCAL MULTI-AGENT DASHBOARD</text>
+    <text class="title" x="0" y="42">Agent 任务控制台</text>
+    <text class="subtitle" x="0" y="72">Codex、OpenCode、Claude Code 的线程、用量、待处理事项集中看</text>
+  </g>
+
+  <g transform="translate(930 126)">
+    <rect class="outlineButton" x="0" y="0" width="112" height="38" rx="8"/>
+    <text class="outlineText" x="56" y="25" text-anchor="middle">开启提醒</text>
+    <rect class="button" x="124" y="0" width="96" height="38" rx="8"/>
+    <text class="buttonText" x="172" y="25" text-anchor="middle">刷新</text>
+  </g>
+
+  <g transform="translate(84 232)">
+    <rect class="panel" x="0" y="0" width="250" height="102" rx="10"/>
+    <text class="label" x="22" y="30">今日 token</text>
+    <text class="number" x="22" y="68">42.8M</text>
+    <text class="small" x="154" y="68">历史 318M</text>
+
+    <rect class="panel" x="270" y="0" width="250" height="102" rx="10"/>
+    <text class="label" x="292" y="30">运行中</text>
+    <text class="number" x="292" y="68">7</text>
+    <text class="small" x="334" y="68">个活跃线程</text>
+
+    <rect class="panel" x="540" y="0" width="250" height="102" rx="10"/>
+    <text class="label" x="562" y="30">待处理</text>
+    <text class="number" x="562" y="68">3</text>
+    <text class="small" x="604" y="68">权限 / 验收</text>
+
+    <rect class="panel" x="810" y="0" width="250" height="102" rx="10"/>
+    <text class="label" x="832" y="30">可用 quota</text>
+    <text class="number" x="832" y="68">73%</text>
+    <text class="small" x="900" y="68">下次刷新 18:00</text>
+  </g>
+
+  <g transform="translate(84 362)">
+    <rect class="panel" x="0" y="0" width="720" height="342" rx="12"/>
+    <text class="eyebrow" x="24" y="34">THREADS</text>
+    <text class="heading" x="24" y="62">近期工作</text>
+    <text class="small" x="642" y="62">24 条</text>
+
+    <g transform="translate(24 88)">
+      <rect class="soft-panel" x="0" y="0" width="672" height="62" rx="8"/>
+      <text class="text" x="18" y="25">发布前 README 与 release notes 整理</text>
+      <text class="small" x="18" y="47">Codex · /workspace/agent-mission-control · 12 分钟前</text>
+      <rect class="pillGreen" x="544" y="15" width="70" height="24" rx="12"/>
+      <text class="pillGreenText" x="579" y="32" text-anchor="middle">工作中</text>
+      <text class="text" x="628" y="32">8.4M</text>
+    </g>
+
+    <g transform="translate(24 160)">
+      <rect class="soft-panel" x="0" y="0" width="672" height="62" rx="8"/>
+      <text class="text" x="18" y="25">OpenCode provider: permission signal parser</text>
+      <text class="small" x="18" y="47">OpenCode · /workspace/providers · 25 分钟前</text>
+      <rect class="pillAmber" x="528" y="15" width="86" height="24" rx="12"/>
+      <text class="pillAmberText" x="571" y="32" text-anchor="middle">待授权</text>
+      <text class="text" x="628" y="32">3.1M</text>
+    </g>
+
+    <g transform="translate(24 232)">
+      <rect class="soft-panel" x="0" y="0" width="672" height="62" rx="8"/>
+      <text class="text" x="18" y="25">Claude Cowork: archive old notification records</text>
+      <text class="small" x="18" y="47">Claude · /workspace/ops · 1 小时前</text>
+      <rect class="pillBlue" x="544" y="15" width="70" height="24" rx="12"/>
+      <text class="pillBlueText" x="579" y="32" text-anchor="middle">活跃</text>
+      <text class="text" x="628" y="32">2.7M</text>
+    </g>
+  </g>
+
+  <g transform="translate(832 362)">
+    <rect class="panel" x="0" y="0" width="320" height="156" rx="12"/>
+    <text class="eyebrow" x="22" y="34">INBOX</text>
+    <text class="heading" x="22" y="62">待处理</text>
+    <line class="divider" x1="22" y1="82" x2="298" y2="82"/>
+    <text class="text" x="22" y="108">OpenCode 请求工具授权</text>
+    <text class="small" x="22" y="130">provider-adapter · 刚刚</text>
+    <rect class="pillAmber" x="218" y="96" width="74" height="24" rx="12"/>
+    <text class="pillAmberText" x="255" y="113" text-anchor="middle">处理</text>
+
+    <rect class="panel" x="0" y="182" width="320" height="160" rx="12"/>
+    <text class="eyebrow" x="22" y="216">PROJECTS</text>
+    <text class="heading" x="22" y="244">项目排行</text>
+
+    <text class="text" x="22" y="280">agent-mission-control</text>
+    <rect class="barTrack" x="22" y="292" width="244" height="8" rx="4"/>
+    <rect class="barBlue" x="22" y="292" width="210" height="8" rx="4"/>
+    <text class="small" x="270" y="300">18M</text>
+
+    <text class="text" x="22" y="326">provider-lab</text>
+    <rect class="barTrack" x="22" y="338" width="244" height="8" rx="4"/>
+    <rect class="barGreen" x="22" y="338" width="148" height="8" rx="4"/>
+    <text class="small" x="270" y="346">11M</text>
+
+    <text class="text" x="22" y="372">docs-workbench</text>
+    <rect class="barTrack" x="22" y="384" width="244" height="8" rx="4"/>
+    <rect class="barAmber" x="22" y="384" width="96" height="8" rx="4"/>
+    <text class="small" x="270" y="392">6M</text>
+  </g>
+
+  <g transform="translate(96 732)">
+    <rect class="pillSlate" x="0" y="-22" width="104" height="28" rx="14"/>
+    <text class="pillSlateText" x="52" y="-3" text-anchor="middle">Mock data</text>
+    <text class="small" x="122" y="-3">截图为虚构数据，仅用于展示界面形态</text>
+  </g>
+</svg>

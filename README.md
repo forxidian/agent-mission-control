@@ -4,6 +4,10 @@
 
 它默认只监听 `127.0.0.1`，只读取本机状态文件，不写入 Codex / OpenCode / Claude 的工作数据，也不发送遥测。
 
+![Agent Mission Control mock screenshot](docs/assets/agent-mission-control-mock.svg)
+
+截图使用虚构数据，只展示界面形态。
+
 ## 功能
 
 - 汇总 Codex 本地线程、标题、项目、归档状态、模型、token 和 quota 信息。
@@ -23,7 +27,7 @@
 ## 运行
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/forxidian/agent-mission-control.git
 cd agent-mission-control
 npm start
 ```
