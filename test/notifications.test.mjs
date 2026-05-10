@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -116,6 +116,31 @@ test('creates actionable notification candidates for generic Agent permission re
   assert.equal(candidates[0].id, 'claude-desktop-cowork:local_123:AWAITING_PERMISSION:1777427260000');
 });
 
+test('does not create actionable notifications for sub-agent threads', () => {
+  const source = '{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}';
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({ source }),
+      permissionThread({ source }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
+test('does not create review notifications for sub-agent completions', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        hasUnreadTurn: false,
+        source: '{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}',
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
 
 test('persists notification state and hides completed items', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
@@ -153,7 +178,14 @@ test('dismisses stale active notifications when unread signal disappears', async
     const first = await center.refresh({ threads: [reviewThread()] });
     assert.equal(first.summary.activeCount, 1);
 
-    const second = await center.refresh({ threads: [reviewThread({ hasUnreadTurn: false })] });
+    const second = await center.refresh({
+      threads: [
+        reviewThread({
+          hasUnreadTurn: false,
+          latestUserMessageAtMs: 1777427300000,
+        }),
+      ],
+    });
     assert.equal(second.summary.activeCount, 0);
     assert.equal(second.items.length, 0);
   } finally {
@@ -161,7 +193,7 @@ test('dismisses stale active notifications when unread signal disappears', async
   }
 });
 
-test('notifies only for newly observed completion signals after initialization', async () => {
+test('notifies recent observed completion signals during initialization', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
   const storePath = path.join(dir, 'notifications.json');
   let now = 1777427300000;
@@ -171,9 +203,15 @@ test('notifies only for newly observed completion signals after initialization',
   });
 
   try {
-    const existingCompletion = reviewThread({ hasUnreadTurn: false });
+    const existingCompletion = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
     const initialized = await center.refresh({ threads: [existingCompletion] });
-    assert.equal(initialized.summary.activeCount, 0);
+    assert.equal(initialized.summary.activeCount, 1);
+    assert.equal(initialized.items[0].threadId, existingCompletion.id);
+    assert.equal(initialized.items[0].source, 'observed-completion');
 
     now += 60_000;
     const newCompletion = reviewThread({
@@ -183,7 +221,7 @@ test('notifies only for newly observed completion signals after initialization',
       updatedAtMs: 1777427360000,
     });
     const next = await center.refresh({ threads: [existingCompletion, newCompletion] });
-    assert.equal(next.summary.activeCount, 1);
+    assert.equal(next.summary.activeCount, 2);
     assert.equal(next.items[0].threadId, 'new-thread');
     assert.equal(next.items[0].source, 'observed-completion');
   } finally {
@@ -191,7 +229,74 @@ test('notifies only for newly observed completion signals after initialization',
   }
 });
 
-test('expires inferred completion notifications after a short grace window', async () => {
+test('suppresses stale observed completions during initialization', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  const now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const staleCompletion = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
+    const initialized = await center.refresh({ threads: [staleCompletion] });
+    assert.equal(initialized.summary.activeCount, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('keeps inferred completion notifications until explicitly handled', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  let now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const existingCompletion = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
+    await center.refresh({ threads: [existingCompletion] });
+
+    now += 1_000;
+    const newCompletion = reviewThread({
+      id: 'new-thread',
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: 1777427301000,
+      updatedAtMs: 1777427301000,
+    });
+    const created = await center.refresh({ threads: [existingCompletion, newCompletion] });
+    assert.equal(created.summary.activeCount, 1);
+    assert.equal(created.items[0].source, 'observed-completion');
+
+    now += 59_000;
+    const stillVisible = await center.refresh({ threads: [existingCompletion, newCompletion] });
+    assert.equal(stillVisible.summary.activeCount, 1);
+
+    now += 3 * 60 * 60 * 1000;
+    const later = await center.refresh({ threads: [existingCompletion, newCompletion] });
+    assert.equal(later.summary.activeCount, 1);
+
+    await center.updateNotification(created.items[0].id, { status: 'done' });
+    const handled = await center.refresh({ threads: [existingCompletion, newCompletion] });
+    assert.equal(handled.summary.activeCount, 0);
+    assert.equal(handled.items.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('reopens legacy auto-dismissed observed completions', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
   const storePath = path.join(dir, 'notifications.json');
   let now = 1777427300000;
@@ -213,16 +318,110 @@ test('expires inferred completion notifications after a short grace window', asy
     });
     const created = await center.refresh({ threads: [existingCompletion, newCompletion] });
     assert.equal(created.summary.activeCount, 1);
-    assert.equal(created.items[0].source, 'observed-completion');
 
-    now += 59_000;
-    const stillVisible = await center.refresh({ threads: [existingCompletion, newCompletion] });
-    assert.equal(stillVisible.summary.activeCount, 1);
+    const stored = JSON.parse(await readFile(storePath, 'utf8'));
+    stored.notifications[created.items[0].id] = {
+      ...stored.notifications[created.items[0].id],
+      status: 'dismissed',
+      updatedAtMs: now + 60_000,
+    };
+    await writeFile(storePath, `${JSON.stringify(stored, null, 2)}\n`);
 
+    now += 2 * 60_000;
+    const reopened = await center.refresh({ threads: [existingCompletion, newCompletion] });
+    assert.equal(reopened.summary.activeCount, 1);
+    assert.equal(reopened.items[0].status, 'unread');
+    assert.equal(reopened.items[0].source, 'observed-completion');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('does not reopen stale legacy observed completions', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  let now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
     now += 1_000;
-    const expired = await center.refresh({ threads: [existingCompletion, newCompletion] });
-    assert.equal(expired.summary.activeCount, 0);
-    assert.equal(expired.items.length, 0);
+    const oldCompletion = reviewThread({
+      id: 'old-thread',
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
+    const candidateId = `${oldCompletion.id}:AWAITING_REVIEW:${oldCompletion.latestAgentFinalAtMs}`;
+    await writeFile(storePath, `${JSON.stringify({
+      version: 2,
+      settings: { desktopNotificationsEnabled: false, privacyMode: true },
+      notifications: {
+        [candidateId]: {
+          id: candidateId,
+          threadId: oldCompletion.id,
+          type: 'AWAITING_REVIEW',
+          source: 'observed-completion',
+          status: 'dismissed',
+          threadTitle: oldCompletion.title,
+          projectName: oldCompletion.projectName,
+          signalAtMs: oldCompletion.latestAgentFinalAtMs,
+          createdAtMs: oldCompletion.latestAgentFinalAtMs,
+          updatedAtMs: oldCompletion.latestAgentFinalAtMs + 60_000,
+        },
+      },
+      observedReviewSignals: { [candidateId]: oldCompletion.latestAgentFinalAtMs },
+      reviewSignalsInitializedAtMs: 1777427200000,
+    }, null, 2)}\n`);
+
+    const result = await center.refresh({ threads: [oldCompletion] });
+    assert.equal(result.summary.activeCount, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dismisses stale active legacy observed completions without the sticky policy', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  const now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const staleCompletion = reviewThread({
+      id: 'stale-active-thread',
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
+    const candidateId = `${staleCompletion.id}:AWAITING_REVIEW:${staleCompletion.latestAgentFinalAtMs}`;
+    await writeFile(storePath, `${JSON.stringify({
+      version: 2,
+      settings: { desktopNotificationsEnabled: false, privacyMode: true },
+      notifications: {
+        [candidateId]: {
+          id: candidateId,
+          threadId: staleCompletion.id,
+          type: 'AWAITING_REVIEW',
+          source: 'observed-completion',
+          status: 'unread',
+          threadTitle: staleCompletion.title,
+          projectName: staleCompletion.projectName,
+          signalAtMs: staleCompletion.latestAgentFinalAtMs,
+          createdAtMs: staleCompletion.latestAgentFinalAtMs,
+        },
+      },
+      observedReviewSignals: { [candidateId]: staleCompletion.latestAgentFinalAtMs },
+      reviewSignalsInitializedAtMs: 1777427200000,
+    }, null, 2)}\n`);
+
+    const result = await center.refresh({ threads: [staleCompletion] });
+    assert.equal(result.summary.activeCount, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -301,7 +500,7 @@ test('snoozes notifications until their due time', async () => {
   }
 });
 
-test('sends one privacy-preserving desktop notification for new actionable items', async () => {
+test('does not send desktop notifications while the feature is hidden', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
   const storePath = path.join(dir, 'notifications.json');
   const sent = [];
@@ -316,16 +515,19 @@ test('sends one privacy-preserving desktop notification for new actionable items
     await center.refresh({ threads: [reviewThread()] }, { notify: true });
     await center.refresh({ threads: [reviewThread()] }, { notify: true });
 
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].count, 1);
-    assert.equal(sent[0].title, 'Codex 有新进展待处理');
-    assert.equal(sent[0].message, '');
+    assert.equal(sent.length, 0);
+
+    const stored = JSON.parse(await readFile(storePath, 'utf8'));
+    assert.equal(stored.settings.desktopNotificationsEnabled, false);
+    const record = stored.notifications['123e4567-e89b-12d3-a456-426614174000:AWAITING_REVIEW:1777427200000'];
+    assert.equal(record.desktopNotificationPending, false);
+    assert.equal(record.desktopNotifiedAtMs, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('sends a manual desktop notification test payload', async () => {
+test('returns disabled for manual desktop notification tests', async () => {
   const sent = [];
   const center = new NotificationCenter({
     now: () => 1777427300000,
@@ -337,10 +539,8 @@ test('sends a manual desktop notification test payload', async () => {
 
   const result = await center.sendTestNotification();
 
-  assert.deepEqual(result, { sent: true });
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].title, 'Codex 有新进展待处理');
-  assert.equal(sent[0].message, '');
+  assert.deepEqual(result, { sent: false, reason: 'disabled-until-native-notifier' });
+  assert.equal(sent.length, 0);
 });
 
 test('serializes notification state writes from overlapping refreshes', async () => {
@@ -365,7 +565,7 @@ test('serializes notification state writes from overlapping refreshes', async ()
   }
 });
 
-test('does not let a silent dashboard refresh consume desktop notification delivery', async () => {
+test('keeps desktop notification metadata disabled across refreshes', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
   const storePath = path.join(dir, 'notifications.json');
   let now = 1777427300000;
@@ -385,13 +585,13 @@ test('does not let a silent dashboard refresh consume desktop notification deliv
     await center.refresh({ threads: [reviewThread()] }, { notify: true });
     await center.refresh({ threads: [reviewThread()] }, { notify: true });
 
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].count, 1);
+    assert.equal(sent.length, 0);
 
     const stored = JSON.parse(await readFile(storePath, 'utf8'));
     const record = stored.notifications['123e4567-e89b-12d3-a456-426614174000:AWAITING_REVIEW:1777427200000'];
     assert.equal(record.desktopNotificationPending, false);
-    assert.equal(record.desktopNotifiedAtMs, 1777427320000);
+    assert.equal(record.desktopNotifiedAtMs, null);
+    assert.equal(stored.settings.desktopNotificationsEnabled, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

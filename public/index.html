@@ -16,8 +16,6 @@
         <div class="topbar-actions">
           <p id="last-updated" class="timestamp" aria-live="polite">等待数据</p>
           <p id="monitor-status" class="timestamp" aria-live="polite">监控未启动</p>
-          <button id="notification-button" class="action-button secondary" type="button">开启桌面提醒</button>
-          <button id="notification-test-button" class="action-button secondary" type="button">测试提醒</button>
           <button id="refresh-button" class="icon-button" type="button" aria-label="刷新看板" title="刷新看板">
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="M20 6v5h-5"></path>
@@ -35,41 +33,21 @@
 
       <section id="status-banner" class="status-banner" hidden></section>
 
-      <section id="summary" class="summary-grid" aria-label="看板摘要"></section>
-
-      <section class="controls" aria-label="线程筛选">
-        <label class="search-field">
-          <span>搜索</span>
-          <input id="search-input" type="search" autocomplete="off" placeholder="线程、项目、来源、路径">
-        </label>
-        <label>
-          <span>来源</span>
-          <select id="provider-filter">
-            <option value="all">全部来源</option>
-          </select>
-        </label>
-        <label>
-          <span>状态</span>
-          <select id="status-filter">
-            <option value="all">全部</option>
-            <option value="running">工作中</option>
-            <option value="fresh">活跃</option>
-            <option value="warm">温热</option>
-            <option value="idle">空闲</option>
-            <option value="archived">已归档</option>
-          </select>
-        </label>
-        <label>
-          <span>项目</span>
-          <select id="project-filter">
-            <option value="all">全部项目</option>
-          </select>
-        </label>
-        <label class="toggle">
-          <input id="archive-toggle" type="checkbox">
-          <span>显示归档</span>
-        </label>
+      <section class="panel priority-inbox-panel" aria-labelledby="inbox-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">通知</p>
+            <h2 id="inbox-heading">待处理</h2>
+          </div>
+          <div class="panel-heading-actions">
+            <p id="notification-count" class="panel-note">0 项</p>
+            <button id="notification-toggle" class="action-button secondary inbox-toggle" type="button" hidden>查看全部</button>
+          </div>
+        </div>
+        <div id="inbox" class="inbox-list priority-inbox-list"></div>
       </section>
+
+      <section id="summary" class="summary-grid" aria-label="看板摘要"></section>
 
       <div class="layout">
         <section class="panel thread-panel" aria-labelledby="threads-heading">
@@ -80,21 +58,43 @@
             </div>
             <p id="thread-count" class="panel-note">0 条</p>
           </div>
+          <section class="controls" aria-label="线程筛选">
+            <label class="search-field">
+              <span>搜索</span>
+              <input id="search-input" type="search" autocomplete="off" placeholder="线程、项目、来源、路径">
+            </label>
+            <label>
+              <span>来源</span>
+              <select id="provider-filter">
+                <option value="all">全部来源</option>
+              </select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select id="status-filter">
+                <option value="all">全部</option>
+                <option value="running">工作中</option>
+                <option value="fresh">活跃</option>
+                <option value="warm">温热</option>
+                <option value="idle">空闲</option>
+                <option value="archived">已归档</option>
+              </select>
+            </label>
+            <label>
+              <span>项目</span>
+              <select id="project-filter">
+                <option value="all">全部项目</option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input id="archive-toggle" type="checkbox">
+              <span>显示归档</span>
+            </label>
+          </section>
           <div id="threads" class="thread-list" aria-live="polite"></div>
         </section>
 
         <aside class="side-rail">
-          <section class="panel" aria-labelledby="inbox-heading">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">通知</p>
-                <h2 id="inbox-heading">待处理</h2>
-              </div>
-              <p id="notification-count" class="panel-note">0 项</p>
-            </div>
-            <div id="inbox" class="inbox-list"></div>
-          </section>
-
           <section class="panel" aria-labelledby="projects-heading">
             <div class="panel-heading">
               <div>

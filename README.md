@@ -1,6 +1,6 @@
 # Agent Mission Control
 
-本地多 Agent 任务控制台，用来集中查看 Codex、OpenCode、Claude Code / Claude Desktop 等工具里的线程、项目、token 用量、运行状态、待处理事项和桌面提醒。
+本地多 Agent 任务控制台，用来集中查看 Codex、OpenCode、Claude Code / Claude Desktop 等工具里的线程、项目、token 用量、运行状态和待处理事项。
 
 它默认只监听 `127.0.0.1`，只读取本机状态文件，不写入 Codex / OpenCode / Claude 的工作数据，也不发送遥测。
 
@@ -15,7 +15,7 @@
 - 汇总 Claude Code CLI、Claude Desktop Code、Claude Cowork 会话。
 - 支持按来源、状态、项目和关键词筛选。
 - 支持打开 Codex / OpenCode deep link，或在 macOS Terminal 恢复 CLI 会话。
-- 提供本地通知中心；系统桌面提醒只显示隐私化文案，不展示线程正文。
+- 提供本地通知中心；系统桌面提醒当前隐藏，待后续接入可靠的原生通知实现。
 
 ## 要求
 
@@ -84,6 +84,8 @@ npm test
 ```
 
 项目刻意保持轻依赖：当前没有外部 npm 依赖，主要使用 Node.js 内置 test runner、浏览器原生 API 和系统命令。
+
+版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 生成 README 演示图：
 

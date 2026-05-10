@@ -157,6 +157,28 @@ test('prioritizes OpenCode permission requests in the inbox reason', () => {
   assert.equal(dashboard.inbox[0].reason, 'awaiting permission');
 });
 
+test('does not add sub-agent threads to the dashboard inbox', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'subagent-thread',
+      title: 'Worker task',
+      cwd: '/a',
+      projectName: 'a',
+      source: '{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}',
+      tokensUsed: 8_000_000,
+      archived: false,
+      awaitingPermission: true,
+      pendingToolCount: 1,
+      updatedAtMs: now - 60_000,
+      latestUserMessageAtMs: now - 30_000,
+      latestAgentFinalAtMs: now - 60_000,
+    },
+  ], now);
+
+  assert.equal(dashboard.inbox.length, 0);
+});
+
 test('builds current quota and daily token summary from latest rate-limit signal', () => {
   const now = 1777427200000;
   const dashboard = buildDashboard([

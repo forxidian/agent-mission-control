@@ -53,12 +53,17 @@ test('uses Chinese copy for visible system fields', async () => {
     '打开线程',
     '打开并标记已处理',
     '复制命令',
+    '复制线程摘要',
     'resume 命令',
     '本轮耗时',
+    '单线程审计',
+    '下一步动作',
+    '状态摘要',
+    '待处理区',
+    '运行证据区',
+    '最近信号',
+    '不含完整线程正文',
     '待处理',
-    '开启桌面提醒',
-    '桌面提醒已开启',
-    '测试提醒',
     '标记已处理',
     '稍后提醒',
   ]) {
@@ -81,6 +86,9 @@ test('uses Chinese copy for visible system fields', async () => {
     'No matching threads',
     'Selected thread',
     'Rate limit',
+    '测试提醒',
+    '开启桌面提醒',
+    '桌面提醒已开启',
   ]) {
     assert.equal(publicCopy.includes(oldCopy), false, `leftover English UI copy: ${oldCopy}`);
   }
@@ -103,6 +111,19 @@ test('clamps long thread and notification titles in list views', async () => {
 
   assert.match(styles, /\.thread-title[\s\S]*-webkit-line-clamp: 2/);
   assert.match(styles, /\.inbox-title[\s\S]*-webkit-line-clamp: 4/);
+});
+
+test('keeps priority inbox as a page-flow preview instead of an inner scroller', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /const INBOX_PREVIEW_LIMIT = 4/);
+  assert.match(app, /items\.slice\(0, INBOX_PREVIEW_LIMIT\)/);
+  assert.match(app, /data-toggle-inbox/);
+  assert.match(styles, /\.priority-inbox-list\s*\{\s*overflow: visible;\s*\}/);
+  assert.doesNotMatch(styles, /\.priority-inbox-list\s*\{[^}]*overflow: auto/);
 });
 
 test('prioritizes today token usage while retaining historical usage in thread rows', async () => {
@@ -131,6 +152,17 @@ test('opens thread deep links without waiting for the local server round trip', 
     openThreadSource.indexOf('window.location.href = thread.appDeepLink') < openThreadSource.indexOf('fetch(`/api/threads/'),
     'Codex deep link path should run before the server opener fallback',
   );
+});
+
+test('offers privacy-limited thread summary copy from the detail panel', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  assert.match(app, /function buildThreadSummary\(thread\)/);
+  assert.match(app, /function copyThreadSummary\(threadId\)/);
+  assert.match(app, /data-copy-summary-id/);
+  assert.match(app, /只含本地元数据和截断信号，不含完整线程正文/);
+  assert.match(app, /用户输入信号/);
+  assert.match(app, /Agent 输出信号/);
 });
 
 test('formats token totals with compact M and B units for consistent scanning', async () => {

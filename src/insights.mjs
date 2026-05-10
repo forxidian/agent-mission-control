@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isSubagentThread } from './thread-classification.mjs';
 
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 const WARM_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -156,6 +157,7 @@ export function aggregateProjects(threads) {
 
 function attentionReason(thread) {
   if (thread.archived) return '';
+  if (isSubagentThread(thread)) return '';
   if (
     thread.awaitingPermission
     || coerceNumber(thread.openCodePendingToolCount) > 0

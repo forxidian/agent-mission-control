@@ -193,7 +193,7 @@ export function createServer({
 
       try {
         const dashboard = await loadDashboard();
-        const notifications = await notificationCenter.refresh(dashboard, { notify: request.method === 'POST' });
+        const notifications = await notificationCenter.refresh(dashboard);
         sendJson(response, 200, notifications);
       } catch (error) {
         sendError(response, error, 'Failed to load notifications');
@@ -226,45 +226,18 @@ export function createServer({
     }
 
     if (url.pathname === '/api/notification-settings') {
-      if (request.method !== 'PATCH') {
-        response.writeHead(405, { allow: 'PATCH' });
-        response.end('Method not allowed');
-        return;
-      }
-
-      if (!notificationCenter) {
-        sendJson(response, 503, { error: 'Notification center is not configured' });
-        return;
-      }
-
-      try {
-        const body = await readJsonBody(request);
-        const settings = await notificationCenter.updateSettings(body);
-        sendJson(response, 200, settings);
-      } catch (error) {
-        sendError(response, error, 'Failed to update notification settings');
-      }
+      sendJson(response, 410, {
+        error: 'Desktop notifications are disabled',
+        detail: 'Desktop notification delivery is hidden until a reliable native notifier is available.',
+      });
       return;
     }
 
     if (url.pathname === '/api/notification-test') {
-      if (request.method !== 'POST') {
-        response.writeHead(405, { allow: 'POST' });
-        response.end('Method not allowed');
-        return;
-      }
-
-      if (!notificationCenter) {
-        sendJson(response, 503, { error: 'Notification center is not configured' });
-        return;
-      }
-
-      try {
-        const result = await notificationCenter.sendTestNotification();
-        sendJson(response, 200, result);
-      } catch (error) {
-        sendError(response, error, 'Failed to send test notification');
-      }
+      sendJson(response, 410, {
+        error: 'Desktop notifications are disabled',
+        detail: 'Desktop notification delivery is hidden until a reliable native notifier is available.',
+      });
       return;
     }
 
@@ -322,7 +295,7 @@ export function createServer({
     const scan = async () => {
       try {
         const dashboard = await loadDashboard();
-        await notificationCenter.refresh(dashboard, { notify: !firstScan });
+        await notificationCenter.refresh(dashboard);
         firstScan = false;
       } catch (error) {
         console.warn('Notification scan failed:', error instanceof Error ? error.message : String(error));
@@ -342,7 +315,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const host = process.env.HOST || '127.0.0.1';
   const server = createServer({
     notificationCenter: new NotificationCenter(),
-    monitorNotifications: true,
+    monitorNotifications: false,
   });
 
   server.listen(port, host, () => {

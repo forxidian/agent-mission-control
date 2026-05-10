@@ -9,6 +9,7 @@ const state = {
   lastRefreshAtMs: null,
   refreshError: '',
   noticeTimer: null,
+  inboxExpanded: false,
 };
 
 const elements = {
@@ -18,9 +19,8 @@ const elements = {
   inbox: document.querySelector('#inbox'),
   lastUpdated: document.querySelector('#last-updated'),
   monitorStatus: document.querySelector('#monitor-status'),
-  notificationButton: document.querySelector('#notification-button'),
-  notificationTestButton: document.querySelector('#notification-test-button'),
   notificationCount: document.querySelector('#notification-count'),
+  notificationToggle: document.querySelector('#notification-toggle'),
   providerFilter: document.querySelector('#provider-filter'),
   projectFilter: document.querySelector('#project-filter'),
   projects: document.querySelector('#projects'),
@@ -35,6 +35,7 @@ const elements = {
 
 const REFRESH_INTERVAL_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
+const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric',
@@ -78,6 +79,8 @@ const NOTIFICATION_STATUS_LABELS = {
   read: '已读',
   snoozed: '稍后提醒',
 };
+
+const CLOSED_TODO_STATUSES = new Set(['completed', 'done', 'cancelled', 'canceled']);
 
 function escapeHtml(value = '') {
   return String(value)
@@ -322,6 +325,7 @@ function renderSummary(summary) {
   const realtimeQuota = summary.quota?.realtime;
   const weeklyQuota = summary.quota?.weekly;
   const pendingCount = notificationSummary.activeCount ?? summary.inboxCount;
+  const providers = state.dashboard?.providers || summary.providers || [];
   const currentItems = [
     {
       label: '实时可用 quota',
@@ -386,16 +390,18 @@ function renderSummary(summary) {
         ${currentItems.map(summaryCard).join('')}
       </div>
     </section>
-    <section class="summary-section" aria-labelledby="lifetime-summary-heading">
-      <div class="summary-section-heading">
-        <h2 id="lifetime-summary-heading">长期累计</h2>
-        <p>线程与 token 总账</p>
-      </div>
-      <div class="summary-card-grid summary-card-grid-lifetime">
-        ${lifetimeItems.map(summaryCard).join('')}
-      </div>
+    <section class="summary-secondary-row${providers.length ? '' : ' summary-secondary-row-solo'}" aria-label="长期累计与来源接入">
+      <section class="summary-section summary-section-lifetime" aria-labelledby="lifetime-summary-heading">
+        <div class="summary-section-heading">
+          <h2 id="lifetime-summary-heading">长期累计</h2>
+          <p>线程与 token 总账</p>
+        </div>
+        <div class="summary-card-grid summary-card-grid-lifetime">
+          ${lifetimeItems.map(summaryCard).join('')}
+        </div>
+      </section>
+      ${renderProviderStrip(providers)}
     </section>
-    ${renderProviderStrip(state.dashboard?.providers || summary.providers || [])}
   `;
 }
 
@@ -510,14 +516,23 @@ function renderThreads() {
 function renderNotifications(notifications) {
   const items = notifications?.items || [];
   const summary = notifications?.summary || {};
-  elements.notificationCount.textContent = `${summary.activeCount || 0} 项`;
+  const activeCount = summary.activeCount || items.length;
+  const hiddenCount = Math.max(0, items.length - INBOX_PREVIEW_LIMIT);
+  const visibleItems = state.inboxExpanded ? items : items.slice(0, INBOX_PREVIEW_LIMIT);
+
+  elements.notificationCount.textContent = `${activeCount} 项`;
+  elements.notificationToggle.hidden = hiddenCount === 0;
+  elements.notificationToggle.textContent = state.inboxExpanded
+    ? '收起'
+    : `查看全部 ${activeCount} 项`;
+  elements.notificationToggle.setAttribute('aria-expanded', String(state.inboxExpanded));
 
   if (!items.length) {
     elements.inbox.innerHTML = '<p class="empty-state">暂无待处理。</p>';
     return;
   }
 
-  elements.inbox.innerHTML = items.map((notification) => `
+  elements.inbox.innerHTML = visibleItems.map((notification) => `
     <article class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}">
       <button class="notification-main" type="button" data-thread-id="${escapeHtml(notification.threadId)}">
         <span class="reason">${escapeHtml(notificationLabel(notification))}</span>
@@ -539,7 +554,12 @@ function renderNotifications(notifications) {
         <button class="action-button secondary" type="button" data-notification-snooze-id="${escapeHtml(notification.id)}">稍后提醒</button>
       </div>
     </article>
-  `).join('');
+  `).join('') + (!state.inboxExpanded && hiddenCount > 0 ? `
+    <button class="inbox-more-row" type="button" data-toggle-inbox>
+      还有 ${escapeHtml(hiddenCount)} 项待处理
+      <span>展开查看全部</span>
+    </button>
+  ` : '');
 }
 
 function renderProjects(projects) {
@@ -568,78 +588,378 @@ function renderProjects(projects) {
   }).join('');
 }
 
+function compactSignal(value = '', maxLength = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function formatTimestamp(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return '-';
+  return `${relativeTime(value)} · ${timeFormat.format(new Date(value))}`;
+}
+
+function mergeThreadItems(...groups) {
+  const seen = new Set();
+  const items = [];
+
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+
+    for (const item of group) {
+      const key = typeof item === 'object' && item
+        ? `${item.id || ''}:${item.title || item.tool || item.name || ''}:${item.status || ''}`
+        : String(item || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
+  }
+
+  return items;
+}
+
+function threadPendingTools(thread) {
+  return mergeThreadItems(thread?.pendingTools, thread?.openCodePendingTools);
+}
+
+function isOpenTodo(todo) {
+  return !CLOSED_TODO_STATUSES.has(String(todo?.status || '').toLowerCase());
+}
+
+function threadOpenTodos(thread) {
+  return mergeThreadItems(thread?.todos, thread?.openCodeTodos).filter(isOpenTodo);
+}
+
+function threadNotifications(thread) {
+  const closedStatuses = new Set(['done', 'dismissed']);
+  return (state.notifications?.items || [])
+    .filter((notification) => (
+      notification.threadId === thread.id
+      && !closedStatuses.has(String(notification.status || '').toLowerCase())
+    ));
+}
+
+function hasPermissionSignal(thread, pendingTools, notifications) {
+  return Boolean(
+    thread.awaitingPermission
+    || pendingTools.length
+    || Number(thread.pendingToolCount || thread.openCodePendingToolCount || 0) > 0
+    || notifications.some((notification) => (
+      notification.type === 'AWAITING_PERMISSION'
+      || String(notification.source || '').includes('permission')
+    )),
+  );
+}
+
+function hasReviewSignal(thread, notifications) {
+  return Boolean(
+    thread.hasUnreadTurn
+    || thread.awaitingReview
+    || notifications.some((notification) => (
+      notification.type === 'AWAITING_REVIEW'
+      || ['codex-unread', 'observed-completion'].includes(notification.source)
+    )),
+  );
+}
+
+function itemLabel(item, fallback) {
+  if (typeof item === 'string') return compactSignal(item, 96);
+  return compactSignal(item?.title || item?.tool || item?.name || item?.id || fallback, 96);
+}
+
+function renderDetailList(items, emptyText) {
+  if (!items.length) {
+    return `<p class="detail-note">${escapeHtml(emptyText)}</p>`;
+  }
+
+  return `
+    <div class="detail-signal-list">
+      ${items.map((item) => `
+        <div class="detail-signal-item">
+          <span class="detail-signal-label">${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value)}</strong>
+          ${item.note ? `<span class="detail-signal-note">${escapeHtml(item.note)}</span>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function tokenField(usage, names) {
+  for (const name of names) {
+    const value = Number(usage?.[name]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function lastTokenUsageLabel(usage) {
+  if (!usage) return '-';
+
+  const total = tokenField(usage, ['total_tokens', 'totalTokens']);
+  const parts = [
+    ['输入', tokenField(usage, ['input_tokens', 'inputTokens'])],
+    ['输出', tokenField(usage, ['output_tokens', 'outputTokens'])],
+    ['推理', tokenField(usage, ['reasoning_output_tokens', 'reasoning_tokens', 'reasoningTokens'])],
+    ['缓存', tokenField(usage, ['cached_input_tokens', 'cache_read_input_tokens', 'cachedInputTokens'])],
+  ].filter(([, value]) => value > 0);
+
+  if (!total && !parts.length) return '-';
+  const main = total ? formatTokens(total) : formatTokens(parts.reduce((sum, [, value]) => sum + value, 0));
+  if (!parts.length) return main;
+  return `${main} · ${parts.map(([label, value]) => `${label} ${formatTokens(value)}`).join(' / ')}`;
+}
+
+function threadPhaseLabel(thread, pendingTools, notifications) {
+  if (thread.status === 'running') return '当前轮运行中';
+  if (hasPermissionSignal(thread, pendingTools, notifications)) return '等待授权处理';
+  if (hasReviewSignal(thread, notifications)) return '等待验收或新进展';
+  return STATUS_LABELS[thread.status] || thread.status || '未知阶段';
+}
+
+function recentUserSignal(thread) {
+  return compactSignal(
+    thread.latestMeaningfulUserMessage
+    || thread.latestUserMessage
+    || thread.firstUserMessage
+    || '',
+  );
+}
+
+function recentAgentSignal(thread) {
+  return compactSignal(thread.lastAgentMessage || '');
+}
+
+function buildThreadSummary(thread) {
+  const pendingTools = threadPendingTools(thread);
+  const openTodos = threadOpenTodos(thread);
+  const notifications = threadNotifications(thread);
+  const turnDuration = currentTurnDuration(thread);
+  const permissionSignal = hasPermissionSignal(thread, pendingTools, notifications);
+  const reviewSignal = hasReviewSignal(thread, notifications);
+  const pendingLines = [];
+
+  if (permissionSignal) {
+    pendingLines.push(`- 等待授权: ${pendingTools.length ? pendingTools.map((tool) => itemLabel(tool, '工具调用')).slice(0, 5).join('、') : '有权限处理信号'}`);
+  }
+  if (openTodos.length) {
+    pendingLines.push(`- 未完成 todo: ${openTodos.length} 项，${openTodos.map((todo) => itemLabel(todo, 'todo')).slice(0, 5).join('、')}`);
+  }
+  if (reviewSignal) {
+    pendingLines.push('- 等待验收或新进展: 有待处理信号');
+  }
+  if (!pendingLines.length) pendingLines.push('- 暂无明确待处理信号');
+
+  return [
+    'Agent Mission Control 线程摘要',
+    '用途：粘给新的 Codex 线程接手；只含本地元数据和截断信号，不含完整线程正文。',
+    '',
+    '状态摘要:',
+    `- 线程: ${thread.title || '未命名线程'}`,
+    `- 来源: ${providerLabel(thread)}`,
+    `- 阶段: ${threadPhaseLabel(thread, pendingTools, notifications)}`,
+    `- 状态: ${STATUS_LABELS[thread.status] || thread.status || '-'}`,
+    `- 项目: ${thread.projectName || '未知项目'}`,
+    `- 模型: ${thread.model || '未知模型'}`,
+    `- 最近更新: ${formatTimestamp(thread.updatedAtMs)}`,
+    `- 本轮耗时: ${turnDuration || '-'}`,
+    '',
+    '待处理:',
+    ...pendingLines,
+    '',
+    'token:',
+    `- 今日 token: ${formatTokens(thread.todayTokenUsage)}`,
+    `- 历史 token: ${formatTokens(thread.tokensUsed)}`,
+    `- 最近一轮: ${lastTokenUsageLabel(thread.lastTokenUsage)}`,
+    '',
+    '恢复证据:',
+    `- cwd: ${thread.cwd || '-'}`,
+    `- rollout path: ${thread.rolloutPath || '-'}`,
+    `- deep link: ${thread.appDeepLink || '-'}`,
+    `- resume 命令: ${resumeCommandForThread(thread) || '-'}`,
+    '',
+    '最近信号（截断）:',
+    `- 用户输入信号: ${recentUserSignal(thread) || '-'}`,
+    `- Agent 输出信号: ${recentAgentSignal(thread) || '-'}`,
+    '',
+    '接手建议:',
+    '- 先打开或恢复线程确认上下文。',
+    '- 优先处理待授权、未完成 todo、等待验收或新进展。',
+    '- 不要把这份摘要当作完整线程正文。',
+  ].join('\n');
+}
+
 function renderDetail(thread) {
   if (!thread) {
-    elements.detail.innerHTML = '<p class="empty-state">选择一个线程查看本地信号。</p>';
+    elements.detail.innerHTML = '<p class="empty-state">选择一个线程查看结构化审计信号。</p>';
     return;
   }
 
-  const lastTokens = thread.lastTokenUsage?.total_tokens;
   const openDisabled = canOpenThread(thread) ? '' : ' disabled';
   const turnDuration = currentTurnDuration(thread);
-  const rolloutLine = thread.rolloutPath
-    ? `<div class="path-line">${escapeHtml(thread.rolloutPath)}</div>`
-    : '';
-  const commandLine = thread.resumeCommand
-    ? `<div class="path-line">${escapeHtml(thread.resumeCommand)}</div>`
-    : '';
-  const pendingTools = Array.isArray(thread.pendingTools)
-    ? thread.pendingTools
-    : (Array.isArray(thread.openCodePendingTools) ? thread.openCodePendingTools : []);
-  const openTodos = (Array.isArray(thread.todos)
-    ? thread.todos
-    : (Array.isArray(thread.openCodeTodos) ? thread.openCodeTodos : []))
-    .filter((todo) => !['completed', 'done', 'cancelled', 'canceled'].includes(String(todo.status || '').toLowerCase()));
-  const sourceLabel = providerLabel(thread);
-  const permissionLine = pendingTools.length
-    ? `<p class="message-line">${escapeHtml(sourceLabel)} 等待处理：${escapeHtml(pendingTools.map((tool) => tool.title || tool.tool || '工具调用').slice(0, 3).join('、'))}</p>`
-    : '';
-  const todoLine = openTodos.length
-    ? `<p class="message-line">${escapeHtml(sourceLabel)} todo：${openTodos.length} 项未完成</p>`
-    : '';
+  const pendingTools = threadPendingTools(thread);
+  const openTodos = threadOpenTodos(thread);
+  const notifications = threadNotifications(thread);
+  const permissionSignal = hasPermissionSignal(thread, pendingTools, notifications);
+  const reviewSignal = hasReviewSignal(thread, notifications);
+  const pendingItems = [];
+  const signalItems = [
+    {
+      label: '用户输入信号',
+      value: recentUserSignal(thread) || '暂无截断信号',
+      note: formatTimestamp(thread.latestUserMessageAtMs),
+    },
+    {
+      label: 'Agent 输出信号',
+      value: recentAgentSignal(thread) || '暂无截断信号',
+      note: formatTimestamp(thread.latestAgentFinalAtMs || thread.updatedAtMs),
+    },
+  ];
+
+  if (permissionSignal) {
+    pendingItems.push({
+      label: '等待授权',
+      value: pendingTools.length
+        ? pendingTools.map((tool) => itemLabel(tool, '工具调用')).slice(0, 4).join('、')
+        : '有权限处理信号',
+      note: pendingTools.length ? `${pendingTools.length} 个 pending tool` : '',
+    });
+  }
+  if (openTodos.length) {
+    pendingItems.push({
+      label: '未完成 todo',
+      value: openTodos.map((todo) => itemLabel(todo, 'todo')).slice(0, 4).join('、'),
+      note: `${openTodos.length} 项 open todos`,
+    });
+  }
+  if (reviewSignal) {
+    pendingItems.push({
+      label: '等待验收或新进展',
+      value: notifications.length
+        ? notifications.map((notification) => notificationLabel(notification)).slice(0, 3).join('、')
+        : '有待处理信号',
+      note: notifications.length ? `${notifications.length} 项通知` : '',
+    });
+  }
+
   elements.detail.innerHTML = `
     <div class="detail-heading">
       <div>
-        <p class="eyebrow">当前任务</p>
+        <p class="eyebrow">单线程审计</p>
         <h2>${escapeHtml(thread.title)}</h2>
       </div>
-      <div class="detail-actions" aria-label="当前线程操作">
-        <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
-        <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
-      </div>
     </div>
-    <div class="detail-grid">
-      <div class="detail-cell">
-        <span>来源</span>
-        <strong>${escapeHtml(providerLabel(thread))}</strong>
-      </div>
-      <div class="detail-cell">
-        <span>状态</span>
-        ${statusMarkup(thread.status)}
-      </div>
-      <div class="detail-cell">
-        <span>今日 token</span>
-        <strong>${escapeHtml(formatTokens(thread.todayTokenUsage))}</strong>
-      </div>
-      <div class="detail-cell">
-        <span>总 token</span>
-        <strong>${escapeHtml(formatTokens(thread.tokensUsed))}</strong>
-      </div>
-      <div class="detail-cell">
-        <span>最近一轮</span>
-        <strong>${lastTokens ? escapeHtml(formatTokens(lastTokens)) : '-'}</strong>
-      </div>
-      <div class="detail-cell">
-        <span>本轮耗时</span>
-        <strong>${turnDuration ? escapeHtml(turnDuration) : '-'}</strong>
-      </div>
+    <div class="detail-layout">
+      <section class="detail-section detail-section-wide" aria-labelledby="detail-actions-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-actions-heading">下一步动作</h3>
+          <p>摘要只包含本地元数据和截断信号，不含完整线程正文。</p>
+        </div>
+        <div class="detail-actions" aria-label="当前线程操作">
+          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
+          <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
+          <button class="action-button secondary" type="button" data-copy-summary-id="${escapeHtml(thread.id)}">复制线程摘要</button>
+        </div>
+      </section>
+
+      <section class="detail-section detail-section-wide" aria-labelledby="detail-summary-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-summary-heading">状态摘要</h3>
+          <p>${escapeHtml(threadPhaseLabel(thread, pendingTools, notifications))}</p>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-cell">
+            <span>来源</span>
+            <strong>${escapeHtml(providerLabel(thread))}</strong>
+          </div>
+          <div class="detail-cell">
+            <span>状态</span>
+            ${statusMarkup(thread.status)}
+          </div>
+          <div class="detail-cell">
+            <span>项目</span>
+            <strong>${escapeHtml(thread.projectName || '未知项目')}</strong>
+          </div>
+          <div class="detail-cell">
+            <span>模型</span>
+            <strong>${escapeHtml(thread.model || '未知模型')}</strong>
+          </div>
+          <div class="detail-cell">
+            <span>最近更新</span>
+            <strong>${escapeHtml(formatTimestamp(thread.updatedAtMs))}</strong>
+          </div>
+          <div class="detail-cell">
+            <span>本轮耗时</span>
+            <strong>${turnDuration ? escapeHtml(turnDuration) : '-'}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail-section" aria-labelledby="detail-pending-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-pending-heading">待处理区</h3>
+          <p>pending tools、todo、验收信号</p>
+        </div>
+        ${renderDetailList(pendingItems, '暂无 pending tool、open todo 或等待验收信号。')}
+      </section>
+
+      <section class="detail-section" aria-labelledby="detail-token-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-token-heading">token 区</h3>
+          <p>今日、历史和最近一轮</p>
+        </div>
+        <div class="detail-grid detail-grid-compact">
+          <div class="detail-cell">
+            <span>今日 token</span>
+            <strong>${escapeHtml(formatTokens(thread.todayTokenUsage))}</strong>
+          </div>
+          <div class="detail-cell">
+            <span>历史 token</span>
+            <strong>${escapeHtml(formatTokens(thread.tokensUsed))}</strong>
+          </div>
+          <div class="detail-cell detail-cell-wide">
+            <span>最近一轮</span>
+            <strong>${escapeHtml(lastTokenUsageLabel(thread.lastTokenUsage))}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail-section" aria-labelledby="detail-evidence-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-evidence-heading">运行证据区</h3>
+          <p>恢复入口和本地路径</p>
+        </div>
+        <div class="detail-evidence-list">
+          <div class="detail-evidence-item">
+            <span>cwd</span>
+            <code>${escapeHtml(thread.cwd || '无工作目录')}</code>
+          </div>
+          <div class="detail-evidence-item">
+            <span>rollout path</span>
+            <code>${escapeHtml(thread.rolloutPath || '-')}</code>
+          </div>
+          <div class="detail-evidence-item">
+            <span>deep link</span>
+            <code>${escapeHtml(thread.appDeepLink || '-')}</code>
+          </div>
+          <div class="detail-evidence-item">
+            <span>resume 命令</span>
+            <code>${escapeHtml(resumeCommandForThread(thread) || '-')}</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail-section" aria-labelledby="detail-signals-heading">
+        <div class="detail-section-heading">
+          <h3 id="detail-signals-heading">最近信号</h3>
+          <p>只展示截断片段</p>
+        </div>
+        ${renderDetailList(signalItems, '暂无最近输入或输出信号。')}
+      </section>
     </div>
-    <div class="path-line">${escapeHtml(thread.cwd || '无工作目录')}</div>
-    ${rolloutLine}
-    ${commandLine}
-    ${permissionLine}
-    ${todoLine}
-    ${thread.lastAgentMessage ? `<p class="message-line">${escapeHtml(thread.lastAgentMessage)}</p>` : ''}
   `;
 }
 
@@ -653,14 +973,7 @@ function renderDashboard() {
   renderProjects(state.dashboard.projects);
   renderThreads();
   elements.lastUpdated.textContent = `已更新 ${timeFormat.format(new Date(state.dashboard.generatedAtMs))}`;
-  renderNotificationButton();
   renderMonitorStatus();
-}
-
-function renderNotificationButton() {
-  const enabled = Boolean(state.notifications?.settings?.desktopNotificationsEnabled);
-  elements.notificationButton.textContent = enabled ? '桌面提醒已开启' : '开启桌面提醒';
-  elements.notificationButton.classList.toggle('is-enabled', enabled);
 }
 
 function renderMonitorStatus() {
@@ -755,7 +1068,6 @@ async function loadNotifications() {
   const response = await fetch('/api/notifications', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   state.notifications = await response.json();
-  renderNotificationButton();
 }
 
 function selectThread(threadId) {
@@ -776,6 +1088,21 @@ async function copyResumeCommand(threadId) {
     showNotice('已复制 resume 命令。');
   } catch {
     showError('无法写入剪贴板，请手动复制详情里的 resume 命令。');
+  }
+}
+
+async function copyThreadSummary(threadId) {
+  const thread = findThread(threadId);
+  if (!thread) {
+    showError('找不到这个线程，先刷新看板再试。');
+    return;
+  }
+
+  try {
+    await copyText(buildThreadSummary(thread));
+    showNotice('已复制线程摘要。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制详情里的线程摘要。');
   }
 }
 
@@ -868,37 +1195,6 @@ async function snoozeNotification(notificationId) {
   }
 }
 
-async function enableDesktopNotifications() {
-  try {
-    const response = await fetch('/api/notification-settings', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ desktopNotificationsEnabled: true }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    state.notifications = {
-      ...(state.notifications || { summary: {}, items: [] }),
-      settings: body,
-    };
-    renderNotificationButton();
-    showNotice('桌面提醒已开启。系统通知只显示「Codex 有新进展待处理」。');
-  } catch (error) {
-    showError(`无法开启桌面提醒：${error.message}`);
-  }
-}
-
-async function sendTestNotification() {
-  try {
-    const response = await fetch('/api/notification-test', { method: 'POST' });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    showNotice('测试提醒已发送。系统通知只显示「Codex 有新进展待处理」；如果没看到，请检查 macOS 通知权限和专注模式。');
-  } catch (error) {
-    showError(`无法发送测试提醒：${error.message}`);
-  }
-}
-
 function runMonitorTick() {
   state.nextRefreshAtMs = Date.now() + REFRESH_INTERVAL_MS;
   loadDashboard({ silent: true });
@@ -936,18 +1232,28 @@ function initializeMonitor() {
 }
 
 elements.refreshButton.addEventListener('click', () => loadDashboard());
-elements.notificationButton.addEventListener('click', enableDesktopNotifications);
-elements.notificationTestButton.addEventListener('click', sendTestNotification);
 elements.searchInput.addEventListener('input', renderThreads);
 elements.providerFilter.addEventListener('change', renderThreads);
 elements.statusFilter.addEventListener('change', renderThreads);
 elements.projectFilter.addEventListener('change', renderThreads);
 elements.archiveToggle.addEventListener('change', renderThreads);
 elements.autoRefresh.addEventListener('change', syncMonitor);
+elements.notificationToggle.addEventListener('click', () => {
+  state.inboxExpanded = !state.inboxExpanded;
+  renderNotifications(state.notifications || state.dashboard?.notifications);
+});
 
 document.addEventListener('click', (event) => {
   const clicked = event.target instanceof Element ? event.target : null;
   if (!clicked) return;
+
+  const inboxToggle = clicked.closest('[data-toggle-inbox]');
+  if (inboxToggle) {
+    event.preventDefault();
+    state.inboxExpanded = !state.inboxExpanded;
+    renderNotifications(state.notifications || state.dashboard?.notifications);
+    return;
+  }
 
   const openTarget = clicked.closest('[data-open-thread-id]');
   if (openTarget) {
@@ -962,6 +1268,13 @@ document.addEventListener('click', (event) => {
   if (copyTarget) {
     event.preventDefault();
     copyResumeCommand(copyTarget.dataset.copyCommandId);
+    return;
+  }
+
+  const summaryTarget = clicked.closest('[data-copy-summary-id]');
+  if (summaryTarget) {
+    event.preventDefault();
+    copyThreadSummary(summaryTarget.dataset.copySummaryId);
     return;
   }
 

@@ -22,7 +22,7 @@ What it avoids:
 
 - Writing to Codex, OpenCode, or Claude state
 - Publishing data externally
-- Showing thread content in desktop notification text
+- Sending desktop/system notifications in the public release
 
 Keep `HOST` at the default `127.0.0.1` unless you fully understand the privacy
 tradeoff. Binding the server to a LAN or public interface can expose local

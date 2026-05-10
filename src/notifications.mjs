@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { isSubagentThread } from './thread-classification.mjs';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_STORE_PATH = path.join(os.homedir(), '.agent-mission-control', 'notifications.json');
@@ -10,11 +11,8 @@ const ACTIVE_STATUSES = new Set(['unread', 'read']);
 const TERMINAL_STATUSES = new Set(['done', 'dismissed']);
 const VALID_STATUSES = new Set(['unread', 'read', 'snoozed', 'done', 'dismissed']);
 const ACTION_NOTIFICATION_TYPES = new Set(['AWAITING_REVIEW', 'AWAITING_PERMISSION']);
-const OBSERVED_COMPLETION_RETENTION_MS = 60 * 1000;
-const PRIVATE_DESKTOP_NOTIFICATION = {
-  title: 'Codex 有新进展待处理',
-  message: '',
-};
+const RECENT_OBSERVED_COMPLETION_WINDOW_MS = 2 * 60 * 60 * 1000;
+const DESKTOP_NOTIFICATIONS_DISABLED_REASON = 'disabled-until-native-notifier';
 
 function coerceNumber(value, fallback = 0) {
   const number = Number(value);
@@ -91,6 +89,7 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
 
   for (const thread of threads) {
     if (thread.archived) continue;
+    if (isSubagentThread(thread)) continue;
 
     if (hasPermissionSignal(thread)) {
       const signalAtMs = permissionSignalAtMs(thread, nowMs);
@@ -115,7 +114,10 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
       continue;
     }
 
-    if (!hasUnreadReviewSignal(thread) && !(includeObservedCompletions && hasCompletedAfterLastUserMessage(thread))) {
+    const hasObservedCompletion = includeObservedCompletions
+      && hasCompletedAfterLastUserMessage(thread);
+
+    if (!hasUnreadReviewSignal(thread) && !hasObservedCompletion) {
       continue;
     }
 
@@ -182,13 +184,35 @@ function isObservedCompletion(record) {
   return record?.source === 'observed-completion';
 }
 
-function observedCompletionExpired(record, nowMs) {
-  if (!isObservedCompletion(record) || TERMINAL_STATUSES.has(record.status)) return false;
-
-  const baselineMs = coerceNumber(
-    record.desktopNotifiedAtMs || record.createdAtMs || record.signalAtMs,
+function isRecentObservedCompletion(candidate, nowMs) {
+  const signalAtMs = coerceNumber(candidate?.signalAtMs);
+  return Boolean(
+    signalAtMs
+    && nowMs - signalAtMs <= RECENT_OBSERVED_COMPLETION_WINDOW_MS
   );
-  return baselineMs > 0 && nowMs - baselineMs >= OBSERVED_COMPLETION_RETENTION_MS;
+}
+
+function isLegacyAutoDismissedObservedCompletion(record, candidate, nowMs) {
+  if (!isObservedCompletion(record) || record.status !== 'dismissed') return false;
+  if (record.dismissReason) return false;
+  if (candidate?.source !== 'observed-completion') return false;
+
+  return isRecentObservedCompletion(candidate, nowMs);
+}
+
+function shouldIncludeObservedCompletion(candidate, records, observedReviewSignals, nowMs) {
+  const existing = records[candidate.id];
+
+  if (isLegacyAutoDismissedObservedCompletion(existing, candidate, nowMs)) return true;
+  if (existing && TERMINAL_STATUSES.has(existing.status)) return false;
+  if (existing && existing.source !== 'observed-completion') return false;
+  if (existing?.source === 'observed-completion') {
+    return existing.observedCompletionPolicy === 'sticky-until-handled'
+      || isRecentObservedCompletion(candidate, nowMs);
+  }
+  if (!existing && isRecentObservedCompletion(candidate, nowMs)) return true;
+  if (!observedReviewSignals[candidate.id]) return isRecentObservedCompletion(candidate, nowMs);
+  return false;
 }
 
 export class NotificationCenter {
@@ -250,7 +274,8 @@ export class NotificationCenter {
     const state = await this.readState();
     const records = { ...state.notifications };
     const observedReviewSignals = { ...state.observedReviewSignals };
-    const desktopNotificationsEnabled = Boolean(state.settings.desktopNotificationsEnabled);
+    const settings = { ...state.settings, desktopNotificationsEnabled: false };
+    const desktopNotificationsEnabled = false;
     const unreadCandidates = createNotificationCandidates(dashboard, nowMs);
     const completionCandidates = createNotificationCandidates(dashboard, nowMs, {
       includeObservedCompletions: true,
@@ -263,15 +288,11 @@ export class NotificationCenter {
       }
     }
 
-    const newCompletionCandidates = hasInitializedReviewSignals
-      ? completionCandidates.filter((candidate) => (
-        !observedReviewSignals[candidate.id]
-        || (
-          records[candidate.id]?.source === 'observed-completion'
-          && !TERMINAL_STATUSES.has(records[candidate.id].status)
-        )
-      ))
-      : [];
+    const newCompletionCandidates = completionCandidates.filter((candidate) => (
+      hasInitializedReviewSignals
+        ? shouldIncludeObservedCompletion(candidate, records, observedReviewSignals, nowMs)
+        : isRecentObservedCompletion(candidate, nowMs)
+    ));
     const candidates = uniqueCandidates([...unreadCandidates, ...newCompletionCandidates]);
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
 
@@ -281,12 +302,16 @@ export class NotificationCenter {
       if (!existing) {
         records[candidate.id] = {
           ...candidate,
+          ...(candidate.source === 'observed-completion'
+            ? { observedCompletionPolicy: 'sticky-until-handled' }
+            : {}),
           desktopNotificationPending: desktopNotificationsEnabled,
           desktopNotifiedAtMs: null,
         };
         continue;
       }
 
+      const reopenObservedCompletion = isLegacyAutoDismissedObservedCompletion(existing, candidate, nowMs);
       records[candidate.id] = {
         ...existing,
         threadTitle: candidate.threadTitle,
@@ -296,9 +321,16 @@ export class NotificationCenter {
         signalAtMs: candidate.signalAtMs,
         source: candidate.source,
         reason: candidate.reason,
-        desktopNotificationPending: existing.desktopNotificationPending ?? (
-          desktopNotificationsEnabled && !existing.desktopNotifiedAtMs
-        ),
+        status: reopenObservedCompletion ? 'unread' : existing.status,
+        dismissReason: reopenObservedCompletion ? undefined : existing.dismissReason,
+        updatedAtMs: reopenObservedCompletion ? nowMs : existing.updatedAtMs,
+        observedCompletionPolicy: candidate.source === 'observed-completion'
+          ? (
+            existing.observedCompletionPolicy
+            || (isRecentObservedCompletion(candidate, nowMs) ? 'sticky-until-handled' : undefined)
+          )
+          : existing.observedCompletionPolicy,
+        desktopNotificationPending: false,
       };
     }
 
@@ -306,49 +338,33 @@ export class NotificationCenter {
       const missingLiveSignal = ACTION_NOTIFICATION_TYPES.has(record.type)
         && !candidateIds.has(id)
         && !TERMINAL_STATUSES.has(record.status);
-      const expiredSoftSignal = observedCompletionExpired(record, nowMs);
 
-      if (missingLiveSignal || expiredSoftSignal) {
+      if (missingLiveSignal) {
         records[id] = normalizeRecord({
           ...record,
           status: 'dismissed',
+          dismissReason: 'live-signal-missing',
           desktopNotificationPending: false,
           updatedAtMs: nowMs,
         }, nowMs);
         continue;
       }
 
-      records[id] = normalizeRecord(record, nowMs);
+      records[id] = normalizeRecord({
+        ...record,
+        desktopNotificationPending: false,
+      }, nowMs);
     }
 
     const nextState = {
       ...state,
       version: 2,
+      settings,
       notifications: records,
       observedReviewSignals,
       reviewSignalsInitializedAtMs: state.reviewSignalsInitializedAtMs || nowMs,
     };
     await this.writeState(nextState);
-
-    const pendingDesktopItems = activeItemsFromRecords(records, nowMs)
-      .filter((record) => record.desktopNotificationPending && !record.desktopNotifiedAtMs);
-
-    if (notify && desktopNotificationsEnabled && pendingDesktopItems.length > 0) {
-      await this.notifyDesktop({
-        count: pendingDesktopItems.length,
-        ...PRIVATE_DESKTOP_NOTIFICATION,
-      });
-
-      for (const item of pendingDesktopItems) {
-        records[item.id] = normalizeRecord({
-          ...records[item.id],
-          desktopNotificationPending: false,
-          desktopNotifiedAtMs: nowMs,
-        }, nowMs);
-      }
-      nextState.notifications = records;
-      await this.writeState(nextState);
-    }
 
     const summary = summaryFromRecords(records, nowMs);
     return {
@@ -410,12 +426,14 @@ export class NotificationCenter {
     const nextSettings = { ...state.settings };
 
     if (typeof patch.desktopNotificationsEnabled === 'boolean') {
-      nextSettings.desktopNotificationsEnabled = patch.desktopNotificationsEnabled;
+      nextSettings.desktopNotificationsEnabled = false;
     }
 
     if (typeof patch.privacyMode === 'boolean') {
       nextSettings.privacyMode = patch.privacyMode;
     }
+
+    nextSettings.desktopNotificationsEnabled = false;
 
     const nextState = { ...state, settings: nextSettings };
     await this.writeState(nextState);
@@ -423,8 +441,6 @@ export class NotificationCenter {
   }
 
   async sendTestNotification() {
-    return this.notifyDesktop({
-      ...PRIVATE_DESKTOP_NOTIFICATION,
-    });
+    return { sent: false, reason: DESKTOP_NOTIFICATIONS_DISABLED_REASON };
   }
 }

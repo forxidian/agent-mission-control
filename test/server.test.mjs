@@ -222,7 +222,7 @@ test('updates notification status through PATCH', async () => {
   }
 });
 
-test('updates notification settings', async () => {
+test('keeps desktop notification settings endpoint disabled', async () => {
   const settingsUpdates = [];
   const server = createServer({
     notificationCenter: {
@@ -242,15 +242,15 @@ test('updates notification settings', async () => {
     });
     const body = await response.json();
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(settingsUpdates, [{ desktopNotificationsEnabled: true }]);
-    assert.equal(body.desktopNotificationsEnabled, true);
+    assert.equal(response.status, 410);
+    assert.deepEqual(settingsUpdates, []);
+    assert.equal(body.error, 'Desktop notifications are disabled');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test('sends a manual notification test through the notification center', async () => {
+test('keeps manual desktop notification test endpoint disabled', async () => {
   const calls = [];
   const server = createServer({
     notificationCenter: {
@@ -268,9 +268,9 @@ test('sends a manual notification test through the notification center', async (
     });
     const body = await response.json();
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(calls, ['test']);
-    assert.deepEqual(body, { sent: true });
+    assert.equal(response.status, 410);
+    assert.deepEqual(calls, []);
+    assert.equal(body.error, 'Desktop notifications are disabled');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
