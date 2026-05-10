@@ -2,6 +2,12 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.2.1] - 2026-05-10
+
+### Fixed
+
+- Fixed notification tests for CI by aligning observed-completion initialization fixtures with the current recent/stale signal policy.
+
 ## [0.2.0] - 2026-05-10
 
 ### Added

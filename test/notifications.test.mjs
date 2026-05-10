@@ -203,11 +203,7 @@ test('notifies recent observed completion signals during initialization', async 
   });
 
   try {
-    const existingCompletion = reviewThread({
-      hasUnreadTurn: false,
-      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
-      updatedAtMs: now - (3 * 60 * 60 * 1000),
-    });
+    const existingCompletion = reviewThread({ hasUnreadTurn: false });
     const initialized = await center.refresh({ threads: [existingCompletion] });
     assert.equal(initialized.summary.activeCount, 1);
     assert.equal(initialized.items[0].threadId, existingCompletion.id);
@@ -306,7 +302,11 @@ test('reopens legacy auto-dismissed observed completions', async () => {
   });
 
   try {
-    const existingCompletion = reviewThread({ hasUnreadTurn: false });
+    const existingCompletion = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
     await center.refresh({ threads: [existingCompletion] });
 
     now += 1_000;
