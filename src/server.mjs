@@ -9,6 +9,7 @@ import { CLAUDE_PROVIDER_IDS, openClaudeThread } from './claude-data.mjs';
 import { loadDashboard as loadMissionControlDashboard } from './dashboard.mjs';
 import { NotificationCenter } from './notifications.mjs';
 import { openOpenCodeSession } from './opencode-data.mjs';
+import { buildPendingSummary } from './pending-summary.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -197,6 +198,29 @@ export function createServer({
         sendJson(response, 200, notifications);
       } catch (error) {
         sendError(response, error, 'Failed to load notifications');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/pending-summary') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const dashboard = await loadDashboard();
+        const notifications = notificationCenter
+          ? await notificationCenter.refresh(dashboard)
+          : dashboard.notifications || {
+            summary: { activeCount: dashboard.summary?.inboxCount ?? dashboard.inbox?.length ?? 0 },
+            items: dashboard.inbox || [],
+          };
+
+        sendJson(response, 200, buildPendingSummary(notifications));
+      } catch (error) {
+        sendError(response, error, 'Failed to load pending summary');
       }
       return;
     }

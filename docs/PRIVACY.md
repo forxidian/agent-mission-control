@@ -17,6 +17,8 @@ What it may display locally:
   usage, quota samples, and recent user/final-message signals needed for the
   dashboard
 - Pending permission or review signals
+- The optional macOS menu bar helper shows only aggregate pending/progress
+  counts and does not display thread titles or message text
 
 What it avoids:
 

@@ -13,6 +13,7 @@
   --blue: #2c6fbb;
   --steel: #41464d;
   --shadow: 0 18px 50px rgba(25, 23, 18, 0.08);
+  --work-panel-height: min(960px, max(640px, calc(100vh - 180px)));
 }
 
 * {
@@ -510,10 +511,26 @@ h3 {
   margin-top: 12px;
 }
 
+.thread-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: var(--work-panel-height);
+  min-height: 0;
+  overflow: hidden;
+}
+
 .side-rail {
   display: grid;
   align-content: start;
   gap: 12px;
+}
+
+.side-rail > .panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: var(--work-panel-height);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .panel,
@@ -559,8 +576,13 @@ h3 {
   display: grid;
 }
 
+.project-list {
+  min-height: 0;
+  overflow: auto;
+}
+
 .thread-list {
-  max-height: min(720px, calc(100vh - 360px));
+  min-height: 0;
   overflow: auto;
 }
 
@@ -580,7 +602,12 @@ h3 {
   background: transparent;
 }
 
+.thread-row.is-subagent {
+  background: rgba(238, 245, 238, 0.38);
+}
+
 .thread-main {
+  position: relative;
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) minmax(128px, 148px);
   gap: 12px;
@@ -592,6 +619,21 @@ h3 {
   color: var(--ink);
   text-align: left;
   background: transparent;
+}
+
+.thread-row.is-subagent .thread-main {
+  padding-left: 34px;
+}
+
+.thread-row.is-subagent .thread-main::before {
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 18px;
+  width: 8px;
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  content: "";
 }
 
 .thread-row:hover,
@@ -659,6 +701,42 @@ h3 {
 .project-name {
   overflow-wrap: anywhere;
   font-weight: 700;
+}
+
+.thread-title-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.thread-title-line .thread-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-kind-badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.thread-row.is-subagent .thread-kind-badge {
+  border-color: rgba(32, 130, 101, 0.45);
+  color: var(--green);
+}
+
+.thread-row.is-host-agent .thread-kind-badge {
+  border-color: rgba(44, 111, 187, 0.45);
+  color: var(--blue);
 }
 
 .thread-title,
@@ -1108,8 +1186,23 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .thread-panel {
+    height: auto;
+    overflow: visible;
+  }
+
   .thread-list {
+    min-height: 0;
     max-height: none;
+  }
+
+  .side-rail > .panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .project-list {
+    overflow: visible;
   }
 }
 
@@ -1122,10 +1215,6 @@ h3 {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .topbar-actions {
-    justify-content: flex-start;
   }
 
   .priority-inbox-panel .panel-heading {

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { isSubagentThread } from './thread-classification.mjs';
+import { isSubagentThread, subagentInfo } from './thread-classification.mjs';
 
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 const WARM_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -98,6 +98,7 @@ export function normalizeThread(row, nowMs = Date.now()) {
   const source = String(row.source || '');
   const isCodexCli = ['cli', 'terminal', 'tui'].includes(source.toLowerCase());
   const resumeCommand = `codex resume ${id}`;
+  const subagent = subagentInfo(row);
   const thread = {
     id,
     externalId: id,
@@ -122,11 +123,49 @@ export function normalizeThread(row, nowMs = Date.now()) {
     canOpen: UUID_RE.test(id),
     openLabel: isCodexCli ? '打开会话' : '打开线程',
     resumeCommand,
+    isSubagent: subagent.isSubagent,
+    parentThreadId: subagent.parentThreadId,
+    subagentDepth: subagent.depth,
+    agentNickname: row.agent_nickname || subagent.agentNickname || '',
+    agentRole: row.agent_role || subagent.agentRole || '',
   };
 
   return {
     ...enrichThreadRuntime(thread, nowMs),
   };
+}
+
+function attachThreadRelationships(threads) {
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const childrenByParent = new Map();
+
+  for (const thread of threads) {
+    const parentThreadId = thread.parentThreadId || '';
+    if (!thread.isSubagent || !parentThreadId) continue;
+
+    const children = childrenByParent.get(parentThreadId) || [];
+    children.push(thread);
+    childrenByParent.set(parentThreadId, children);
+  }
+
+  return threads.map((thread) => {
+    const children = childrenByParent.get(thread.id) || [];
+    const parent = thread.parentThreadId ? byId.get(thread.parentThreadId) : null;
+    const groupUpdatedAtMs = Math.max(
+      coerceNumber(thread.updatedAtMs),
+      ...children.map((child) => coerceNumber(child.updatedAtMs)),
+    );
+
+    return {
+      ...thread,
+      parentThreadTitle: parent?.title || '',
+      parentThreadProjectName: parent?.projectName || '',
+      parentThreadProviderLabel: parent?.providerLabel || '',
+      childThreadIds: children.map((child) => child.id),
+      subagentCount: children.length,
+      groupUpdatedAtMs,
+    };
+  });
 }
 
 export function aggregateProjects(threads) {
@@ -171,9 +210,9 @@ function attentionReason(thread) {
 }
 
 export function buildDashboard(threads, nowMs = Date.now()) {
-  const sortedThreads = threads
+  const sortedThreads = attachThreadRelationships(threads
     .map((thread) => enrichThreadRuntime(thread, nowMs))
-    .sort((a, b) => coerceNumber(b.updatedAtMs) - coerceNumber(a.updatedAtMs));
+    .sort((a, b) => coerceNumber(b.updatedAtMs) - coerceNumber(a.updatedAtMs)));
   const activeThreads = sortedThreads.filter((thread) => !thread.archived);
   const archivedThreads = sortedThreads.length - activeThreads.length;
   const runningThreads = activeThreads.filter((thread) => thread.status === 'running').length;

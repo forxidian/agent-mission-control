@@ -56,6 +56,24 @@ test('prefers Codex sidebar thread names over stale sqlite titles', () => {
   assert.equal(thread.title, '调研 /goal 新命令');
 });
 
+test('normalizes Codex sub-agent spawn metadata', () => {
+  const thread = normalizeThread({
+    id: '223e4567-e89b-12d3-a456-426614174000',
+    title: 'Review strategy',
+    cwd: '/Users/example/Documents/work',
+    source: '{"subagent":{"thread_spawn":{"parent_thread_id":"123e4567-e89b-12d3-a456-426614174000","depth":1,"agent_nickname":"Dirac","agent_role":"explorer"}}}',
+    archived: 0,
+    created_at: 1777420000,
+    updated_at: 1777423600,
+  }, 1777427200000);
+
+  assert.equal(thread.isSubagent, true);
+  assert.equal(thread.parentThreadId, '123e4567-e89b-12d3-a456-426614174000');
+  assert.equal(thread.subagentDepth, 1);
+  assert.equal(thread.agentNickname, 'Dirac');
+  assert.equal(thread.agentRole, 'explorer');
+});
+
 test('infers running, fresh, warm, idle, and archived thread statuses', () => {
   const now = 1777427200000;
 
@@ -177,6 +195,42 @@ test('does not add sub-agent threads to the dashboard inbox', () => {
   ], now);
 
   assert.equal(dashboard.inbox.length, 0);
+});
+
+test('attaches sub-agent threads to their host thread metadata', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'host-thread',
+      title: 'Host task',
+      cwd: '/a',
+      projectName: 'a',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 120_000,
+    },
+    {
+      id: 'subagent-thread',
+      title: 'Worker task',
+      cwd: '/a',
+      projectName: 'a',
+      source: '{"subagent":{"thread_spawn":{"parent_thread_id":"host-thread","agent_nickname":"Dirac","agent_role":"explorer"}}}',
+      isSubagent: true,
+      parentThreadId: 'host-thread',
+      tokensUsed: 10,
+      archived: false,
+      updatedAtMs: now - 30_000,
+    },
+  ], now);
+
+  const host = dashboard.threads.find((thread) => thread.id === 'host-thread');
+  const subagent = dashboard.threads.find((thread) => thread.id === 'subagent-thread');
+
+  assert.equal(host.subagentCount, 1);
+  assert.deepEqual(host.childThreadIds, ['subagent-thread']);
+  assert.equal(host.groupUpdatedAtMs, now - 30_000);
+  assert.equal(subagent.parentThreadTitle, 'Host task');
+  assert.equal(subagent.parentThreadProjectName, 'a');
 });
 
 test('builds current quota and daily token summary from latest rate-limit signal', () => {

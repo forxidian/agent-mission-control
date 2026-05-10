@@ -30,6 +30,8 @@ test('uses Chinese copy for visible system fields', async () => {
     '本周可用 quota',
     '今日 token',
     '工作中 Agent',
+    'Sub Agent',
+    'Host',
     '长期累计',
     '累计 token',
     '累计线程',
@@ -64,7 +66,9 @@ test('uses Chinese copy for visible system fields', async () => {
     '最近信号',
     '不含完整线程正文',
     '待处理',
+    '新进展',
     '标记已处理',
+    '标记已读',
     '稍后提醒',
   ]) {
     assert.match(publicCopy, new RegExp(expected));
@@ -92,6 +96,32 @@ test('uses Chinese copy for visible system fields', async () => {
   ]) {
     assert.equal(publicCopy.includes(oldCopy), false, `leftover English UI copy: ${oldCopy}`);
   }
+});
+
+test('separates soft progress notifications from hard pending work copy', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  assert.match(app, /function notificationBreakdown\(notifications\)/);
+  assert.match(app, /source === 'observed-completion'/);
+  assert.match(app, new RegExp('待处理 / 新进展'));
+  assert.match(app, /项需处理 · \$\{progressCount\} 项新进展/);
+  assert.match(app, /打开并标记已读/);
+  assert.match(app, /标记已读/);
+});
+
+test('distinguishes sub-agent rows from host agent rows in the thread list', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function arrangeThreadRows\(threads\)/);
+  assert.match(app, /thread-kind-badge/);
+  assert.match(app, /Host: \$\{host\}/);
+  assert.match(app, /Host Agent · \$\{count\} 个 Sub Agent/);
+  assert.match(styles, /\.thread-row\.is-subagent\s*\{/);
+  assert.match(styles, /\.thread-row\.is-subagent \.thread-main::before\s*\{/);
+  assert.match(styles, /\.thread-kind-badge\s*\{/);
 });
 
 test('does not expose per-thread rate limit copy', async () => {
@@ -124,6 +154,18 @@ test('keeps priority inbox as a page-flow preview instead of an inner scroller',
   assert.match(app, /data-toggle-inbox/);
   assert.match(styles, /\.priority-inbox-list\s*\{\s*overflow: visible;\s*\}/);
   assert.doesNotMatch(styles, /\.priority-inbox-list\s*\{[^}]*overflow: auto/);
+});
+
+test('lets the desktop thread list fill the stretched left panel', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  assert.match(styles, /--work-panel-height:\s*min\(960px,\s*max\(640px,\s*calc\(100vh - 180px\)\)\);/);
+  assert.doesNotMatch(styles, /\.layout\s*\{[^}]*align-items:\s*start;/);
+  assert.match(styles, /\.thread-panel\s*\{[\s\S]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/);
+  assert.match(styles, /\.thread-panel\s*\{[\s\S]*height:\s*var\(--work-panel-height\);/);
+  assert.match(styles, /\.thread-list\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*auto;/);
+  assert.match(styles, /\.side-rail > \.panel\s*\{[\s\S]*max-height:\s*var\(--work-panel-height\);/);
+  assert.match(styles, /\.project-list\s*\{[\s\S]*overflow:\s*auto;/);
 });
 
 test('prioritizes today token usage while retaining historical usage in thread rows', async () => {

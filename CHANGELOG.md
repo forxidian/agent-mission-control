@@ -2,6 +2,46 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.2.2] - 2026-05-11
+
+### English
+
+#### Added
+
+- Added Host/Sub Agent relationship metadata to normalized threads, dashboard data, thread rows, and copyable thread summaries.
+- Added a privacy-limited `/api/pending-summary` endpoint for aggregate pending/progress counts.
+- Added an optional native macOS menu bar helper, runnable with `npm run menubar`, that shows aggregate pending/progress counts and opens the local dashboard.
+
+#### Changed
+
+- Separated soft "new progress" notifications from hard pending work in the dashboard summary, inbox heading, inbox actions, and notification copy.
+- Let the desktop thread list and project rail fill the available work-panel height while preserving mobile flow.
+- Limited inferred observed-completion reminders to recent Codex UI threads and cleared them when the user continues a thread.
+
+#### Fixed
+
+- Avoided inferring observed-completion reminders for non-Codex providers, exec-spawned Codex threads, and currently running threads.
+- Dismissed stale legacy observed-completion reminders even when older records used the previous sticky policy.
+
+### 中文
+
+#### 新增
+
+- 在线程标准化、看板数据、线程列表和可复制线程摘要中加入 Host/Sub Agent 关系信息。
+- 新增隐私受限的 `/api/pending-summary` 接口，只返回待处理/新进展的聚合数量。
+- 新增可选原生 macOS 菜单栏辅助工具，可通过 `npm run menubar` 显示聚合待查看数量并打开本地控制台。
+
+#### 调整
+
+- 在总览、收件箱标题、操作按钮和文案中区分软性的“新进展”和硬性的“待处理”。
+- 让桌面端线程列表和项目栏填满工作面板高度，同时保持移动端自然排布。
+- 将推断出的 observed-completion 提醒限制在近期 Codex UI 线程内，并在用户继续发言后自动清理。
+
+#### 修复
+
+- 避免为非 Codex provider、exec 派生的 Codex 线程和运行中的线程误推断 observed-completion 提醒。
+- 即使旧记录使用过此前的 sticky 策略，也会清理过期的 legacy observed-completion 提醒。
+
 ## [0.2.1] - 2026-05-10
 
 ### Fixed

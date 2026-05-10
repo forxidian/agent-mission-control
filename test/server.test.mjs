@@ -194,6 +194,40 @@ test('serves actionable notifications from the notification center', async () =>
   }
 });
 
+test('serves a privacy-limited pending summary for the macOS menu bar', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({ summary: {}, threads: [{ id: 'abc' }], projects: [], inbox: [] }),
+    notificationCenter: {
+      refresh: async () => ({
+        summary: { activeCount: 3, unreadCount: 2 },
+        settings: { desktopNotificationsEnabled: false },
+        items: [
+          { id: 'n1', threadId: 'abc', status: 'unread', source: 'codex-unread', threadTitle: 'private title' },
+          { id: 'n2', threadId: 'abc', status: 'unread', source: 'opencode-permission', threadTitle: 'private title' },
+          { id: 'n3', threadId: 'abc', status: 'read', source: 'observed-completion', threadTitle: 'private title' },
+        ],
+      }),
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/pending-summary`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.activeCount, 3);
+    assert.equal(body.displayCount, 3);
+    assert.equal(body.hardPendingCount, 2);
+    assert.equal(body.progressCount, 1);
+    assert.equal(body.label, '3 待查看');
+    assert.equal('items' in body, false);
+    assert.equal(JSON.stringify(body).includes('private title'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('updates notification status through PATCH', async () => {
   const updates = [];
   const server = createServer({

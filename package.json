@@ -1,7 +1,7 @@
 {
   "name": "agent-mission-control",
   "description": "Local mission-control dashboard for Codex, OpenCode, Claude Code, and compatible agent sessions.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -12,6 +12,7 @@
     "dashboard"
   ],
   "scripts": {
+    "menubar": "swift scripts/macos-pending-island.swift",
     "mock": "node scripts/mock-dashboard-server.mjs",
     "screenshot:mock": "node scripts/capture-mock-screenshot.mjs",
     "start": "node src/server.mjs",

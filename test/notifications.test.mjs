@@ -141,6 +141,50 @@ test('does not create review notifications for sub-agent completions', () => {
   assert.equal(candidates.length, 0);
 });
 
+test('does not infer observed completions for non-Codex providers', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        id: 'claude-session',
+        provider: 'claude-code-cli',
+        source: 'claude-code-cli',
+        hasUnreadTurn: false,
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
+test('does not infer observed completions for exec-spawned Codex threads', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        id: 'exec-thread',
+        provider: 'codex',
+        source: 'exec',
+        hasUnreadTurn: false,
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
+test('does not infer observed completions for running threads', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        hasUnreadTurn: false,
+        status: 'running',
+        currentTurnStartedAtMs: 1777427250000,
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
 
 test('persists notification state and hides completed items', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
@@ -247,7 +291,7 @@ test('suppresses stale observed completions during initialization', async () => 
   }
 });
 
-test('keeps inferred completion notifications until explicitly handled', async () => {
+test('expires inferred completion notifications after the recent window', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
   const storePath = path.join(dir, 'notifications.json');
   let now = 1777427300000;
@@ -281,12 +325,52 @@ test('keeps inferred completion notifications until explicitly handled', async (
 
     now += 3 * 60 * 60 * 1000;
     const later = await center.refresh({ threads: [existingCompletion, newCompletion] });
-    assert.equal(later.summary.activeCount, 1);
+    assert.equal(later.summary.activeCount, 0);
+    assert.equal(later.items.length, 0);
 
-    await center.updateNotification(created.items[0].id, { status: 'done' });
-    const handled = await center.refresh({ threads: [existingCompletion, newCompletion] });
-    assert.equal(handled.summary.activeCount, 0);
-    assert.equal(handled.items.length, 0);
+    const stored = JSON.parse(await readFile(storePath, 'utf8'));
+    assert.equal(stored.notifications[created.items[0].id].status, 'dismissed');
+    assert.equal(stored.notifications[created.items[0].id].dismissReason, 'live-signal-missing');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('clears inferred completion notifications when the user continues the thread', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  let now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const completedThread = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: 1777427200000,
+      updatedAtMs: 1777427200000,
+    });
+    const first = await center.refresh({ threads: [completedThread] });
+    assert.equal(first.summary.activeCount, 1);
+    assert.equal(first.items[0].source, 'observed-completion');
+
+    now += 60_000;
+    const continuedThread = reviewThread({
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: 1777427200000,
+      latestUserMessageAtMs: 1777427350000,
+      status: 'running',
+      currentTurnStartedAtMs: 1777427350000,
+      updatedAtMs: 1777427350000,
+    });
+    const second = await center.refresh({ threads: [continuedThread] });
+    assert.equal(second.summary.activeCount, 0);
+    assert.equal(second.items.length, 0);
+
+    const stored = JSON.parse(await readFile(storePath, 'utf8'));
+    assert.equal(stored.notifications[first.items[0].id].status, 'dismissed');
+    assert.equal(stored.notifications[first.items[0].id].dismissReason, 'new-user-message');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -422,6 +506,52 @@ test('dismisses stale active legacy observed completions without the sticky poli
 
     const result = await center.refresh({ threads: [staleCompletion] });
     assert.equal(result.summary.activeCount, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dismisses stale active legacy observed completions with the sticky policy', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  const now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const staleCompletion = reviewThread({
+      id: 'stale-sticky-thread',
+      hasUnreadTurn: false,
+      latestAgentFinalAtMs: now - (3 * 60 * 60 * 1000),
+      updatedAtMs: now - (3 * 60 * 60 * 1000),
+    });
+    const candidateId = `${staleCompletion.id}:AWAITING_REVIEW:${staleCompletion.latestAgentFinalAtMs}`;
+    await writeFile(storePath, `${JSON.stringify({
+      version: 2,
+      settings: { desktopNotificationsEnabled: false, privacyMode: true },
+      notifications: {
+        [candidateId]: {
+          id: candidateId,
+          threadId: staleCompletion.id,
+          type: 'AWAITING_REVIEW',
+          source: 'observed-completion',
+          status: 'unread',
+          observedCompletionPolicy: 'sticky-until-handled',
+          threadTitle: staleCompletion.title,
+          projectName: staleCompletion.projectName,
+          signalAtMs: staleCompletion.latestAgentFinalAtMs,
+          createdAtMs: staleCompletion.latestAgentFinalAtMs,
+        },
+      },
+      observedReviewSignals: { [candidateId]: staleCompletion.latestAgentFinalAtMs },
+      reviewSignalsInitializedAtMs: 1777427200000,
+    }, null, 2)}\n`);
+
+    const result = await center.refresh({ threads: [staleCompletion] });
+    assert.equal(result.summary.activeCount, 0);
+    assert.equal(result.items.length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

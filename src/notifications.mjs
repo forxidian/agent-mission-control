@@ -81,6 +81,12 @@ function hasCompletedAfterLastUserMessage(thread) {
   return !thread.latestMessageKind || thread.latestMessageKind === 'agent';
 }
 
+function supportsObservedCompletion(thread) {
+  const provider = String(thread.provider || 'codex');
+  if (provider !== 'codex' && provider !== 'codex-cli') return false;
+  return String(thread.source || '') !== 'exec';
+}
+
 export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
   includeObservedCompletions = false,
 } = {}) {
@@ -115,6 +121,9 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
     }
 
     const hasObservedCompletion = includeObservedCompletions
+      && supportsObservedCompletion(thread)
+      && thread.status !== 'running'
+      && !thread.currentTurnStartedAtMs
       && hasCompletedAfterLastUserMessage(thread);
 
     if (!hasUnreadReviewSignal(thread) && !hasObservedCompletion) {
@@ -207,12 +216,21 @@ function shouldIncludeObservedCompletion(candidate, records, observedReviewSigna
   if (existing && TERMINAL_STATUSES.has(existing.status)) return false;
   if (existing && existing.source !== 'observed-completion') return false;
   if (existing?.source === 'observed-completion') {
-    return existing.observedCompletionPolicy === 'sticky-until-handled'
-      || isRecentObservedCompletion(candidate, nowMs);
+    return isRecentObservedCompletion(candidate, nowMs);
   }
   if (!existing && isRecentObservedCompletion(candidate, nowMs)) return true;
   if (!observedReviewSignals[candidate.id]) return isRecentObservedCompletion(candidate, nowMs);
   return false;
+}
+
+function hasNewerUserMessage(record, threadsById) {
+  if (!isObservedCompletion(record)) return false;
+  const thread = threadsById.get(record.threadId);
+  if (!thread) return false;
+
+  const userAtMs = coerceNumber(thread.latestUserMessageAtMs || thread.currentTurnStartedAtMs);
+  const signalAtMs = coerceNumber(record.signalAtMs);
+  return Boolean(userAtMs && signalAtMs && userAtMs > signalAtMs);
 }
 
 export class NotificationCenter {
@@ -295,6 +313,11 @@ export class NotificationCenter {
     ));
     const candidates = uniqueCandidates([...unreadCandidates, ...newCompletionCandidates]);
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+    const threadsById = new Map(
+      (Array.isArray(dashboard?.threads) ? dashboard.threads : [])
+        .filter((thread) => thread?.id)
+        .map((thread) => [thread.id, thread]),
+    );
 
     for (const candidate of candidates) {
       observedReviewSignals[candidate.id] ||= nowMs;
@@ -302,9 +325,6 @@ export class NotificationCenter {
       if (!existing) {
         records[candidate.id] = {
           ...candidate,
-          ...(candidate.source === 'observed-completion'
-            ? { observedCompletionPolicy: 'sticky-until-handled' }
-            : {}),
           desktopNotificationPending: desktopNotificationsEnabled,
           desktopNotifiedAtMs: null,
         };
@@ -324,17 +344,25 @@ export class NotificationCenter {
         status: reopenObservedCompletion ? 'unread' : existing.status,
         dismissReason: reopenObservedCompletion ? undefined : existing.dismissReason,
         updatedAtMs: reopenObservedCompletion ? nowMs : existing.updatedAtMs,
-        observedCompletionPolicy: candidate.source === 'observed-completion'
-          ? (
-            existing.observedCompletionPolicy
-            || (isRecentObservedCompletion(candidate, nowMs) ? 'sticky-until-handled' : undefined)
-          )
-          : existing.observedCompletionPolicy,
         desktopNotificationPending: false,
       };
     }
 
     for (const [id, record] of Object.entries(records)) {
+      if (
+        hasNewerUserMessage(record, threadsById)
+        && !TERMINAL_STATUSES.has(record.status)
+      ) {
+        records[id] = normalizeRecord({
+          ...record,
+          status: 'dismissed',
+          dismissReason: 'new-user-message',
+          desktopNotificationPending: false,
+          updatedAtMs: nowMs,
+        }, nowMs);
+        continue;
+      }
+
       const missingLiveSignal = ACTION_NOTIFICATION_TYPES.has(record.type)
         && !candidateIds.has(id)
         && !TERMINAL_STATUSES.has(record.status);

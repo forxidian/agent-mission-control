@@ -17,6 +17,7 @@ const elements = {
   archiveToggle: document.querySelector('#archive-toggle'),
   detail: document.querySelector('#detail'),
   inbox: document.querySelector('#inbox'),
+  inboxHeading: document.querySelector('#inbox-heading'),
   lastUpdated: document.querySelector('#last-updated'),
   monitorStatus: document.querySelector('#monitor-status'),
   notificationCount: document.querySelector('#notification-count'),
@@ -169,6 +170,20 @@ function notificationLabel(notification) {
     || '通知';
 }
 
+function isSoftProgressNotification(notification) {
+  return notification?.source === 'observed-completion';
+}
+
+function notificationBreakdown(notifications) {
+  const items = notifications?.items || [];
+  const softCount = items.filter(isSoftProgressNotification).length;
+  return {
+    totalCount: notifications?.summary?.activeCount ?? items.length,
+    hardCount: Math.max(0, items.length - softCount),
+    softCount,
+  };
+}
+
 function tokenUsageMarkup(thread) {
   return `
     <div class="token-block">
@@ -258,6 +273,103 @@ function providerLabel(thread) {
   return thread?.providerLabel || 'Agent';
 }
 
+function isSubagentThread(thread) {
+  return Boolean(thread?.isSubagent || thread?.parentThreadId);
+}
+
+function subagentRoleLabel(thread) {
+  return [thread?.agentNickname, thread?.agentRole]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function hostThreadLabel(thread) {
+  return thread?.parentThreadTitle || thread?.parentThreadId || '';
+}
+
+function threadRelationshipLabel(thread) {
+  if (isSubagentThread(thread)) {
+    const roleLabel = subagentRoleLabel(thread);
+    return roleLabel ? `Sub · ${roleLabel}` : 'Sub Agent';
+  }
+
+  const count = Number(thread?.subagentCount || 0);
+  return count > 0 ? `Host · ${count} Sub` : '';
+}
+
+function threadRowClasses(thread, isSelected) {
+  return [
+    'thread-row',
+    isSelected ? 'is-selected' : '',
+    isSubagentThread(thread) ? 'is-subagent' : '',
+    Number(thread?.subagentCount || 0) > 0 ? 'is-host-agent' : '',
+  ].filter(Boolean).map(escapeHtml).join(' ');
+}
+
+function threadTitleMarkup(thread) {
+  const isSubagent = isSubagentThread(thread);
+  const subagentCount = Number(thread?.subagentCount || 0);
+  const badges = [
+    isSubagent ? 'Sub' : '',
+    !isSubagent && subagentCount > 0 ? 'Host' : '',
+    !isSubagent && subagentCount > 0 ? `${subagentCount} Sub` : '',
+  ].filter(Boolean);
+
+  return `
+    <div class="thread-title-line">
+      ${badges.map((badge) => `<span class="thread-kind-badge">${escapeHtml(badge)}</span>`).join('')}
+      <span class="thread-title">${escapeHtml(thread.title)}</span>
+    </div>
+  `;
+}
+
+function threadMetaItems(thread) {
+  const relationship = threadRelationshipLabel(thread);
+  const host = isSubagentThread(thread) ? hostThreadLabel(thread) : '';
+  const turnDuration = currentTurnDuration(thread);
+
+  return [
+    relationship,
+    host ? `Host: ${host}` : '',
+    providerLabel(thread),
+    thread.projectName,
+    thread.model || '未知模型',
+    relativeTime(thread.updatedAtMs),
+    turnDuration ? `本轮 ${turnDuration}` : '',
+  ].filter(Boolean);
+}
+
+function arrangeThreadRows(threads) {
+  const visibleIds = new Set(threads.map((thread) => thread.id));
+  const childIds = new Set();
+  const childrenByParent = new Map();
+
+  for (const thread of threads) {
+    if (!isSubagentThread(thread) || !thread.parentThreadId || !visibleIds.has(thread.parentThreadId)) continue;
+
+    const children = childrenByParent.get(thread.parentThreadId) || [];
+    children.push(thread);
+    childrenByParent.set(thread.parentThreadId, children);
+    childIds.add(thread.id);
+  }
+
+  const roots = threads
+    .filter((thread) => !childIds.has(thread.id))
+    .sort((a, b) => (
+      Number(b.groupUpdatedAtMs || b.updatedAtMs || 0)
+      - Number(a.groupUpdatedAtMs || a.updatedAtMs || 0)
+    ));
+  const arranged = [];
+
+  for (const root of roots) {
+    arranged.push(root);
+    const children = childrenByParent.get(root.id) || [];
+    arranged.push(...children.sort((a, b) => Number(b.updatedAtMs || 0) - Number(a.updatedAtMs || 0)));
+  }
+
+  return arranged;
+}
+
 function openLabel(thread) {
   return thread?.openLabel || '打开线程';
 }
@@ -321,10 +433,12 @@ function statusMarkup(status) {
 }
 
 function renderSummary(summary) {
-  const notificationSummary = state.notifications?.summary || {};
+  const notifications = state.notifications || state.dashboard?.notifications;
+  const notificationCounts = notificationBreakdown(notifications);
   const realtimeQuota = summary.quota?.realtime;
   const weeklyQuota = summary.quota?.weekly;
-  const pendingCount = notificationSummary.activeCount ?? summary.inboxCount;
+  const pendingCount = notificationCounts.hardCount;
+  const progressCount = notificationCounts.softCount;
   const providers = state.dashboard?.providers || summary.providers || [];
   const currentItems = [
     {
@@ -342,7 +456,9 @@ function renderSummary(summary) {
     {
       label: '待处理',
       value: pendingCount,
-      note: `${pendingCount || 0} 项需要处理`,
+      note: progressCount
+        ? `${pendingCount || 0} 项需处理 · ${progressCount} 项新进展`
+        : `${pendingCount || 0} 项需要处理`,
       tone: pendingCount > 0 ? 'attention' : '',
     },
     {
@@ -461,6 +577,10 @@ function filteredThreads() {
       thread.cwd,
       thread.model,
       thread.id,
+      threadRelationshipLabel(thread),
+      hostThreadLabel(thread),
+      thread.agentNickname,
+      thread.agentRole,
     ].some((field) => String(field || '').toLowerCase().includes(query));
   });
 }
@@ -478,26 +598,22 @@ function renderThreads() {
     return;
   }
 
-  if (!state.selectedThreadId || !threads.some((thread) => thread.id === state.selectedThreadId)) {
-    state.selectedThreadId = threads[0].id;
+  const arrangedThreads = arrangeThreadRows(threads);
+  if (!state.selectedThreadId || !arrangedThreads.some((thread) => thread.id === state.selectedThreadId)) {
+    state.selectedThreadId = arrangedThreads[0].id;
   }
 
-  elements.threads.innerHTML = threads.map((thread) => {
+  elements.threads.innerHTML = arrangedThreads.map((thread) => {
     const isSelected = thread.id === state.selectedThreadId;
     const openDisabled = canOpenThread(thread) ? '' : ' disabled';
-    const turnDuration = currentTurnDuration(thread);
     return `
-      <article class="thread-row ${isSelected ? 'is-selected' : ''}">
+      <article class="${threadRowClasses(thread, isSelected)}" data-thread-kind="${isSubagentThread(thread) ? 'subagent' : 'host'}">
         <button class="thread-main" type="button" data-thread-id="${escapeHtml(thread.id)}" aria-pressed="${isSelected}">
           <div>${statusMarkup(thread.status)}</div>
           <div>
-            <div class="thread-title">${escapeHtml(thread.title)}</div>
+            ${threadTitleMarkup(thread)}
             <div class="thread-meta">
-              <span>${escapeHtml(providerLabel(thread))}</span>
-              <span>${escapeHtml(thread.projectName)}</span>
-              <span>${escapeHtml(thread.model || '未知模型')}</span>
-              <span>${escapeHtml(relativeTime(thread.updatedAtMs))}</span>
-              ${turnDuration ? `<span>本轮 ${escapeHtml(turnDuration)}</span>` : ''}
+              ${threadMetaItems(thread).map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
             </div>
           </div>
           ${tokenUsageMarkup(thread)}
@@ -510,17 +626,31 @@ function renderThreads() {
     `;
   }).join('');
 
-  renderDetail(threads.find((thread) => thread.id === state.selectedThreadId));
+  renderDetail(arrangedThreads.find((thread) => thread.id === state.selectedThreadId));
 }
 
 function renderNotifications(notifications) {
   const items = notifications?.items || [];
-  const summary = notifications?.summary || {};
-  const activeCount = summary.activeCount || items.length;
+  const counts = notificationBreakdown(notifications);
+  const activeCount = counts.totalCount || items.length;
   const hiddenCount = Math.max(0, items.length - INBOX_PREVIEW_LIMIT);
   const visibleItems = state.inboxExpanded ? items : items.slice(0, INBOX_PREVIEW_LIMIT);
+  const hasHardItems = counts.hardCount > 0;
+  const hasSoftItems = counts.softCount > 0;
 
-  elements.notificationCount.textContent = `${activeCount} 项`;
+  if (elements.inboxHeading) {
+    elements.inboxHeading.textContent = hasHardItems && hasSoftItems
+      ? '待处理 / 新进展'
+      : hasSoftItems
+        ? '新进展'
+        : '待处理';
+  }
+
+  elements.notificationCount.textContent = hasHardItems && hasSoftItems
+    ? `${counts.hardCount} 待处理 · ${counts.softCount} 新进展`
+    : hasSoftItems
+      ? `${counts.softCount} 项新进展`
+      : `${activeCount} 项`;
   elements.notificationToggle.hidden = hiddenCount === 0;
   elements.notificationToggle.textContent = state.inboxExpanded
     ? '收起'
@@ -528,12 +658,14 @@ function renderNotifications(notifications) {
   elements.notificationToggle.setAttribute('aria-expanded', String(state.inboxExpanded));
 
   if (!items.length) {
-    elements.inbox.innerHTML = '<p class="empty-state">暂无待处理。</p>';
+    elements.inbox.innerHTML = '<p class="empty-state">暂无待处理或新进展。</p>';
     return;
   }
 
-  elements.inbox.innerHTML = visibleItems.map((notification) => `
-    <article class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}">
+  elements.inbox.innerHTML = visibleItems.map((notification) => {
+    const isSoftProgress = isSoftProgressNotification(notification);
+    return `
+    <article class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}" data-notification-kind="${isSoftProgress ? 'progress' : 'action'}">
       <button class="notification-main" type="button" data-thread-id="${escapeHtml(notification.threadId)}">
         <span class="reason">${escapeHtml(notificationLabel(notification))}</span>
         <span class="inbox-title">${escapeHtml(notification.threadTitle || notification.title)}</span>
@@ -549,14 +681,15 @@ function renderNotifications(notifications) {
           type="button"
           data-open-thread-id="${escapeHtml(notification.threadId)}"
           data-open-notification-id="${escapeHtml(notification.id)}"
-        >打开并标记已处理</button>
-        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">标记已处理</button>
+        >${isSoftProgress ? '打开并标记已读' : '打开并标记已处理'}</button>
+        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">${isSoftProgress ? '标记已读' : '标记已处理'}</button>
         <button class="action-button secondary" type="button" data-notification-snooze-id="${escapeHtml(notification.id)}">稍后提醒</button>
       </div>
     </article>
-  `).join('') + (!state.inboxExpanded && hiddenCount > 0 ? `
+  `;
+  }).join('') + (!state.inboxExpanded && hiddenCount > 0 ? `
     <button class="inbox-more-row" type="button" data-toggle-inbox>
-      还有 ${escapeHtml(hiddenCount)} 项待处理
+      还有 ${escapeHtml(hiddenCount)} 项通知
       <span>展开查看全部</span>
     </button>
   ` : '');
@@ -733,6 +866,32 @@ function recentAgentSignal(thread) {
   return compactSignal(thread.lastAgentMessage || '');
 }
 
+function relationshipSummaryLine(thread) {
+  if (isSubagentThread(thread)) {
+    const parts = ['Sub Agent'];
+    const roleLabel = subagentRoleLabel(thread);
+    const host = hostThreadLabel(thread);
+    if (roleLabel) parts.push(roleLabel);
+    if (host) parts.push(`Host: ${host}`);
+    return parts.join(' · ');
+  }
+
+  const count = Number(thread?.subagentCount || 0);
+  return count > 0 ? `Host Agent · ${count} 个 Sub Agent` : '';
+}
+
+function relationshipDetailCellMarkup(thread) {
+  const relation = relationshipSummaryLine(thread);
+  if (!relation) return '';
+
+  return `
+    <div class="detail-cell detail-cell-wide">
+      <span>关系</span>
+      <strong>${escapeHtml(relation)}</strong>
+    </div>
+  `;
+}
+
 function buildThreadSummary(thread) {
   const pendingTools = threadPendingTools(thread);
   const openTodos = threadOpenTodos(thread);
@@ -762,6 +921,7 @@ function buildThreadSummary(thread) {
     `- 来源: ${providerLabel(thread)}`,
     `- 阶段: ${threadPhaseLabel(thread, pendingTools, notifications)}`,
     `- 状态: ${STATUS_LABELS[thread.status] || thread.status || '-'}`,
+    `- 关系: ${relationshipSummaryLine(thread) || '-'}`,
     `- 项目: ${thread.projectName || '未知项目'}`,
     `- 模型: ${thread.model || '未知模型'}`,
     `- 最近更新: ${formatTimestamp(thread.updatedAtMs)}`,
@@ -895,6 +1055,7 @@ function renderDetail(thread) {
             <span>本轮耗时</span>
             <strong>${turnDuration ? escapeHtml(turnDuration) : '-'}</strong>
           </div>
+          ${relationshipDetailCellMarkup(thread)}
         </div>
       </section>
 

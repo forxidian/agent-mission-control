@@ -151,7 +151,7 @@ quota：
   - 这些会保留，直到信号消失、打开并标记处理、或手动处理。
 - 软提醒：
   - 从“Agent final answer after latest user message”推断的新进展：`source = observed-completion`
-  - 当前只作为站内待处理信号，不触发 macOS 桌面通知。
+  - 当前作为站内短暂软提醒展示，不触发 macOS 桌面通知；没有可靠已读回执时，不能把它当成硬待处理。
 
 ## 重要 UX 决策
 
@@ -170,7 +170,7 @@ quota：
 
 - 旧问题：很多线程被误判为“等待验收”。
   - 原因：rollout final answer 被当成硬待处理。
-  - 现在：只有 Codex unread / OpenCode permission 是硬待处理；observed completion 是短暂软提醒。
+  - 现在：只有 Codex unread / OpenCode permission / Claude permission 是硬待处理；observed completion 是短暂软提醒。
 - 旧问题：桌面提醒通过 `osascript` 投递后，macOS 可能静默接收但不显示。
   - 现在：发布版本已屏蔽桌面提醒入口和投递逻辑，只保留站内待处理。
 - 旧问题：同一线程标题显示成不对应的文字。
