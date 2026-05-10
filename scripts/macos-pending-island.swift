@@ -57,13 +57,14 @@ private final class PendingPopoverViewController: NSViewController {
       ? "\(hardPendingCount) 项需处理 · \(progressCount) 项新进展"
       : "请确认本地服务已启动"
     hintLabel.stringValue = connected
-      ? "点击徽章打开任务控制台"
+      ? "点击徽章切回任务控制台"
       : "点击徽章尝试打开控制台"
   }
 }
 
 private final class PendingIslandApp: NSObject, NSApplicationDelegate {
   private let baseURL: URL
+  private let baseURLText: String
   private let refreshInterval: TimeInterval
   private var statusItem: NSStatusItem?
   private var timer: Timer?
@@ -79,6 +80,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     let environment = ProcessInfo.processInfo.environment
     let urlString = environment["AGENT_MISSION_CONTROL_URL"] ?? "http://127.0.0.1:4629"
     self.baseURL = URL(string: urlString) ?? URL(string: "http://127.0.0.1:4629")!
+    self.baseURLText = self.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     self.refreshInterval = TimeInterval(environment["AGENT_MISSION_CONTROL_REFRESH_SECONDS"] ?? "") ?? 10
     super.init()
   }
@@ -153,7 +155,80 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
 
   @objc private func openDashboard(_ sender: Any?) {
     popover.close()
+    if focusExistingDashboardTab() {
+      return
+    }
+
     NSWorkspace.shared.open(baseURL)
+  }
+
+  private func focusExistingDashboardTab() -> Bool {
+    let target = appleScriptString(baseURLText)
+    let targetSlash = appleScriptString("\(baseURLText)/")
+    let script = """
+    set targetUrl to "\(target)"
+    set targetUrlSlash to "\(targetSlash)"
+
+    if application "Google Chrome" is running then
+      tell application "Google Chrome"
+        repeat with browserWindow in windows
+          set tabIndex to 1
+          repeat with browserTab in tabs of browserWindow
+            set tabUrl to URL of browserTab
+            if tabUrl is targetUrl or tabUrl starts with targetUrlSlash then
+              set active tab index of browserWindow to tabIndex
+              set index of browserWindow to 1
+              activate
+              return "found"
+            end if
+            set tabIndex to tabIndex + 1
+          end repeat
+        end repeat
+      end tell
+    end if
+
+    if application "Safari" is running then
+      tell application "Safari"
+        repeat with browserWindow in windows
+          repeat with browserTab in tabs of browserWindow
+            set tabUrl to URL of browserTab
+            if tabUrl is targetUrl or tabUrl starts with targetUrlSlash then
+              set current tab of browserWindow to browserTab
+              set index of browserWindow to 1
+              activate
+              return "found"
+            end if
+          end repeat
+        end repeat
+      end tell
+    end if
+
+    return "not-found"
+    """
+
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = ["-e", script]
+    process.standardOutput = output
+    process.standardError = Pipe()
+
+    do {
+      try process.run()
+      process.waitUntilExit()
+      guard process.terminationStatus == 0 else { return false }
+      let data = output.fileHandleForReading.readDataToEndOfFile()
+      let result = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      return result == "found"
+    } catch {
+      return false
+    }
+  }
+
+  private func appleScriptString(_ value: String) -> String {
+    value
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
   }
 
   func mouseEntered(with event: NSEvent) {

@@ -18,6 +18,11 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /mouseEntered\(with event: NSEvent\)/);
   assert.match(script, /popover\.show\(relativeTo:/);
   assert.match(script, /item\.button\?\.action = #selector\(openDashboard\(_:\)\)/);
+  assert.match(script, /focusExistingDashboardTab\(\)/);
+  assert.match(script, /Google Chrome/);
+  assert.match(script, /Safari/);
+  assert.match(script, /active tab index/);
+  assert.match(script, /NSWorkspace\.shared\.open\(baseURL\)/);
   assert.match(script, /drawBadgeImage\(count: Int, connected: Bool\)/);
   assert.match(script, /button\?\.image = image/);
   assert.match(script, /compactCountTitle\(_ count: Int\)/);
