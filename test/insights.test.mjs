@@ -233,6 +233,61 @@ test('attaches sub-agent threads to their host thread metadata', () => {
   assert.equal(subagent.parentThreadProjectName, 'a');
 });
 
+test('counts running host thread groups without inflating sub-agents', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'host-thread',
+      title: 'Host task',
+      cwd: '/a',
+      projectName: 'a',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 120_000,
+    },
+    {
+      id: 'subagent-a',
+      title: 'Worker A',
+      cwd: '/a',
+      projectName: 'a',
+      isSubagent: true,
+      parentThreadId: 'host-thread',
+      tokensUsed: 10,
+      archived: false,
+      updatedAtMs: now - 30_000,
+      latestUserMessageAtMs: now - 20_000,
+      latestAgentFinalAtMs: now - 60_000,
+    },
+    {
+      id: 'subagent-b',
+      title: 'Worker B',
+      cwd: '/a',
+      projectName: 'a',
+      isSubagent: true,
+      parentThreadId: 'host-thread',
+      tokensUsed: 10,
+      archived: false,
+      updatedAtMs: now - 25_000,
+      latestUserMessageAtMs: now - 15_000,
+      latestAgentFinalAtMs: now - 60_000,
+    },
+    {
+      id: 'solo-host',
+      title: 'Solo host',
+      cwd: '/b',
+      projectName: 'b',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 20_000,
+      latestUserMessageAtMs: now - 10_000,
+      latestAgentFinalAtMs: now - 50_000,
+    },
+  ], now);
+
+  assert.equal(dashboard.summary.runningThreads, 3);
+  assert.equal(dashboard.summary.runningHostThreads, 2);
+});
+
 test('builds current quota and daily token summary from latest rate-limit signal', () => {
   const now = 1777427200000;
   const dashboard = buildDashboard([

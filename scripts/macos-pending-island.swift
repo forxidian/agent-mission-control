@@ -8,6 +8,7 @@ private struct PendingSummary: Decodable {
   let displayCount: Int?
   let hardPendingCount: Int
   let progressCount: Int
+  let runningHostThreadCount: Int?
   let label: String
   let generatedAtMs: Double?
 }
@@ -18,7 +19,7 @@ private final class PendingPopoverViewController: NSViewController {
   private let hintLabel = NSTextField(labelWithString: "点击徽章打开任务控制台")
 
   override func loadView() {
-    let root = NSView(frame: NSRect(x: 0, y: 0, width: 218, height: 82))
+    let root = NSView(frame: NSRect(x: 0, y: 0, width: 252, height: 86))
     root.wantsLayer = true
     root.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
 
@@ -49,9 +50,9 @@ private final class PendingPopoverViewController: NSViewController {
     view = root
   }
 
-  func update(displayCount: Int, hardPendingCount: Int, progressCount: Int, connected: Bool) {
+  func update(displayCount: Int, hardPendingCount: Int, progressCount: Int, runningHostThreadCount: Int, connected: Bool) {
     titleLabel.stringValue = connected
-      ? (displayCount > 0 ? "\(displayCount) 项待查看" : "暂无待查看")
+      ? "\(runningHostThreadCount) Host 工作中 · \(displayCount) 待查看"
       : "未连接任务控制台"
     detailLabel.stringValue = connected
       ? "\(hardPendingCount) 项需处理 · \(progressCount) 项新进展"
@@ -68,12 +69,15 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
   private let refreshInterval: TimeInterval
   private var statusItem: NSStatusItem?
   private var timer: Timer?
+  private var animationTimer: Timer?
   private let popover = NSPopover()
   private let popoverController = PendingPopoverViewController()
   private var hidePopoverWorkItem: DispatchWorkItem?
   private var displayCount = 0
   private var hardPendingCount = 0
   private var progressCount = 0
+  private var runningHostThreadCount = 0
+  private var workActivityPhase = 0
   private var connected = true
 
   override init() {
@@ -104,18 +108,21 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     ))
 
     configurePopover()
-    updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, connected: true)
+    updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, runningHostThreadCount: 0, connected: true)
     refreshNow(nil)
 
     timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
       self?.refreshNow(nil)
+    }
+    animationTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: true) { [weak self] _ in
+      self?.advanceWorkActivity()
     }
   }
 
   private func configurePopover() {
     popover.behavior = .transient
     popover.animates = true
-    popover.contentSize = NSSize(width: 218, height: 82)
+    popover.contentSize = NSSize(width: 252, height: 86)
     popover.contentViewController = popoverController
   }
 
@@ -126,7 +133,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
 
       if let error {
         DispatchQueue.main.async {
-          self.updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, connected: false)
+          self.updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, runningHostThreadCount: 0, connected: false)
         }
         return
       }
@@ -136,17 +143,19 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
         let summary = try? JSONDecoder().decode(PendingSummary.self, from: data)
       else {
         DispatchQueue.main.async {
-          self.updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, connected: false)
+          self.updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, runningHostThreadCount: 0, connected: false)
         }
         return
       }
 
       DispatchQueue.main.async {
         let badgeCount = summary.displayCount ?? summary.activeCount ?? (summary.hardPendingCount + summary.progressCount)
+        let hostCount = summary.runningHostThreadCount ?? 0
         self.updateBadge(
           count: badgeCount,
           hardPendingCount: summary.hardPendingCount,
           progressCount: summary.progressCount,
+          runningHostThreadCount: hostCount,
           connected: true
         )
       }
@@ -245,6 +254,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
       displayCount: displayCount,
       hardPendingCount: hardPendingCount,
       progressCount: progressCount,
+      runningHostThreadCount: runningHostThreadCount,
       connected: connected
     )
 
@@ -261,24 +271,36 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
   }
 
-  private func updateBadge(count: Int, hardPendingCount: Int = 0, progressCount: Int, connected: Bool) {
+  private func updateBadge(count: Int, hardPendingCount: Int = 0, progressCount: Int, runningHostThreadCount: Int, connected: Bool) {
     self.displayCount = count
     self.hardPendingCount = hardPendingCount
     self.progressCount = progressCount
+    self.runningHostThreadCount = runningHostThreadCount
     self.connected = connected
 
-    let image = drawBadgeImage(count: count, connected: connected)
+    let image = drawBadgeImage(pendingCount: count, hostCount: runningHostThreadCount, connected: connected)
 
-    statusItem?.length = image.size.width + 4
+    statusItem?.length = image.size.width + 2
     statusItem?.button?.title = ""
     statusItem?.button?.image = image
     statusItem?.button?.toolTip = connected
-      ? "\(count) 项待查看：\(hardPendingCount) 项需处理，\(progressCount) 项新进展"
+      ? "\(count) 项待查看，\(runningHostThreadCount) 个 Host 工作中：\(hardPendingCount) 项需处理，\(progressCount) 项新进展"
       : "Agent Mission Control 未连接"
     popoverController.update(
       displayCount: count,
       hardPendingCount: hardPendingCount,
       progressCount: progressCount,
+      runningHostThreadCount: runningHostThreadCount,
+      connected: connected
+    )
+  }
+
+  private func advanceWorkActivity() {
+    guard connected, runningHostThreadCount > 0 else { return }
+    workActivityPhase = (workActivityPhase + 1) % 3
+    statusItem?.button?.image = drawBadgeImage(
+      pendingCount: displayCount,
+      hostCount: runningHostThreadCount,
       connected: connected
     )
   }
@@ -291,10 +313,12 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     return "\(max(0, count))"
   }
 
-  private func drawBadgeImage(count: Int, connected: Bool) -> NSImage {
-    let overflow = connected && count > 9
-    let glyph = connected ? compactCountTitle(count).replacingOccurrences(of: "\u{0307}", with: "") : "!"
-    let size = NSSize(width: 22, height: 22)
+  private func drawBadgeImage(pendingCount: Int, hostCount: Int, connected: Bool) -> NSImage {
+    if !connected {
+      return drawDisconnectedBadgeImage()
+    }
+
+    let size = NSSize(width: 32, height: 22)
     let image = NSImage(size: size)
 
     image.lockFocus()
@@ -302,11 +326,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
 
     let rect = NSRect(x: 1.25, y: 1.25, width: size.width - 2.5, height: size.height - 2.5)
     let badge = NSBezierPath(roundedRect: rect, xRadius: 7.5, yRadius: 7.5)
-    let badgeFill = connected
-      ? NSColor(calibratedWhite: 0.08, alpha: 0.78)
-      : NSColor(calibratedRed: 0.25, green: 0.07, blue: 0.07, alpha: 0.80)
-
-    badgeFill.setFill()
+    NSColor(calibratedWhite: 0.08, alpha: 0.78).setFill()
     badge.fill()
 
     let innerRect = rect.insetBy(dx: 1.1, dy: 1.1)
@@ -315,7 +335,86 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     innerStroke.lineWidth = 0.8
     innerStroke.stroke()
 
-    NSColor.white.withAlphaComponent(connected ? 0.24 : 0.32).setStroke()
+    NSColor.white.withAlphaComponent(0.24).setStroke()
+    badge.lineWidth = 1
+    badge.stroke()
+
+    NSColor.white.withAlphaComponent(0.16).setStroke()
+    let divider = NSBezierPath()
+    divider.move(to: NSPoint(x: size.width / 2, y: 4.4))
+    divider.line(to: NSPoint(x: size.width / 2, y: size.height - 4.4))
+    divider.lineWidth = 0.8
+    divider.stroke()
+
+    drawSegmentCount(hostCount, in: NSRect(x: 0, y: 0, width: size.width / 2, height: size.height), activeColor: NSColor.systemBlue, showsWorkActivity: true)
+    drawSegmentCount(pendingCount, in: NSRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height), activeColor: NSColor.systemOrange)
+
+    return image
+  }
+
+  private func drawSegmentCount(_ count: Int, in rect: NSRect, activeColor: NSColor, showsWorkActivity: Bool = false) {
+    let overflow = count > 9
+    let glyph = compactCountTitle(count).replacingOccurrences(of: "\u{0307}", with: "")
+    let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .center
+    let textAttributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: NSColor(calibratedWhite: count == 0 ? 0.86 : 0.98, alpha: 1),
+      .paragraphStyle: paragraph,
+    ]
+    let textSize = (glyph as NSString).size(withAttributes: textAttributes)
+    let textRect = NSRect(
+      x: rect.minX,
+      y: rect.minY + (rect.height - textSize.height) / 2 - 0.7,
+      width: rect.width,
+      height: textSize.height + 2
+    )
+    (glyph as NSString).draw(in: textRect, withAttributes: textAttributes)
+
+    if showsWorkActivity && count > 0 {
+      drawWorkActivity(in: rect, color: activeColor)
+      return
+    }
+
+    if overflow {
+      NSColor(calibratedWhite: 0.08, alpha: 0.96).setFill()
+      NSBezierPath(ovalIn: NSRect(x: rect.maxX - 6.2, y: rect.maxY - 6.9, width: 4.8, height: 4.8)).fill()
+      activeColor.withAlphaComponent(0.95).setFill()
+      NSBezierPath(ovalIn: NSRect(x: rect.maxX - 5.3, y: rect.maxY - 6.0, width: 3.0, height: 3.0)).fill()
+    } else if count > 0 {
+      activeColor.withAlphaComponent(0.86).setFill()
+      NSBezierPath(ovalIn: NSRect(x: rect.maxX - 4.7, y: rect.minY + 4.1, width: 2.5, height: 2.5)).fill()
+    }
+  }
+
+  private func drawWorkActivity(in rect: NSRect, color: NSColor) {
+    for index in 0..<3 {
+      let alpha = index == workActivityPhase ? 0.92 : 0.30
+      color.withAlphaComponent(alpha).setFill()
+      let dot = NSRect(
+        x: rect.midX - 4.1 + CGFloat(index) * 2.8,
+        y: rect.minY + 2.7,
+        width: 1.9,
+        height: 1.9
+      )
+      NSBezierPath(ovalIn: dot).fill()
+    }
+  }
+
+  private func drawDisconnectedBadgeImage() -> NSImage {
+    let size = NSSize(width: 22, height: 22)
+    let image = NSImage(size: size)
+
+    image.lockFocus()
+    defer { image.unlockFocus() }
+
+    let rect = NSRect(x: 1.25, y: 1.25, width: size.width - 2.5, height: size.height - 2.5)
+    let badge = NSBezierPath(roundedRect: rect, xRadius: 7.5, yRadius: 7.5)
+    NSColor(calibratedRed: 0.25, green: 0.07, blue: 0.07, alpha: 0.80).setFill()
+    badge.fill()
+
+    NSColor.white.withAlphaComponent(0.32).setStroke()
     badge.lineWidth = 1
     badge.stroke()
 
@@ -324,30 +423,20 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     paragraph.alignment = .center
     let textAttributes: [NSAttributedString.Key: Any] = [
       .font: font,
-      .foregroundColor: NSColor(calibratedWhite: connected && count == 0 ? 0.90 : 0.98, alpha: 1),
+      .foregroundColor: NSColor(calibratedWhite: 0.98, alpha: 1),
       .paragraphStyle: paragraph,
     ]
-    let textSize = (glyph as NSString).size(withAttributes: textAttributes)
+    let textSize = ("!" as NSString).size(withAttributes: textAttributes)
     let textRect = NSRect(
       x: 0,
       y: (size.height - textSize.height) / 2 - 0.8,
       width: size.width,
       height: textSize.height + 2
     )
-    (glyph as NSString).draw(in: textRect, withAttributes: textAttributes)
+    ("!" as NSString).draw(in: textRect, withAttributes: textAttributes)
 
-    if overflow {
-      NSColor(calibratedWhite: 0.08, alpha: 0.96).setFill()
-      NSBezierPath(ovalIn: NSRect(x: 14.6, y: 14.8, width: 5.4, height: 5.4)).fill()
-      NSColor.systemOrange.withAlphaComponent(0.95).setFill()
-      NSBezierPath(ovalIn: NSRect(x: 15.6, y: 15.8, width: 3.4, height: 3.4)).fill()
-    } else if connected && count > 0 {
-      NSColor.systemOrange.withAlphaComponent(0.84).setFill()
-      NSBezierPath(ovalIn: NSRect(x: 16.2, y: 4.2, width: 2.8, height: 2.8)).fill()
-    } else if !connected {
-      NSColor.systemRed.withAlphaComponent(0.90).setFill()
-      NSBezierPath(ovalIn: NSRect(x: 16.0, y: 4.0, width: 3.2, height: 3.2)).fill()
-    }
+    NSColor.systemRed.withAlphaComponent(0.90).setFill()
+    NSBezierPath(ovalIn: NSRect(x: 16.0, y: 4.0, width: 3.2, height: 3.2)).fill()
 
     return image
   }

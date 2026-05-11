@@ -218,7 +218,7 @@ export function createServer({
             items: dashboard.inbox || [],
           };
 
-        sendJson(response, 200, buildPendingSummary(notifications));
+        sendJson(response, 200, buildPendingSummary(notifications, Date.now(), dashboard));
       } catch (error) {
         sendError(response, error, 'Failed to load pending summary');
       }

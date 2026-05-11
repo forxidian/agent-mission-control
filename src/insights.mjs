@@ -209,6 +209,21 @@ function attentionReason(thread) {
   return '';
 }
 
+function countRunningHostThreads(threads) {
+  const hostIds = new Set();
+
+  for (const thread of threads) {
+    if (thread.status !== 'running') continue;
+
+    const hostId = isSubagentThread(thread)
+      ? thread.parentThreadId
+      : thread.id;
+    if (hostId) hostIds.add(hostId);
+  }
+
+  return hostIds.size;
+}
+
 export function buildDashboard(threads, nowMs = Date.now()) {
   const sortedThreads = attachThreadRelationships(threads
     .map((thread) => enrichThreadRuntime(thread, nowMs))
@@ -216,6 +231,7 @@ export function buildDashboard(threads, nowMs = Date.now()) {
   const activeThreads = sortedThreads.filter((thread) => !thread.archived);
   const archivedThreads = sortedThreads.length - activeThreads.length;
   const runningThreads = activeThreads.filter((thread) => thread.status === 'running').length;
+  const runningHostThreads = countRunningHostThreads(activeThreads);
   const totalTokensUsed = sortedThreads.reduce((sum, thread) => sum + coerceNumber(thread.tokensUsed), 0);
   const activeTokensUsed = activeThreads.reduce((sum, thread) => sum + coerceNumber(thread.tokensUsed), 0);
   const todayTokensUsed = activeThreads.reduce((sum, thread) => sum + coerceNumber(thread.todayTokenUsage), 0);
@@ -233,6 +249,7 @@ export function buildDashboard(threads, nowMs = Date.now()) {
       totalThreads: sortedThreads.length,
       activeThreads: activeThreads.length,
       runningThreads,
+      runningHostThreads,
       archivedThreads,
       totalTokensUsed,
       activeTokensUsed,

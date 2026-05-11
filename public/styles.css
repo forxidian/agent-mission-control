@@ -124,6 +124,104 @@ h3 {
   white-space: nowrap;
 }
 
+.topbar-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.topbar-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 3px 9px;
+  border: 1px solid rgba(157, 151, 138, 0.62);
+  border-radius: 6px;
+  background: rgba(255, 253, 247, 0.72);
+  font-family: Menlo, Monaco, Consolas, monospace;
+}
+
+.topbar-metric span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.topbar-metric strong {
+  color: var(--steel);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.topbar-metric-value {
+  display: inline-grid;
+  justify-items: center;
+  min-width: 13px;
+  line-height: 1;
+}
+
+.work-activity {
+  display: grid;
+  grid-template-columns: repeat(3, 3px);
+  gap: 1px;
+  width: 11px;
+  height: 3px;
+  margin-top: 1px;
+}
+
+.work-activity i {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--blue);
+  opacity: 0.36;
+  animation: work-activity-step 1.2s infinite ease-in-out;
+}
+
+.work-activity i:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.work-activity i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.work-activity i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes work-activity-step {
+  0%,
+  72%,
+  100% {
+    opacity: 0.28;
+  }
+
+  28% {
+    opacity: 1;
+  }
+}
+
+.topbar-metric.is-attention {
+  border-color: rgba(162, 56, 45, 0.38);
+  background: rgba(255, 247, 239, 0.76);
+}
+
+.topbar-metric.is-attention strong {
+  color: var(--red);
+}
+
+.topbar-metric.is-running {
+  border-color: rgba(44, 111, 187, 0.34);
+  background: rgba(246, 251, 255, 0.7);
+}
+
+.topbar-metric.is-running strong {
+  color: var(--blue);
+}
+
 .timestamp,
 .panel-note {
   margin: 0;

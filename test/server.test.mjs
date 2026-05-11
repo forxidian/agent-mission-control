@@ -196,7 +196,12 @@ test('serves actionable notifications from the notification center', async () =>
 
 test('serves a privacy-limited pending summary for the macOS menu bar', async () => {
   const server = createServer({
-    loadDashboard: async () => ({ summary: {}, threads: [{ id: 'abc' }], projects: [], inbox: [] }),
+    loadDashboard: async () => ({
+      summary: { runningHostThreads: 2 },
+      threads: [{ id: 'abc', status: 'running' }],
+      projects: [],
+      inbox: [],
+    }),
     notificationCenter: {
       refresh: async () => ({
         summary: { activeCount: 3, unreadCount: 2 },
@@ -220,6 +225,8 @@ test('serves a privacy-limited pending summary for the macOS menu bar', async ()
     assert.equal(body.displayCount, 3);
     assert.equal(body.hardPendingCount, 2);
     assert.equal(body.progressCount, 1);
+    assert.equal(body.runningHostThreadCount, 2);
+    assert.equal(body.hostLabel, '2 Host 工作中');
     assert.equal(body.label, '3 待查看');
     assert.equal('items' in body, false);
     assert.equal(JSON.stringify(body).includes('private title'), false);

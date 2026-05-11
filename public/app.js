@@ -32,6 +32,7 @@ const elements = {
   summary: document.querySelector('#summary'),
   threadCount: document.querySelector('#thread-count'),
   threads: document.querySelector('#threads'),
+  topbarMetrics: document.querySelector('#topbar-metrics'),
 };
 
 const REFRESH_INTERVAL_MS = 10_000;
@@ -184,6 +185,20 @@ function notificationBreakdown(notifications) {
   };
 }
 
+function countRunningHostThreads(dashboard = state.dashboard) {
+  const summaryCount = Number(dashboard?.summary?.runningHostThreads);
+  if (Number.isFinite(summaryCount)) return Math.max(0, summaryCount);
+
+  const hostIds = new Set();
+  for (const thread of dashboard?.threads || []) {
+    if (thread?.archived || thread?.status !== 'running') continue;
+    const hostId = isSubagentThread(thread) ? thread.parentThreadId : thread.id;
+    if (hostId) hostIds.add(hostId);
+  }
+
+  return hostIds.size;
+}
+
 function tokenUsageMarkup(thread) {
   return `
     <div class="token-block">
@@ -206,6 +221,33 @@ function summaryCard({ label, value, note = '', tone = '' }) {
       <strong>${escapeHtml(value)}</strong>
       ${note ? `<small>${escapeHtml(note)}</small>` : ''}
     </article>
+  `;
+}
+
+function renderTopbarMetrics(summary = {}) {
+  if (!elements.topbarMetrics) return;
+
+  const notifications = state.notifications || state.dashboard?.notifications;
+  const counts = notificationBreakdown(notifications);
+  const pendingCount = counts.hardCount;
+  const runningHostThreads = countRunningHostThreads(state.dashboard || { summary });
+  const pendingTitle = counts.softCount
+    ? `${pendingCount || 0} 项待处理，${counts.softCount} 项新进展`
+    : `${pendingCount || 0} 项待处理`;
+  const hostTitle = `${runningHostThreads || 0} 个 Host 线程工作中`;
+
+  elements.topbarMetrics.innerHTML = `
+    <span class="topbar-metric${runningHostThreads > 0 ? ' is-running' : ''}" title="${escapeHtml(hostTitle)}">
+      <span>Host 工作中</span>
+      <span class="topbar-metric-value">
+        <strong>${escapeHtml(runningHostThreads)}</strong>
+        ${runningHostThreads > 0 ? '<span class="work-activity" aria-hidden="true"><i></i><i></i><i></i></span>' : ''}
+      </span>
+    </span>
+    <span class="topbar-metric${pendingCount > 0 ? ' is-attention' : ''}" title="${escapeHtml(pendingTitle)}">
+      <span>待处理</span>
+      <strong>${escapeHtml(pendingCount)}</strong>
+    </span>
   `;
 }
 
@@ -469,7 +511,7 @@ function renderSummary(summary) {
     {
       label: '工作中 Agent',
       value: summary.runningThreads || 0,
-      note: `${summary.runningThreads || 0} 个正在进行中`,
+      note: `${summary.runningHostThreads || 0} 个 Host 任务组`,
       tone: summary.runningThreads > 0 ? 'running' : '',
     },
   ];
@@ -1127,6 +1169,7 @@ function renderDetail(thread) {
 function renderDashboard() {
   if (!state.dashboard) return;
 
+  renderTopbarMetrics(state.dashboard.summary);
   renderSummary(state.dashboard.summary);
   renderProviderFilter(state.dashboard.providers || []);
   renderProjectFilter(state.dashboard.projects);

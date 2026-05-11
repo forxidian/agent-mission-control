@@ -12,6 +12,7 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /api\/pending-summary/);
   assert.match(script, /AGENT_MISSION_CONTROL_URL/);
   assert.match(script, /displayCount/);
+  assert.match(script, /runningHostThreadCount/);
   assert.match(script, /badgeCount/);
   assert.match(script, /NSPopover/);
   assert.match(script, /PendingPopoverViewController/);
@@ -23,12 +24,16 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /Safari/);
   assert.match(script, /active tab index/);
   assert.match(script, /NSWorkspace\.shared\.open\(baseURL\)/);
-  assert.match(script, /drawBadgeImage\(count: Int, connected: Bool\)/);
+  assert.match(script, /drawBadgeImage\(pendingCount: Int, hostCount: Int, connected: Bool\)/);
+  assert.match(script, /drawSegmentCount\(_ count: Int/);
+  assert.match(script, /drawDisconnectedBadgeImage\(\)/);
   assert.match(script, /button\?\.image = image/);
   assert.match(script, /compactCountTitle\(_ count: Int\)/);
   assert.match(script, /"9\\u\{0307\}"/);
-  assert.match(script, /calibratedWhite: connected && count == 0 \? 0\.90 : 0\.98/);
+  assert.match(script, /calibratedWhite: count == 0 \? 0\.86 : 0\.98/);
   assert.match(script, /NSColor\.systemOrange/);
+  assert.match(script, /NSColor\.systemBlue/);
+  assert.match(script, /Host 工作中/);
   assert.doesNotMatch(script, /topSheen/);
   assert.doesNotMatch(script, /bottomLine/);
   assert.doesNotMatch(script, /drawIslandImage/);
