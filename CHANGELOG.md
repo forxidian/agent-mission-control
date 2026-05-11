@@ -14,7 +14,15 @@ All notable changes to Agent Mission Control are documented here.
 #### Changed
 
 - Refined the macOS menu bar helper so clicking the badge focuses an existing Chrome or Safari dashboard tab before opening a new dashboard URL.
+- Refined the macOS menu bar helper badge colors and count alignment to better match the dashboard's quieter release UI.
+- Reworked the top-bar refresh controls and metric layout so status text and controls keep stable spacing across desktop and mobile widths.
+- Renamed soft progress notification states and actions from "read" language to "viewed" language, separating new-progress review from hard pending work.
 - Updated the work-in-progress summary copy to distinguish running Agent threads from running Host task groups.
+
+#### Fixed
+
+- Prevented stale unfinished turns with no recent activity from staying in the running state indefinitely.
+- Marked soft progress notifications as viewed when their inbox item is opened from the notification center.
 
 ### 中文
 
@@ -26,7 +34,15 @@ All notable changes to Agent Mission Control are documented here.
 #### 调整
 
 - 优化 macOS 菜单栏辅助工具：点击徽章会优先切回已有的 Chrome 或 Safari 控制台标签页，再按需打开新页面。
+- 优化 macOS 菜单栏辅助工具徽章的配色和数字对齐，使其更贴近发布版控制台的克制视觉。
+- 重做顶部刷新控制和关键指标布局，让状态文字与控件在桌面端和移动端都保持稳定间距。
+- 将软性“新进展”的状态和操作文案从“已读”调整为“已查看”，和硬性的待处理事项进一步区分。
 - 调整工作中摘要文案，区分运行中的 Agent 线程和运行中的 Host 任务组。
+
+#### 修复
+
+- 避免很久没有新活动、但缺失 final answer 的旧轮次长期停留在“运行中”状态。
+- 从通知中心打开软性“新进展”条目时，会同步标记为已查看。
 
 ## [0.2.2] - 2026-05-11
 

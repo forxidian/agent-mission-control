@@ -3,6 +3,7 @@ import { isSubagentThread, subagentInfo } from './thread-classification.mjs';
 
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 const WARM_WINDOW_MS = 6 * 60 * 60 * 1000;
+const RUNNING_ACTIVITY_WINDOW_MS = WARM_WINDOW_MS;
 const HIGH_TOKEN_USAGE = 5_000_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -64,9 +65,25 @@ function currentTurnStartedAtMs(thread) {
   return userAtMs > 0 && userAtMs > finalAtMs ? userAtMs : 0;
 }
 
+function currentTurnActivityAtMs(thread) {
+  const startedAtMs = currentTurnStartedAtMs(thread);
+  if (!startedAtMs) return 0;
+
+  return Math.max(
+    startedAtMs,
+    coerceNumber(thread.updatedAtMs),
+    coerceNumber(thread.rateLimitUpdatedAtMs),
+  );
+}
+
+function hasActiveCurrentTurn(thread, nowMs) {
+  const activityAtMs = currentTurnActivityAtMs(thread);
+  return activityAtMs > 0 && Math.max(0, nowMs - activityAtMs) <= RUNNING_ACTIVITY_WINDOW_MS;
+}
+
 export function inferThreadStatus(thread, nowMs = Date.now()) {
   if (thread.archived) return 'archived';
-  if (currentTurnStartedAtMs(thread) > 0) return 'running';
+  if (hasActiveCurrentTurn(thread, nowMs)) return 'running';
 
   const ageMs = Math.max(0, nowMs - coerceNumber(thread.updatedAtMs));
   if (ageMs <= FRESH_WINDOW_MS) return 'fresh';
@@ -75,7 +92,9 @@ export function inferThreadStatus(thread, nowMs = Date.now()) {
 }
 
 export function enrichThreadRuntime(thread, nowMs = Date.now()) {
-  const startedAtMs = currentTurnStartedAtMs(thread);
+  const startedAtMs = hasActiveCurrentTurn(thread, nowMs)
+    ? currentTurnStartedAtMs(thread)
+    : 0;
   const runtimeThread = {
     ...thread,
     currentTurnStartedAtMs: startedAtMs || null,

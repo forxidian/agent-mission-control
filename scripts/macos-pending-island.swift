@@ -13,6 +13,12 @@ private struct PendingSummary: Decodable {
   let generatedAtMs: Double?
 }
 
+private let islandSurfaceColor = NSColor(calibratedRed: 0.945, green: 0.906, blue: 0.816, alpha: 1.0)
+private let islandLineColor = NSColor(calibratedRed: 0.788, green: 0.725, blue: 0.580, alpha: 1.0)
+private let islandDividerColor = NSColor(calibratedRed: 0.620, green: 0.592, blue: 0.541, alpha: 0.52)
+private let islandBlueColor = NSColor(calibratedRed: 0.173, green: 0.435, blue: 0.733, alpha: 1.0)
+private let islandMutedRedColor = NSColor(calibratedRed: 0.580, green: 0.294, blue: 0.255, alpha: 1.0)
+
 private final class PendingPopoverViewController: NSViewController {
   private let titleLabel = NSTextField(labelWithString: "0 项待查看")
   private let detailLabel = NSTextField(labelWithString: "0 项需处理 · 0 项新进展")
@@ -131,7 +137,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     URLSession.shared.dataTask(with: endpoint) { [weak self] data, _, error in
       guard let self else { return }
 
-      if let error {
+      if error != nil {
         DispatchQueue.main.async {
           self.updateBadge(count: 0, hardPendingCount: 0, progressCount: 0, runningHostThreadCount: 0, connected: false)
         }
@@ -326,33 +332,33 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
 
     let rect = NSRect(x: 1.25, y: 1.25, width: size.width - 2.5, height: size.height - 2.5)
     let badge = NSBezierPath(roundedRect: rect, xRadius: 7.5, yRadius: 7.5)
-    NSColor(calibratedWhite: 0.08, alpha: 0.78).setFill()
+    islandSurfaceColor.setFill()
     badge.fill()
 
     let innerRect = rect.insetBy(dx: 1.1, dy: 1.1)
     let innerStroke = NSBezierPath(roundedRect: innerRect, xRadius: 6.4, yRadius: 6.4)
-    NSColor.white.withAlphaComponent(0.08).setStroke()
+    NSColor.white.withAlphaComponent(0.34).setStroke()
     innerStroke.lineWidth = 0.8
     innerStroke.stroke()
 
-    NSColor.white.withAlphaComponent(0.24).setStroke()
+    islandLineColor.setStroke()
     badge.lineWidth = 1
     badge.stroke()
 
-    NSColor.white.withAlphaComponent(0.16).setStroke()
+    islandDividerColor.setStroke()
     let divider = NSBezierPath()
     divider.move(to: NSPoint(x: size.width / 2, y: 4.4))
     divider.line(to: NSPoint(x: size.width / 2, y: size.height - 4.4))
     divider.lineWidth = 0.8
     divider.stroke()
 
-    drawSegmentCount(hostCount, in: NSRect(x: 0, y: 0, width: size.width / 2, height: size.height), activeColor: NSColor.systemBlue, showsWorkActivity: true)
-    drawSegmentCount(pendingCount, in: NSRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height), activeColor: NSColor.systemOrange)
+    drawSegmentCount(hostCount, in: NSRect(x: 0, y: 0, width: size.width / 2, height: size.height), accentColor: islandBlueColor, showsWorkActivity: true)
+    drawSegmentCount(pendingCount, in: NSRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height), accentColor: islandMutedRedColor)
 
     return image
   }
 
-  private func drawSegmentCount(_ count: Int, in rect: NSRect, activeColor: NSColor, showsWorkActivity: Bool = false) {
+  private func drawSegmentCount(_ count: Int, in rect: NSRect, accentColor: NSColor, showsWorkActivity: Bool = false) {
     let overflow = count > 9
     let glyph = compactCountTitle(count).replacingOccurrences(of: "\u{0307}", with: "")
     let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
@@ -360,31 +366,29 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     paragraph.alignment = .center
     let textAttributes: [NSAttributedString.Key: Any] = [
       .font: font,
-      .foregroundColor: NSColor(calibratedWhite: count == 0 ? 0.86 : 0.98, alpha: 1),
+      .foregroundColor: accentColor,
       .paragraphStyle: paragraph,
     ]
-    let textSize = (glyph as NSString).size(withAttributes: textAttributes)
+    let lineHeight = ceil(font.ascender - font.descender + font.leading)
+    let opticalYOffset: CGFloat = showsWorkActivity && count > 0 ? -1.25 : -0.7
     let textRect = NSRect(
       x: rect.minX,
-      y: rect.minY + (rect.height - textSize.height) / 2 - 0.7,
+      y: rect.minY + (rect.height - lineHeight) / 2 + opticalYOffset,
       width: rect.width,
-      height: textSize.height + 2
+      height: lineHeight + 2
     )
     (glyph as NSString).draw(in: textRect, withAttributes: textAttributes)
 
     if showsWorkActivity && count > 0 {
-      drawWorkActivity(in: rect, color: activeColor)
+      drawWorkActivity(in: rect, color: accentColor)
       return
     }
 
     if overflow {
-      NSColor(calibratedWhite: 0.08, alpha: 0.96).setFill()
+      islandSurfaceColor.setFill()
       NSBezierPath(ovalIn: NSRect(x: rect.maxX - 6.2, y: rect.maxY - 6.9, width: 4.8, height: 4.8)).fill()
-      activeColor.withAlphaComponent(0.95).setFill()
+      accentColor.withAlphaComponent(0.95).setFill()
       NSBezierPath(ovalIn: NSRect(x: rect.maxX - 5.3, y: rect.maxY - 6.0, width: 3.0, height: 3.0)).fill()
-    } else if count > 0 {
-      activeColor.withAlphaComponent(0.86).setFill()
-      NSBezierPath(ovalIn: NSRect(x: rect.maxX - 4.7, y: rect.minY + 4.1, width: 2.5, height: 2.5)).fill()
     }
   }
 

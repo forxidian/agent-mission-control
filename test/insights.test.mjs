@@ -83,6 +83,12 @@ test('infers running, fresh, warm, idle, and archived thread statuses', () => {
     latestUserMessageAtMs: now - 10 * 60 * 1000,
     latestAgentFinalAtMs: now - 20 * 60 * 1000,
   }, now), 'running');
+  assert.equal(inferThreadStatus({
+    archived: false,
+    updatedAtMs: now - 2 * 24 * 60 * 60 * 1000,
+    latestUserMessageAtMs: now - 2 * 24 * 60 * 60 * 1000,
+    latestAgentFinalAtMs: now - 2 * 24 * 60 * 60 * 1000 - 60_000,
+  }, now), 'idle');
   assert.equal(inferThreadStatus({ archived: false, updatedAtMs: now - 5 * 60 * 1000 }, now), 'fresh');
   assert.equal(inferThreadStatus({ archived: false, updatedAtMs: now - 2 * 60 * 60 * 1000 }, now), 'warm');
   assert.equal(inferThreadStatus({ archived: false, updatedAtMs: now - 2 * 24 * 60 * 60 * 1000 }, now), 'idle');
@@ -132,6 +138,17 @@ test('builds summary counts and inbox candidates', () => {
       status: 'idle',
     },
     {
+      id: 'stale-turn',
+      title: 'Stale unfinished turn',
+      cwd: '/b',
+      projectName: 'b',
+      tokensUsed: 50,
+      archived: false,
+      updatedAtMs: now - 2 * 24 * 60 * 60 * 1000,
+      latestUserMessageAtMs: now - 2 * 24 * 60 * 60 * 1000,
+      latestAgentFinalAtMs: now - 2 * 24 * 60 * 60 * 1000 - 60_000,
+    },
+    {
       id: '3',
       title: 'Old',
       cwd: '/c',
@@ -143,14 +160,17 @@ test('builds summary counts and inbox candidates', () => {
     },
   ], now);
 
-  assert.equal(dashboard.summary.activeThreads, 2);
+  assert.equal(dashboard.summary.activeThreads, 3);
   assert.equal(dashboard.summary.runningThreads, 1);
   assert.equal(dashboard.summary.archivedThreads, 1);
-  assert.equal(dashboard.summary.totalTokensUsed, 8_000_200);
+  assert.equal(dashboard.summary.totalTokensUsed, 8_000_250);
   assert.equal(dashboard.inbox.length, 2);
   assert.deepEqual(dashboard.inbox.map((item) => item.reason), ['running', 'high token usage']);
   assert.equal(dashboard.threads[0].status, 'running');
   assert.equal(dashboard.threads[0].currentTurnElapsedMs, 600_000);
+  const staleTurn = dashboard.threads.find((thread) => thread.id === 'stale-turn');
+  assert.equal(staleTurn.status, 'idle');
+  assert.equal(staleTurn.currentTurnStartedAtMs, null);
 });
 
 test('prioritizes OpenCode permission requests in the inbox reason', () => {

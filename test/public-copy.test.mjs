@@ -70,7 +70,8 @@ test('uses Chinese copy for visible system fields', async () => {
     '待处理',
     '新进展',
     '标记已处理',
-    '标记已读',
+    '标记已查看',
+    '待查看',
     '稍后提醒',
   ]) {
     assert.match(publicCopy, new RegExp(expected));
@@ -107,8 +108,9 @@ test('separates soft progress notifications from hard pending work copy', async 
   assert.match(app, /source === 'observed-completion'/);
   assert.match(app, new RegExp('待处理 / 新进展'));
   assert.match(app, /项需处理 · \$\{progressCount\} 项新进展/);
-  assert.match(app, /打开并标记已读/);
-  assert.match(app, /标记已读/);
+  assert.match(app, /打开并标记已查看/);
+  assert.match(app, /标记已查看/);
+  assert.match(app, /SOFT_PROGRESS_STATUS_LABELS/);
 });
 
 test('distinguishes sub-agent rows from host agent rows in the thread list', async () => {

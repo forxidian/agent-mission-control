@@ -17,18 +17,20 @@
           <div id="topbar-metrics" class="topbar-metrics" aria-label="关键指标"></div>
           <p id="last-updated" class="timestamp" aria-live="polite">等待数据</p>
           <p id="monitor-status" class="timestamp" aria-live="polite">监控未启动</p>
-          <button id="refresh-button" class="icon-button" type="button" aria-label="刷新看板" title="刷新看板">
-            <svg aria-hidden="true" viewBox="0 0 24 24">
-              <path d="M20 6v5h-5"></path>
-              <path d="M4 18v-5h5"></path>
-              <path d="M18.5 9A7 7 0 0 0 6.8 6.4L4 9"></path>
-              <path d="M5.5 15A7 7 0 0 0 17.2 17.6L20 15"></path>
-            </svg>
-          </button>
-          <label class="toggle">
-            <input id="auto-refresh" type="checkbox" checked>
-            <span>自动刷新</span>
-          </label>
+          <div class="refresh-controls" aria-label="刷新控制">
+            <button id="refresh-button" class="icon-button" type="button" aria-label="刷新看板" title="刷新看板">
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M20 6v5h-5"></path>
+                <path d="M4 18v-5h5"></path>
+                <path d="M18.5 9A7 7 0 0 0 6.8 6.4L4 9"></path>
+                <path d="M5.5 15A7 7 0 0 0 17.2 17.6L20 15"></path>
+              </svg>
+            </button>
+            <label class="toggle">
+              <input id="auto-refresh" type="checkbox" checked>
+              <span>自动刷新</span>
+            </label>
+          </div>
         </div>
       </header>
 

@@ -62,17 +62,17 @@ button {
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: clamp(18px, 3vw, 48px);
   min-height: 84px;
   padding: 16px 20px;
   border-radius: 8px;
 }
 
 .topbar > div:first-child {
-  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .eyebrow {
@@ -111,36 +111,68 @@ h3 {
 }
 
 .topbar-actions {
-  display: flex;
+  --last-updated-width: 132px;
+  --monitor-status-width: 304px;
+  display: grid;
+  grid-template-columns:
+    max-content
+    minmax(18px, 1fr)
+    var(--last-updated-width)
+    var(--monitor-status-width)
+    max-content;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: stretch;
   gap: 10px;
-  flex: 0 1 auto;
-  flex-wrap: nowrap;
   min-width: 0;
+  width: 100%;
 }
 
 .topbar-actions .timestamp {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#last-updated,
+#monitor-status {
+  text-align: right;
+}
+
+#last-updated {
+  grid-column: 3;
+}
+
+#monitor-status {
+  grid-column: 4;
 }
 
 .topbar-metrics {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  grid-column: 1;
+  min-width: 206px;
+  justify-self: start;
 }
 
 .topbar-metric {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  height: 38px;
   min-height: 38px;
+  min-width: 78px;
   padding: 3px 9px;
   border: 1px solid rgba(157, 151, 138, 0.62);
   border-radius: 6px;
   background: rgba(255, 253, 247, 0.72);
   font-family: Menlo, Monaco, Consolas, monospace;
+}
+
+.topbar-metric:first-child {
+  min-width: 122px;
 }
 
 .topbar-metric span {
@@ -257,6 +289,40 @@ h3 {
   background: var(--steel);
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.refresh-controls {
+  display: inline-flex;
+  align-items: stretch;
+  grid-column: 5;
+  justify-self: end;
+  height: 38px;
+  overflow: hidden;
+  border: 1px solid rgba(157, 151, 138, 0.72);
+  border-radius: 6px;
+  background: rgba(255, 253, 247, 0.72);
+}
+
+.refresh-controls .icon-button {
+  width: 40px;
+  height: 36px;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink);
+  background: transparent;
+}
+
+.refresh-controls .icon-button:hover {
+  background: #f1e7d0;
+}
+
+.refresh-controls .icon-button:disabled {
+  background: transparent;
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;
@@ -270,6 +336,46 @@ h3 {
   width: 18px;
   height: 18px;
   accent-color: var(--ink);
+}
+
+.refresh-controls .toggle {
+  min-height: 36px;
+  padding: 0 12px 0 10px;
+  border-left: 1px solid rgba(157, 151, 138, 0.72);
+  color: var(--ink);
+  background: transparent;
+  white-space: nowrap;
+}
+
+.refresh-controls .toggle input {
+  display: grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1.5px solid var(--ink);
+  border-radius: 3px;
+  background: transparent;
+}
+
+.refresh-controls .toggle input:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.refresh-controls .toggle input:checked {
+  background: var(--ink);
+}
+
+.refresh-controls .toggle input:checked::before {
+  width: 8px;
+  height: 5px;
+  border-bottom: 2px solid var(--paper);
+  border-left: 2px solid var(--paper);
+  content: "";
+  transform: rotate(-45deg) translate(1px, -1px);
 }
 
 .status-banner {
@@ -1233,12 +1339,12 @@ h3 {
 @media (max-width: 1180px) {
   .topbar {
     align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .topbar-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
+    --last-updated-width: 132px;
+    --monitor-status-width: 304px;
   }
 }
 
@@ -1312,7 +1418,30 @@ h3 {
 
   .topbar {
     align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .topbar-actions {
+    grid-template-columns: 1fr;
+    justify-items: flex-start;
+  }
+
+  .topbar-metrics {
+    flex-wrap: wrap;
+    grid-column: auto;
+    min-width: 0;
+  }
+
+  #last-updated,
+  #monitor-status {
+    grid-column: auto;
+    width: auto;
+    text-align: left;
+  }
+
+  .refresh-controls {
+    grid-column: auto;
+    justify-self: start;
   }
 
   .priority-inbox-panel .panel-heading {

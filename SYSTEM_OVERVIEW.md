@@ -123,7 +123,7 @@ Claude：
 
 线程状态：
 
-- `running`：最近 user message 晚于 latest final answer，说明当前轮还没最终完成。
+- `running`：最近 user message 晚于 latest final answer，且当前轮仍有 6 小时内活动；避免缺失 final answer 的旧会话永久算作工作中。
 - `fresh`：非运行中，但更新时间在 15 分钟内。
 - `warm`：非运行中，更新时间在 6 小时内。
 - `idle`：更久未更新。

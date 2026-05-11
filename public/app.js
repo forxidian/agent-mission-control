@@ -82,6 +82,12 @@ const NOTIFICATION_STATUS_LABELS = {
   snoozed: '稍后提醒',
 };
 
+const SOFT_PROGRESS_STATUS_LABELS = {
+  unread: '待查看',
+  read: '已查看',
+  snoozed: '稍后提醒',
+};
+
 const CLOSED_TODO_STATUSES = new Set(['completed', 'done', 'cancelled', 'canceled']);
 
 function escapeHtml(value = '') {
@@ -173,6 +179,13 @@ function notificationLabel(notification) {
 
 function isSoftProgressNotification(notification) {
   return notification?.source === 'observed-completion';
+}
+
+function notificationStatusLabel(notification) {
+  const labels = isSoftProgressNotification(notification)
+    ? SOFT_PROGRESS_STATUS_LABELS
+    : NOTIFICATION_STATUS_LABELS;
+  return labels[notification?.status] || notification?.status || '未知状态';
 }
 
 function notificationBreakdown(notifications) {
@@ -707,13 +720,17 @@ function renderNotifications(notifications) {
   elements.inbox.innerHTML = visibleItems.map((notification) => {
     const isSoftProgress = isSoftProgressNotification(notification);
     return `
-    <article class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}" data-notification-kind="${isSoftProgress ? 'progress' : 'action'}">
+    <article
+      class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}"
+      data-notification-id="${escapeHtml(notification.id)}"
+      data-notification-kind="${isSoftProgress ? 'progress' : 'action'}"
+    >
       <button class="notification-main" type="button" data-thread-id="${escapeHtml(notification.threadId)}">
         <span class="reason">${escapeHtml(notificationLabel(notification))}</span>
         <span class="inbox-title">${escapeHtml(notification.threadTitle || notification.title)}</span>
         <span class="inbox-meta">
           <span>${escapeHtml(notification.projectName || '未知项目')}</span>
-          <span>${escapeHtml(NOTIFICATION_STATUS_LABELS[notification.status] || notification.status)}</span>
+          <span>${escapeHtml(notificationStatusLabel(notification))}</span>
           <span>${escapeHtml(relativeTime(notification.signalAtMs))}</span>
         </span>
       </button>
@@ -723,8 +740,8 @@ function renderNotifications(notifications) {
           type="button"
           data-open-thread-id="${escapeHtml(notification.threadId)}"
           data-open-notification-id="${escapeHtml(notification.id)}"
-        >${isSoftProgress ? '打开并标记已读' : '打开并标记已处理'}</button>
-        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">${isSoftProgress ? '标记已读' : '标记已处理'}</button>
+        >${isSoftProgress ? '打开并标记已查看' : '打开并标记已处理'}</button>
+        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">${isSoftProgress ? '标记已查看' : '标记已处理'}</button>
         <button class="action-button secondary" type="button" data-notification-snooze-id="${escapeHtml(notification.id)}">稍后提醒</button>
       </div>
     </article>
@@ -1493,6 +1510,22 @@ document.addEventListener('click', (event) => {
   if (snoozeTarget) {
     event.preventDefault();
     snoozeNotification(snoozeTarget.dataset.notificationSnoozeId);
+    return;
+  }
+
+  const notificationMain = clicked.closest('.notification-main[data-thread-id]');
+  if (notificationMain) {
+    event.preventDefault();
+    selectThread(notificationMain.dataset.threadId);
+
+    const notificationItem = notificationMain.closest('[data-notification-id]');
+    if (notificationItem?.dataset.notificationKind === 'progress') {
+      const notificationId = notificationItem.dataset.notificationId;
+      markNotificationDoneLocally(notificationId);
+      void updateNotification(notificationId, { status: 'done' }).catch((error) => {
+        showError(`无法持久化已查看状态：${error.message}`);
+      });
+    }
     return;
   }
 
