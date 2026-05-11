@@ -2,6 +2,32 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [Unreleased]
+
+### English
+
+#### Added
+
+- Added running Host task group counts to the dashboard summary, top bar, and privacy-limited pending summary API.
+- Added a lightweight top-bar metric cluster for running Host tasks and hard pending work.
+
+#### Changed
+
+- Refined the macOS menu bar helper so clicking the badge focuses an existing Chrome or Safari dashboard tab before opening a new dashboard URL.
+- Updated the work-in-progress summary copy to distinguish running Agent threads from running Host task groups.
+
+### 中文
+
+#### 新增
+
+- 在看板摘要、顶部栏和隐私受限的 pending summary API 中加入工作中的 Host 任务组数量。
+- 新增顶部关键指标区，用于快速查看工作中的 Host 任务和硬待处理数量。
+
+#### 调整
+
+- 优化 macOS 菜单栏辅助工具：点击徽章会优先切回已有的 Chrome 或 Safari 控制台标签页，再按需打开新页面。
+- 调整工作中摘要文案，区分运行中的 Agent 线程和运行中的 Host 任务组。
+
 ## [0.2.2] - 2026-05-11
 
 ### English
