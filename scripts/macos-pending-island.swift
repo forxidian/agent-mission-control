@@ -105,7 +105,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     item.button?.toolTip = "Agent Mission Control 待处理"
     item.button?.target = self
     item.button?.action = #selector(openDashboard(_:))
-    item.button?.sendAction(on: [.leftMouseUp])
+    item.button?.sendAction(on: [.leftMouseDown])
     item.button?.addTrackingArea(NSTrackingArea(
       rect: .zero,
       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -170,11 +170,38 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
 
   @objc private func openDashboard(_ sender: Any?) {
     popover.close()
+    if openInstalledDashboardApp() {
+      return
+    }
+
     if focusExistingDashboardTab() {
       return
     }
 
     NSWorkspace.shared.open(baseURL)
+  }
+
+  private func openInstalledDashboardApp() -> Bool {
+    guard let endpoint = URL(string: "\(baseURLText)/api/app/open-installed") else {
+      return false
+    }
+
+    var request = URLRequest(url: endpoint, timeoutInterval: 1.2)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "accept")
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var succeeded = false
+
+    URLSession.shared.dataTask(with: request) { _, response, _ in
+      if let httpResponse = response as? HTTPURLResponse {
+        succeeded = (200..<300).contains(httpResponse.statusCode)
+      }
+      semaphore.signal()
+    }.resume()
+
+    _ = semaphore.wait(timeout: .now() + 1.3)
+    return succeeded
   }
 
   private func focusExistingDashboardTab() -> Bool {

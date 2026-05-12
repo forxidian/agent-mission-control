@@ -19,6 +19,10 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /mouseEntered\(with event: NSEvent\)/);
   assert.match(script, /popover\.show\(relativeTo:/);
   assert.match(script, /item\.button\?\.action = #selector\(openDashboard\(_:\)\)/);
+  assert.match(script, /item\.button\?\.sendAction\(on: \[\.leftMouseDown\]\)/);
+  assert.match(script, /openInstalledDashboardApp\(\)/);
+  assert.match(script, /api\/app\/open-installed/);
+  assert.match(script, /request\.httpMethod = "POST"/);
   assert.match(script, /focusExistingDashboardTab\(\)/);
   assert.match(script, /Google Chrome/);
   assert.match(script, /Safari/);

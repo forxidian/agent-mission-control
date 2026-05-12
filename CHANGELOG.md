@@ -10,18 +10,29 @@ All notable changes to Agent Mission Control are documented here.
 
 - Added running Host task group counts to the dashboard summary, top bar, and privacy-limited pending summary API.
 - Added a lightweight top-bar metric cluster for running Host tasks and hard pending work.
+- Added an installable Chrome / Edge PWA shell with manifest, icons, a service worker that avoids `/api/*` payloads, and local controls to open or minimize the installed dashboard app on macOS.
+- Added grouped quota cards by LLM family, so GPT and Claude quota signals can be shown side by side without adding more summary cards.
+- Added Claude Desktop / Cowork quota extraction from the local Claude usage cache, mapped to the same realtime and weekly quota summary shape.
+- Added `claude://resume` deep links for Claude Desktop Code sessions when a valid CLI session id is available.
 
 #### Changed
 
 - Refined the macOS menu bar helper so clicking the badge focuses an existing Chrome or Safari dashboard tab before opening a new dashboard URL.
 - Refined the macOS menu bar helper badge colors and count alignment to better match the dashboard's quieter release UI.
+- Refined the macOS menu bar helper so it first asks the local server to reopen the installed PWA app before falling back to browser tabs.
 - Reworked the top-bar refresh controls and metric layout so status text and controls keep stable spacing across desktop and mobile widths.
+- Made the top-bar Host-running and pending metrics clickable shortcuts to the running-thread view and notification center.
 - Renamed soft progress notification states and actions from "read" language to "viewed" language, separating new-progress review from hard pending work.
+- Updated notification done and snooze actions to update the visible inbox optimistically before waiting for persistence.
+- Deduplicated Claude Desktop Code metadata that points to the same CLI session, keeping the freshest local session record.
+- Tightened responsive thread-row actions by keeping copy/resume-command actions in the detail panel.
 - Updated the work-in-progress summary copy to distinguish running Agent threads from running Host task groups.
 
 #### Fixed
 
 - Prevented stale unfinished turns with no recent activity from staying in the running state indefinitely.
+- Avoided treating ordinary unresolved Claude tool calls as user-facing pending work, while still preserving explicit permission/user-request signals.
+- Treated incomplete Claude Cowork metadata as a running signal only while the activity remains fresh.
 - Marked soft progress notifications as viewed when their inbox item is opened from the notification center.
 
 ### 中文
@@ -30,18 +41,29 @@ All notable changes to Agent Mission Control are documented here.
 
 - 在看板摘要、顶部栏和隐私受限的 pending summary API 中加入工作中的 Host 任务组数量。
 - 新增顶部关键指标区，用于快速查看工作中的 Host 任务和硬待处理数量。
+- 新增可安装的 Chrome / Edge PWA 壳子，包含 manifest、图标、不缓存 `/api/*` 的 service worker，以及 macOS 上打开或收起已安装控制台应用的本地接口。
+- 新增按 LLM 家族分组的 quota 卡片，可在同一组摘要卡里并列展示 GPT、Claude 等 quota 信号。
+- 新增从本地 Claude usage cache 读取 Claude Desktop / Cowork 聚合 quota 的能力，并映射到统一的实时 / 本周 quota 结构。
+- 新增 Claude Desktop Code 的 `claude://resume` deep link 支持，可在存在有效 CLI session id 时直接恢复桌面会话。
 
 #### 调整
 
 - 优化 macOS 菜单栏辅助工具：点击徽章会优先切回已有的 Chrome 或 Safari 控制台标签页，再按需打开新页面。
 - 优化 macOS 菜单栏辅助工具徽章的配色和数字对齐，使其更贴近发布版控制台的克制视觉。
+- 优化 macOS 菜单栏辅助工具：会先请求本地服务打开已安装的 PWA 应用，再回退到浏览器标签页。
 - 重做顶部刷新控制和关键指标布局，让状态文字与控件在桌面端和移动端都保持稳定间距。
+- 顶部 Host 工作中和待处理指标现在可点击，分别跳到运行中线程视图和通知中心。
 - 将软性“新进展”的状态和操作文案从“已读”调整为“已查看”，和硬性的待处理事项进一步区分。
+- 通知的已处理和稍后提醒操作改为先乐观更新当前收件箱，再等待持久化结果。
+- 对指向同一 CLI session 的 Claude Desktop Code 元数据做去重，保留最新的本地会话记录。
+- 收紧响应式线程列表操作区，把复制 / resume 命令入口保留在详情面板里。
 - 调整工作中摘要文案，区分运行中的 Agent 线程和运行中的 Host 任务组。
 
 #### 修复
 
 - 避免很久没有新活动、但缺失 final answer 的旧轮次长期停留在“运行中”状态。
+- 避免把普通未完成 Claude tool call 误判为需要用户处理，同时保留明确的授权 / 用户请求信号。
+- Claude Cowork 未完成元数据只会在活动仍然新鲜时作为运行中信号。
 - 从通知中心打开软性“新进展”条目时，会同步标记为已查看。
 
 ## [0.2.2] - 2026-05-11

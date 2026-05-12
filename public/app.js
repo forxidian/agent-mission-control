@@ -4,6 +4,8 @@ const state = {
   selectedThreadId: null,
   autoTimer: null,
   heartbeatTimer: null,
+  installPromptEvent: null,
+  isInstalledApp: false,
   isLoading: false,
   nextRefreshAtMs: null,
   lastRefreshAtMs: null,
@@ -15,6 +17,8 @@ const state = {
 const elements = {
   autoRefresh: document.querySelector('#auto-refresh'),
   archiveToggle: document.querySelector('#archive-toggle'),
+  appInstallButton: document.querySelector('#app-install-button'),
+  appMinimizeButton: document.querySelector('#app-minimize-button'),
   detail: document.querySelector('#detail'),
   inbox: document.querySelector('#inbox'),
   inboxHeading: document.querySelector('#inbox-heading'),
@@ -39,6 +43,8 @@ const REFRESH_INTERVAL_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
 const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
+const PWA_INSTALLED_STORAGE_KEY = 'codex-mission-control:pwa-installed';
+const PWA_OPEN_PROTOCOL_URL = 'web+agentmissioncontrol:open';
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric',
   day: 'numeric',
@@ -88,6 +94,7 @@ const SOFT_PROGRESS_STATUS_LABELS = {
   snoozed: '稍后提醒',
 };
 
+const ACTIVE_NOTIFICATION_STATUSES = new Set(['unread', 'read']);
 const CLOSED_TODO_STATUSES = new Set(['completed', 'done', 'cancelled', 'canceled']);
 
 function escapeHtml(value = '') {
@@ -127,6 +134,12 @@ function formatOptionalPercent(value) {
 }
 
 function formatResetTime(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return '暂无刷新时间';
+  return `刷新 ${timeFormat.format(new Date(value))}`;
+}
+
+function formatCompactResetTime(timestamp) {
   const value = Number(timestamp || 0);
   if (!value) return '暂无刷新时间';
   return `刷新 ${timeFormat.format(new Date(value))}`;
@@ -198,6 +211,32 @@ function notificationBreakdown(notifications) {
   };
 }
 
+function fallbackNotificationsFromDashboard(dashboard) {
+  const items = Array.isArray(dashboard?.inbox) ? dashboard.inbox : [];
+  const activeCount = dashboard?.summary?.inboxCount ?? items.length;
+  return {
+    summary: {
+      activeCount,
+      unreadCount: items.filter((item) => item.status === 'unread').length,
+      snoozedCount: 0,
+      doneCount: 0,
+    },
+    settings: {},
+    items,
+  };
+}
+
+function setNotifications(notifications) {
+  state.notifications = notifications;
+  if (state.dashboard) {
+    state.dashboard.notifications = notifications;
+    state.dashboard.summary = {
+      ...(state.dashboard.summary || {}),
+      inboxCount: notifications?.summary?.activeCount ?? notifications?.items?.length ?? 0,
+    };
+  }
+}
+
 function countRunningHostThreads(dashboard = state.dashboard) {
   const summaryCount = Number(dashboard?.summary?.runningHostThreads);
   if (Number.isFinite(summaryCount)) return Math.max(0, summaryCount);
@@ -227,12 +266,84 @@ function secondsUntil(timestamp) {
   return Math.max(0, Math.ceil((Number(timestamp) - Date.now()) / 1000));
 }
 
-function summaryCard({ label, value, note = '', tone = '' }) {
-  return `
-    <article class="summary-card ${tone ? `summary-${escapeHtml(tone)}` : ''}">
-      <span>${escapeHtml(label)}</span>
+function quotaGroupLabel(group = {}) {
+  return group.label || group.model || group.providerLabel || 'LLM';
+}
+
+function quotaRows(groups, windowKey) {
+  return groups.map((group) => {
+    const window = group?.[windowKey];
+    const hasWindow = Boolean(window);
+    return {
+      label: quotaGroupLabel(group),
+      value: hasWindow ? formatOptionalPercent(window?.availablePercent) : '-',
+      note: hasWindow ? formatCompactResetTime(window?.resetsAtMs) : '暂无 quota 信号',
+    };
+  });
+}
+
+function quotaSummaryCards(quota) {
+  const groups = Array.isArray(quota?.groups) ? quota.groups : [];
+
+  if (groups.length > 1) {
+    return [
+      {
+        label: '实时可用 quota',
+        rows: quotaRows(groups, 'realtime'),
+        tone: 'quota',
+      },
+      {
+        label: '本周可用 quota',
+        rows: quotaRows(groups, 'weekly'),
+        tone: 'quota',
+      },
+    ];
+  }
+
+  return [
+    {
+      label: '实时可用 quota',
+      value: formatOptionalPercent(quota?.realtime?.availablePercent),
+      note: formatResetTime(quota?.realtime?.resetsAtMs),
+      tone: 'quota',
+    },
+    {
+      label: '本周可用 quota',
+      value: formatOptionalPercent(quota?.weekly?.availablePercent),
+      note: formatResetTime(quota?.weekly?.resetsAtMs),
+      tone: 'quota',
+    },
+  ];
+}
+
+function summaryCard({ label, value, note = '', tone = '', rows = [] }) {
+  const hasRows = Array.isArray(rows) && rows.length > 0;
+  const classes = [
+    'summary-card',
+    tone ? `summary-${escapeHtml(tone)}` : '',
+    hasRows ? 'summary-card-with-lines' : '',
+  ].filter(Boolean).join(' ');
+  const body = hasRows
+    ? `
+      <div class="summary-card-lines">
+        ${rows.map((row) => `
+          <div class="summary-card-line">
+            <span class="summary-card-line-label">${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            ${row.note ? `<small>${escapeHtml(row.note)}</small>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `
+    : `
       <strong>${escapeHtml(value)}</strong>
       ${note ? `<small>${escapeHtml(note)}</small>` : ''}
+    `;
+
+  return `
+    <article class="${classes}">
+      <span>${escapeHtml(label)}</span>
+      ${body}
     </article>
   `;
 }
@@ -250,17 +361,29 @@ function renderTopbarMetrics(summary = {}) {
   const hostTitle = `${runningHostThreads || 0} 个 Host 线程工作中`;
 
   elements.topbarMetrics.innerHTML = `
-    <span class="topbar-metric${runningHostThreads > 0 ? ' is-running' : ''}" title="${escapeHtml(hostTitle)}">
+    <button
+      class="topbar-metric topbar-metric-button${runningHostThreads > 0 ? ' is-running' : ''}"
+      type="button"
+      title="${escapeHtml(hostTitle)}"
+      aria-label="${escapeHtml(hostTitle)}"
+      data-topbar-action="running"
+    >
       <span>Host 工作中</span>
       <span class="topbar-metric-value">
         <strong>${escapeHtml(runningHostThreads)}</strong>
         ${runningHostThreads > 0 ? '<span class="work-activity" aria-hidden="true"><i></i><i></i><i></i></span>' : ''}
       </span>
-    </span>
-    <span class="topbar-metric${pendingCount > 0 ? ' is-attention' : ''}" title="${escapeHtml(pendingTitle)}">
+    </button>
+    <button
+      class="topbar-metric topbar-metric-button${pendingCount > 0 ? ' is-attention' : ''}"
+      type="button"
+      title="${escapeHtml(pendingTitle)}"
+      aria-label="${escapeHtml(pendingTitle)}"
+      data-topbar-action="pending"
+    >
       <span>待处理</span>
       <strong>${escapeHtml(pendingCount)}</strong>
-    </span>
+    </button>
   `;
 }
 
@@ -441,23 +564,47 @@ function disableButtonBriefly(button, durationMs = 1200) {
   }, durationMs);
 }
 
-function markNotificationDoneLocally(notificationId) {
-  if (!notificationId || !state.notifications?.items?.length) return;
+function updateNotificationLocally(notificationId, patch = {}) {
+  const notifications = state.notifications || fallbackNotificationsFromDashboard(state.dashboard);
+  if (!notificationId || !notifications?.items?.length) return null;
 
-  const notification = findNotification(notificationId);
-  if (!notification) return;
+  const notification = notifications.items.find((item) => item.id === notificationId);
+  if (!notification) return null;
 
-  const summary = state.notifications.summary || {};
-  state.notifications.items = state.notifications.items.filter((item) => item.id !== notificationId);
-  state.notifications.summary = {
+  const currentStatus = notification.status || 'unread';
+  const nextStatus = patch.status || currentStatus;
+  const remainsActive = ACTIVE_NOTIFICATION_STATUSES.has(nextStatus);
+  const items = remainsActive
+    ? notifications.items.map((item) => (
+      item.id === notificationId ? { ...item, ...patch, status: nextStatus } : item
+    ))
+    : notifications.items.filter((item) => item.id !== notificationId);
+
+  const summary = notifications.summary || {};
+  const nextUnreadCount = items.filter((item) => item.status === 'unread').length;
+  const nextSummary = {
     ...summary,
-    activeCount: Math.max(0, Number(summary.activeCount || 0) - 1),
-    unreadCount: notification.status === 'unread'
-      ? Math.max(0, Number(summary.unreadCount || 0) - 1)
-      : Number(summary.unreadCount || 0),
-    doneCount: Number(summary.doneCount || 0) + 1,
+    activeCount: items.length,
+    unreadCount: nextUnreadCount,
   };
+  if (nextStatus === 'done' && currentStatus !== 'done') {
+    nextSummary.doneCount = Number(summary.doneCount || 0) + 1;
+  }
+  if (nextStatus === 'snoozed' && currentStatus !== 'snoozed') {
+    nextSummary.snoozedCount = Number(summary.snoozedCount || 0) + 1;
+  }
+
+  setNotifications({
+    ...notifications,
+    items,
+    summary: nextSummary,
+  });
   renderDashboard();
+  return { ...notification, ...patch, status: nextStatus };
+}
+
+function markNotificationDoneLocally(notificationId) {
+  return updateNotificationLocally(notificationId, { status: 'done' });
 }
 
 async function copyText(value) {
@@ -490,24 +637,11 @@ function statusMarkup(status) {
 function renderSummary(summary) {
   const notifications = state.notifications || state.dashboard?.notifications;
   const notificationCounts = notificationBreakdown(notifications);
-  const realtimeQuota = summary.quota?.realtime;
-  const weeklyQuota = summary.quota?.weekly;
   const pendingCount = notificationCounts.hardCount;
   const progressCount = notificationCounts.softCount;
   const providers = state.dashboard?.providers || summary.providers || [];
   const currentItems = [
-    {
-      label: '实时可用 quota',
-      value: formatOptionalPercent(realtimeQuota?.availablePercent),
-      note: formatResetTime(realtimeQuota?.resetsAtMs),
-      tone: 'quota',
-    },
-    {
-      label: '本周可用 quota',
-      value: formatOptionalPercent(weeklyQuota?.availablePercent),
-      note: formatResetTime(weeklyQuota?.resetsAtMs),
-      tone: 'quota',
-    },
+    ...quotaSummaryCards(summary.quota),
     {
       label: '待处理',
       value: pendingCount,
@@ -675,7 +809,6 @@ function renderThreads() {
         </button>
         <div class="row-actions" aria-label="线程操作">
           <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
-          <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
         </div>
       </article>
     `;
@@ -1225,6 +1358,168 @@ function renderMonitorStatus() {
   elements.monitorStatus.textContent = `监控中 · 心跳 ${relativeTime(state.lastRefreshAtMs)} · ${secondsUntil(state.nextRefreshAtMs)} 秒后刷新`;
 }
 
+function isStandaloneApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function updateInstallButton() {
+  if (!elements.appInstallButton) return;
+
+  if (isStandaloneApp()) {
+    elements.appInstallButton.hidden = true;
+    return;
+  }
+
+  if (state.isInstalledApp) {
+    elements.appInstallButton.hidden = false;
+    elements.appInstallButton.title = '打开桌面应用';
+    elements.appInstallButton.querySelector('span').textContent = '打开应用';
+    return;
+  }
+
+  elements.appInstallButton.hidden = !state.installPromptEvent;
+  elements.appInstallButton.title = '安装为应用';
+  elements.appInstallButton.querySelector('span').textContent = '安装应用';
+}
+
+function updateWindowButtons() {
+  if (!elements.appMinimizeButton) return;
+  elements.appMinimizeButton.hidden = !isStandaloneApp();
+}
+
+async function minimizeInstalledApp() {
+  try {
+    const response = await fetch('/api/app/minimize-installed', { method: 'POST' });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+  } catch (error) {
+    showError(`无法收起桌面应用：${error.message}`);
+  }
+}
+
+function openInstalledApp() {
+  showNotice('正在打开桌面应用。');
+  return fetch('/api/app/open-installed', { method: 'POST' })
+    .then(async (response) => {
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+      state.isInstalledApp = true;
+      localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, '1');
+      updateInstallButton();
+      showNotice('已切换到桌面应用。');
+      return body;
+    })
+    .catch((error) => {
+      localStorage.removeItem(PWA_INSTALLED_STORAGE_KEY);
+      state.isInstalledApp = false;
+      updateInstallButton();
+
+      if (error.message.includes('not found') || error.message.includes('not-found')) {
+        showError('找不到已安装的桌面应用，请重新安装一次。');
+        return null;
+      }
+
+      showNotice('本地打开失败，改用浏览器协议尝试唤起桌面应用。');
+      window.location.href = PWA_OPEN_PROTOCOL_URL;
+      return null;
+    });
+}
+
+async function installOrOpenApp() {
+  if (state.isInstalledApp) {
+    await openInstalledApp();
+    return;
+  }
+
+  const promptEvent = state.installPromptEvent;
+  if (!promptEvent) {
+    updateInstallButton();
+    return;
+  }
+
+  state.installPromptEvent = null;
+  updateInstallButton();
+
+  try {
+    await promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    if (choice?.outcome === 'accepted') {
+      localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, '1');
+      showNotice('正在安装应用。');
+    } else {
+      showNotice('已取消安装。');
+    }
+  } catch (error) {
+    showError(`无法打开安装提示：${error.message}`);
+  }
+}
+
+async function detectInstalledApp() {
+  state.isInstalledApp = localStorage.getItem(PWA_INSTALLED_STORAGE_KEY) === '1';
+
+  try {
+    const response = await fetch('/api/app/installed', { cache: 'no-store' });
+    if (response.ok) {
+      const body = await response.json();
+      state.isInstalledApp = Boolean(body.installed);
+      if (state.isInstalledApp) {
+        localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, '1');
+      } else {
+        localStorage.removeItem(PWA_INSTALLED_STORAGE_KEY);
+      }
+      updateInstallButton();
+      return;
+    }
+  } catch (error) {
+    console.warn('Local installed app detection failed:', error);
+  }
+
+  try {
+    const relatedApps = await navigator.getInstalledRelatedApps?.();
+    if (Array.isArray(relatedApps) && relatedApps.some((app) => app.platform === 'webapp')) {
+      state.isInstalledApp = true;
+      localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, '1');
+    }
+  } catch (error) {
+    console.warn('Installed app detection failed:', error);
+  }
+
+  updateInstallButton();
+}
+
+function handleLaunchTarget(targetURL = window.location.href) {
+  let url = null;
+  try {
+    url = new URL(targetURL);
+  } catch {
+    return;
+  }
+
+  const launchValue = url.searchParams.get('launch') || '';
+  if (!launchValue.startsWith('web+agentmissioncontrol:')) return;
+
+  showNotice('已回到桌面应用窗口。');
+  url.searchParams.delete('launch');
+  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function initializeLaunchHandling() {
+  handleLaunchTarget();
+  window.launchQueue?.setConsumer?.((launchParams) => {
+    if (launchParams?.targetURL) handleLaunchTarget(launchParams.targetURL);
+  });
+}
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  try {
+    await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+  } catch (error) {
+    console.warn('Service worker registration failed:', error);
+  }
+}
+
 function showStatus(message, tone) {
   if (state.noticeTimer) {
     clearTimeout(state.noticeTimer);
@@ -1269,8 +1564,7 @@ async function loadDashboard({ silent = false } = {}) {
     const response = await fetch('/api/dashboard', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.dashboard = await response.json();
-    state.notifications = state.dashboard.notifications || state.notifications;
-    await loadNotifications();
+    setNotifications(state.dashboard.notifications || fallbackNotificationsFromDashboard(state.dashboard));
     state.lastRefreshAtMs = Date.now();
     state.refreshError = '';
     if (!silent || elements.statusBanner.dataset.tone === 'error') clearError();
@@ -1288,13 +1582,41 @@ async function loadDashboard({ silent = false } = {}) {
 async function loadNotifications() {
   const response = await fetch('/api/notifications', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  state.notifications = await response.json();
+  setNotifications(await response.json());
 }
 
 function selectThread(threadId) {
   state.selectedThreadId = threadId;
   renderThreads();
   document.querySelector('#detail')?.scrollIntoView({ block: 'nearest' });
+}
+
+function scrollPanelIntoView(element) {
+  element?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+}
+
+function focusTopbarAction(action) {
+  if (action === 'pending') {
+    state.inboxExpanded = true;
+    renderNotifications(state.notifications || state.dashboard?.notifications);
+    scrollPanelIntoView(elements.inbox?.closest('.priority-inbox-panel'));
+
+    const counts = notificationBreakdown(state.notifications || state.dashboard?.notifications);
+    if (!counts.totalCount) showNotice('当前暂无待处理或新进展。');
+    return;
+  }
+
+  if (action === 'running') {
+    if (elements.searchInput) elements.searchInput.value = '';
+    if (elements.providerFilter) elements.providerFilter.value = 'all';
+    if (elements.projectFilter) elements.projectFilter.value = 'all';
+    if (elements.statusFilter) elements.statusFilter.value = 'running';
+    if (elements.archiveToggle) elements.archiveToggle.checked = false;
+    renderThreads();
+    scrollPanelIntoView(elements.threads?.closest('.thread-panel'));
+
+    if (!countRunningHostThreads()) showNotice('当前没有工作中的 Host Agent。');
+  }
 }
 
 async function copyResumeCommand(threadId) {
@@ -1393,26 +1715,38 @@ async function updateNotification(notificationId, patch) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-  await loadNotifications();
-  renderDashboard();
   return body;
 }
 
 async function markNotificationDone(notificationId) {
+  const notification = findNotification(notificationId);
+  const isSoftProgress = isSoftProgressNotification(notification);
+  const updated = markNotificationDoneLocally(notificationId);
+  if (!updated) {
+    showError('找不到这条待处理项，刷新看板后再试。');
+    return;
+  }
+
+  showNotice(isSoftProgress ? '已标记为已查看。' : '已标记为已处理。');
   try {
     await updateNotification(notificationId, { status: 'done' });
-    showNotice('已标记为已处理。');
   } catch (error) {
-    showError(`无法更新待处理状态：${error.message}`);
+    showError(`已从当前面板移除，但无法持久化状态：${error.message}`);
   }
 }
 
 async function snoozeNotification(notificationId) {
+  const updated = updateNotificationLocally(notificationId, { status: 'snoozed' });
+  if (!updated) {
+    showError('找不到这条待处理项，刷新看板后再试。');
+    return;
+  }
+
+  showNotice('已稍后提醒，30 分钟后再出现。');
   try {
     await updateNotification(notificationId, { status: 'snoozed', snoozeMinutes: 30 });
-    showNotice('已稍后提醒，30 分钟后再出现。');
   } catch (error) {
-    showError(`无法稍后提醒：${error.message}`);
+    showError(`已从当前面板移除，但无法持久化稍后提醒：${error.message}`);
   }
 }
 
@@ -1452,6 +1786,33 @@ function initializeMonitor() {
   syncMonitor();
 }
 
+function initializeInstallPrompt() {
+  updateInstallButton();
+  updateWindowButtons();
+  detectInstalledApp();
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    state.installPromptEvent = event;
+    updateInstallButton();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    state.installPromptEvent = null;
+    state.isInstalledApp = true;
+    localStorage.setItem(PWA_INSTALLED_STORAGE_KEY, '1');
+    updateInstallButton();
+    showNotice('应用已安装，可从独立窗口打开。');
+  });
+
+  window.matchMedia('(display-mode: standalone)').addEventListener?.('change', () => {
+    updateInstallButton();
+    updateWindowButtons();
+  });
+}
+
+elements.appMinimizeButton?.addEventListener('click', minimizeInstalledApp);
+elements.appInstallButton?.addEventListener('click', installOrOpenApp);
 elements.refreshButton.addEventListener('click', () => loadDashboard());
 elements.searchInput.addEventListener('input', renderThreads);
 elements.providerFilter.addEventListener('change', renderThreads);
@@ -1482,6 +1843,13 @@ document.addEventListener('click', (event) => {
     openThread(openTarget.dataset.openThreadId, openTarget, {
       notificationId: openTarget.dataset.openNotificationId || '',
     });
+    return;
+  }
+
+  const topbarTarget = clicked.closest('[data-topbar-action]');
+  if (topbarTarget) {
+    event.preventDefault();
+    focusTopbarAction(topbarTarget.dataset.topbarAction);
     return;
   }
 
@@ -1534,5 +1902,8 @@ document.addEventListener('click', (event) => {
   selectThread(target.dataset.threadId);
 });
 
+initializeInstallPrompt();
+initializeLaunchHandling();
+registerServiceWorker();
 initializeMonitor();
 loadDashboard();

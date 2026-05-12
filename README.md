@@ -4,17 +4,30 @@
 
 它默认只监听 `127.0.0.1`，只读取本机状态文件，不写入 Codex / OpenCode / Claude 的工作数据，也不发送遥测。
 
+## 功能截图
+
 ![Agent Mission Control mock screenshot](docs/assets/agent-mission-control-real-ui.png)
 
-截图使用虚构数据，只展示界面形态。
+截图由 `npm run screenshot:mock` 通过虚构数据生成，只展示界面形态，不包含本机线程、路径、消息、token 或 quota 细节。
+
+## 最近更新
+
+- 支持安装为 Chrome / Edge PWA 独立窗口，并能从浏览器页或 macOS 菜单栏辅助工具优先切回已安装应用。
+- quota 总览支持按 GPT、Claude 等模型家族分组，Claude Desktop / Cowork 可从本地 Claude usage cache 读取聚合限额信号。
+- Claude Desktop Code 支持 `claude://resume` deep link 恢复会话，Claude Cowork 未完成任务会作为运行中信号展示。
+- 顶部 Host 工作中 / 待处理指标现在可点击跳转到对应面板，通知操作采用乐观更新，窄屏线程操作更紧凑。
+
+完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 功能
 
 - 汇总 Codex 本地线程、标题、项目、归档状态、模型、token 和 quota 信息。
 - 汇总 OpenCode CLI / Desktop 会话，并识别待授权工具调用和 todo。
 - 汇总 Claude Code CLI、Claude Desktop Code、Claude Cowork 会话。
+- 按 GPT、Claude 等模型家族展示实时和本周 quota 可用量。
 - 支持按来源、状态、项目和关键词筛选。
-- 支持打开 Codex / OpenCode deep link，或在 macOS Terminal 恢复 CLI 会话。
+- 支持打开 Codex / OpenCode / Claude Desktop Code deep link，或在 macOS Terminal 恢复 CLI 会话。
+- 支持安装为本地 PWA 应用窗口；service worker 只缓存静态前端壳，不缓存 `/api/*` 本机 Agent 元数据。
 - 提供本地通知中心；系统桌面提醒当前隐藏，待后续接入可靠的原生通知实现。
 
 ## 要求
@@ -37,6 +50,14 @@ npm start
 ```text
 http://127.0.0.1:4629
 ```
+
+安装成网页应用：
+
+- 在 Chrome / Edge 打开本地地址后，点击顶部的“安装应用”按钮，或使用地址栏里的安装入口。
+- 安装后会像普通桌面应用一样以独立窗口打开；再次从浏览器页点击顶部按钮会优先通过本地服务打开 macOS 上的 Chrome/Edge PWA app shim。
+- 如果本地 app shim 不可用，会再尝试 `web+agentmissioncontrol:` 协议唤起；卸载可从浏览器应用菜单完成。
+- 独立 PWA 窗口内提供“收起”按钮，可把窗口最小化到 Dock；macOS 红色关闭按钮仍由 Chrome app shim 管理，网页不能把它改成最小化。
+- PWA 只缓存前端壳子和图标，不缓存 `/api/*` 返回的本机 Agent 元数据。
 
 可选环境变量：
 

@@ -88,6 +88,18 @@ export function createMockThreads(nowMs = Date.now()) {
       window_minutes: 10_080,
     },
   };
+  const claudeQuota = {
+    primary: {
+      used_percent: 18,
+      resets_at: Math.floor((nowMs + 90 * minute) / 1000),
+      window_minutes: 300,
+    },
+    secondary: {
+      used_percent: 34,
+      resets_at: Math.floor((nowMs + 36 * hour) / 1000),
+      window_minutes: 10_080,
+    },
+  };
 
   return [
     thread({
@@ -148,6 +160,7 @@ export function createMockThreads(nowMs = Date.now()) {
       tokensUsed: 61_300_000,
       todayTokenUsage: 7_100_000,
       hasUnreadTurn: true,
+      rateLimits: claudeQuota,
       resumeCommand: 'open -a Claude',
       openLabel: '打开 Claude',
       lastTokenUsage: { total_tokens: 2_200_000 },

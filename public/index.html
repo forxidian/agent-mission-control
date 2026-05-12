@@ -3,7 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#181713">
+    <meta name="application-name" content="Agent Mission Control">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Agent 控制台">
     <title>Agent 任务控制台</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon-192.png">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -17,6 +24,20 @@
           <div id="topbar-metrics" class="topbar-metrics" aria-label="关键指标"></div>
           <p id="last-updated" class="timestamp" aria-live="polite">等待数据</p>
           <p id="monitor-status" class="timestamp" aria-live="polite">监控未启动</p>
+          <button id="app-minimize-button" class="action-button secondary pwa-window-button pwa-minimize-button" type="button" hidden title="收起到 Dock">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M5 12h14"></path>
+            </svg>
+            <span>收起</span>
+          </button>
+          <button id="app-install-button" class="action-button secondary pwa-install-button" type="button" hidden title="安装为应用">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M12 3v12"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 19h14"></path>
+            </svg>
+            <span>安装应用</span>
+          </button>
           <div class="refresh-controls" aria-label="刷新控制">
             <button id="refresh-button" class="icon-button" type="button" aria-label="刷新看板" title="刷新看板">
               <svg aria-hidden="true" viewBox="0 0 24 24">

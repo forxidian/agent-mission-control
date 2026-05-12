@@ -9,6 +9,8 @@ What it reads:
   `~/Library/Application Support/ai.opencode.desktop`
 - Claude Code and Claude Desktop metadata under `~/.claude` and
   `~/Library/Application Support/Claude`
+- Claude Desktop's local Chromium cache entry for the Claude usage endpoint,
+  used only to read aggregate rate-limit percentages and reset times
 - Its own notification state under `~/.agent-mission-control`
 
 What it may display locally:
@@ -24,6 +26,7 @@ What it avoids:
 
 - Writing to Codex, OpenCode, or Claude state
 - Publishing data externally
+- Caching dashboard API payloads in the PWA service worker
 - Sending desktop/system notifications in the public release
 
 Keep `HOST` at the default `127.0.0.1` unless you fully understand the privacy

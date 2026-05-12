@@ -34,6 +34,114 @@ function quotaWindow(window) {
   };
 }
 
+const QUOTA_FAMILY_ORDER = ['gpt', 'claude', 'gemini', 'grok', 'deepseek', 'qwen', 'llama'];
+
+function compactModelLabel(value = '') {
+  return String(value).trim().replace(/\s+/g, ' ');
+}
+
+function quotaFamily(thread) {
+  const model = compactModelLabel(thread.model);
+  const providerText = compactModelLabel([
+    thread.provider,
+    thread.providerLabel,
+    thread.source,
+  ].filter(Boolean).join(' '));
+  const searchText = `${providerText} ${model}`.toLowerCase();
+
+  if (searchText.includes('gpt') || searchText.includes('openai') || searchText.includes('codex')) {
+    return { key: 'gpt', label: 'GPT' };
+  }
+  if (searchText.includes('claude') || searchText.includes('anthropic') || /(^|[^a-z])(sonnet|opus|haiku)([^a-z]|$)/.test(searchText)) {
+    return { key: 'claude', label: 'Claude' };
+  }
+  if (searchText.includes('gemini') || searchText.includes('google')) {
+    return { key: 'gemini', label: 'Gemini' };
+  }
+  if (searchText.includes('grok') || searchText.includes('xai')) {
+    return { key: 'grok', label: 'Grok' };
+  }
+  if (searchText.includes('deepseek')) {
+    return { key: 'deepseek', label: 'DeepSeek' };
+  }
+  if (searchText.includes('qwen')) {
+    return { key: 'qwen', label: 'Qwen' };
+  }
+  if (searchText.includes('llama') || searchText.includes('meta')) {
+    return { key: 'llama', label: 'Llama' };
+  }
+
+  const label = compactModelLabel(model.split('/').pop() || providerText || '未知模型');
+  return {
+    key: label ? `model:${label.toLowerCase()}` : 'unknown',
+    label: label || '未知模型',
+  };
+}
+
+function quotaFamilyRank(group) {
+  const index = QUOTA_FAMILY_ORDER.indexOf(group.key);
+  return index >= 0 ? index : QUOTA_FAMILY_ORDER.length;
+}
+
+function quotaGroup(thread) {
+  const family = quotaFamily(thread);
+  const observedAtMs = coerceNumber(thread.rateLimitUpdatedAtMs || thread.updatedAtMs) || null;
+
+  return {
+    ...family,
+    realtime: quotaWindow(thread.rateLimits.primary),
+    weekly: quotaWindow(thread.rateLimits.secondary),
+    observedAtMs,
+    sourceThreadId: thread.id || '',
+    model: compactModelLabel(thread.model),
+    provider: thread.provider || '',
+    providerLabel: thread.providerLabel || '',
+  };
+}
+
+function activeQuotaFamily(thread) {
+  const family = quotaFamily(thread);
+  return {
+    ...family,
+    realtime: null,
+    weekly: null,
+    observedAtMs: null,
+    sourceThreadId: thread.id || '',
+    model: compactModelLabel(thread.model),
+    provider: thread.provider || '',
+    providerLabel: thread.providerLabel || '',
+  };
+}
+
+function quotaGroups(threads) {
+  const latestByFamily = new Map();
+  const quotaThreads = threads
+    .filter((thread) => thread.rateLimits)
+    .sort((a, b) => (
+      coerceNumber(b.rateLimitUpdatedAtMs || b.updatedAtMs)
+      - coerceNumber(a.rateLimitUpdatedAtMs || a.updatedAtMs)
+    ));
+
+  for (const thread of quotaThreads) {
+    const group = quotaGroup(thread);
+    if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, group);
+  }
+
+  const runningThreads = threads
+    .filter((thread) => thread.status === 'running')
+    .sort((a, b) => coerceNumber(b.updatedAtMs) - coerceNumber(a.updatedAtMs));
+
+  for (const thread of runningThreads) {
+    const group = activeQuotaFamily(thread);
+    if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, group);
+  }
+
+  return [...latestByFamily.values()].sort((a, b) => (
+    quotaFamilyRank(a) - quotaFamilyRank(b)
+    || coerceNumber(b.observedAtMs) - coerceNumber(a.observedAtMs)
+  ));
+}
+
 function quotaSummary(threads) {
   const latest = threads
     .filter((thread) => thread.rateLimits)
@@ -48,6 +156,7 @@ function quotaSummary(threads) {
       weekly: null,
       observedAtMs: null,
       sourceThreadId: '',
+      groups: [],
     };
   }
 
@@ -56,10 +165,21 @@ function quotaSummary(threads) {
     weekly: quotaWindow(latest.rateLimits.secondary),
     observedAtMs: coerceNumber(latest.rateLimitUpdatedAtMs || latest.updatedAtMs) || null,
     sourceThreadId: latest.id || '',
+    groups: quotaGroups(threads),
   };
 }
 
 function currentTurnStartedAtMs(thread) {
+  if (thread.agentRunning || thread.isAgentRunning) {
+    return coerceNumber(
+      thread.currentTurnStartedAtMs
+      || thread.agentStartedAtMs
+      || thread.latestUserMessageAtMs
+      || thread.createdAtMs
+      || thread.updatedAtMs,
+    );
+  }
+
   const userAtMs = coerceNumber(thread.currentTurnStartedAtMs || thread.latestUserMessageAtMs);
   const finalAtMs = coerceNumber(thread.latestAgentFinalAtMs);
   return userAtMs > 0 && userAtMs > finalAtMs ? userAtMs : 0;
@@ -72,6 +192,7 @@ function currentTurnActivityAtMs(thread) {
   return Math.max(
     startedAtMs,
     coerceNumber(thread.updatedAtMs),
+    coerceNumber(thread.agentActivityAtMs),
     coerceNumber(thread.rateLimitUpdatedAtMs),
   );
 }

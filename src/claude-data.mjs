@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import * as zlib from 'node:zlib';
 import { enrichThreadRuntime } from './insights.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -10,7 +11,12 @@ const DEFAULT_CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects
 const DEFAULT_CLAUDE_APP_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
 const DEFAULT_MAX_COUNT = 80;
 const DEFAULT_MAX_JSONL_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_CACHE_COUNT = 400;
+const DEFAULT_MAX_CACHE_ENTRY_BYTES = 5 * 1024 * 1024;
 const LOW_SIGNAL_USER_MESSAGE = /^(\.|继续|继续吧|你继续|你继续吧|好的|好的好的|可以|可以的|行|ok|okay|收到|嗯|嗯嗯)$/iu;
+const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const CLAUDE_USAGE_CACHE_PATTERN = /https:\/\/claude\.ai\/api\/organizations\/([^/\0]+)\/usage\b/;
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
 export const CLAUDE_PROVIDER_IDS = new Set([
   'claude-code-cli',
@@ -50,8 +56,21 @@ function timestampToMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function timestampToUnixSeconds(value) {
+  const timestampMs = timestampToMs(value);
+  return timestampMs ? Math.floor(timestampMs / 1000) : null;
+}
+
 function firstPresent(...values) {
   return values.find((value) => value !== null && value !== undefined && value !== '');
+}
+
+function hasOwn(object, key) {
+  return Boolean(object && Object.prototype.hasOwnProperty.call(object, key));
+}
+
+function optionalBoolean(object, key) {
+  return hasOwn(object, key) ? Boolean(object[key]) : null;
 }
 
 function shellQuote(value) {
@@ -138,6 +157,102 @@ function usageTokenTotal(usage) {
   return 0;
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function normalizeClaudeUsageWindow(window, windowMinutes) {
+  if (!window || typeof window !== 'object') return null;
+
+  const usedPercent = firstFiniteNumber(
+    window.used_percent,
+    window.usedPercentage,
+    window.used_percentage,
+    window.utilization,
+  );
+  if (usedPercent === null) return null;
+
+  const resetsAt = timestampToUnixSeconds(firstPresent(
+    window.resets_at,
+    window.resetsAt,
+    window.reset_at,
+    window.resetAt,
+  ));
+
+  return {
+    used_percent: usedPercent,
+    resets_at: resetsAt,
+    window_minutes: coerceNumber(window.window_minutes || window.windowMinutes, windowMinutes),
+  };
+}
+
+function normalizeFirstClaudeUsageWindow(windowMinutes, ...windows) {
+  for (const window of windows) {
+    const normalized = normalizeClaudeUsageWindow(window, windowMinutes);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+export function normalizeClaudeUsageRateLimits(value) {
+  if (!value || typeof value !== 'object') return null;
+
+  const primary = normalizeFirstClaudeUsageWindow(
+    300,
+    value.primary,
+    value.five_hour,
+    value.fiveHour,
+    value['5h'],
+  );
+  const secondary = normalizeFirstClaudeUsageWindow(
+    10_080,
+    value.secondary,
+    value.seven_day,
+    value.sevenDay,
+    value['7d'],
+    value.seven_day_cowork,
+    value.sevenDayCowork,
+    value.seven_day_opus,
+    value.sevenDayOpus,
+    value.seven_day_sonnet,
+    value.sevenDaySonnet,
+    value.seven_day_omelette,
+    value.sevenDayOmelette,
+  );
+
+  if (!primary && !secondary) return null;
+  return {
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+  };
+}
+
+function rememberRateLimits(signals, value, timestampMs) {
+  const rateLimits = normalizeClaudeUsageRateLimits(value);
+  if (!rateLimits) return;
+
+  signals.rateLimits = rateLimits;
+  signals.latestRateLimitAtMs = timestampMs || signals.latestEventAtMs || signals.latestRateLimitAtMs;
+}
+
+function rateLimitCandidates(event) {
+  return [
+    event?.rate_limits,
+    event?.rateLimits,
+    event?.payload?.rate_limits,
+    event?.payload?.rateLimits,
+    event?.message?.rate_limits,
+    event?.message?.rateLimits,
+    event?.status_line?.rate_limits,
+    event?.statusLine?.rate_limits,
+    event?.statusLine?.rateLimits,
+  ].filter(Boolean);
+}
+
 function modelFromUsageModelUsage(modelUsage) {
   if (!modelUsage || typeof modelUsage !== 'object') return '';
   const [model] = Object.entries(modelUsage)
@@ -180,6 +295,8 @@ function initialSignals(todayStartMs = 0) {
     resultTodayTokenUsage: 0,
     tokensUsed: 0,
     todayTokenUsage: 0,
+    rateLimits: null,
+    latestRateLimitAtMs: null,
     seenUsageKeys: new Set(),
     sessionId: '',
     cwd: '',
@@ -257,6 +374,7 @@ function handleAssistantEvent(signals, event, timestampMs) {
         tool: String(item.name || 'tool'),
         title: toolUseTitle(item),
         status: 'pending',
+        kind: 'permission',
         signalAtMs: timestampMs,
       });
       signals.pendingToolAtMs = Math.max(signals.pendingToolAtMs, timestampMs);
@@ -271,6 +389,9 @@ function handleAssistantEvent(signals, event, timestampMs) {
 }
 
 function handleResultEvent(signals, event, timestampMs) {
+  signals.pendingToolsById.clear();
+  signals.pendingToolAtMs = 0;
+
   if (event.usage) {
     addUsage(signals, event.usage, timestampMs, `result:${event.uuid || event.session_id || timestampMs}`, 'result');
   }
@@ -304,6 +425,9 @@ export function parseClaudeJsonlSignals(jsonlText = '', { todayStartMs = 0 } = {
 
     const timestampMs = timestampToMs(event.timestamp || event._audit_timestamp);
     rememberTimestamp(signals, timestampMs);
+    for (const candidate of rateLimitCandidates(event)) {
+      rememberRateLimits(signals, candidate, timestampMs);
+    }
 
     signals.sessionId ||= String(event.sessionId || event.session_id || '');
     signals.cwd ||= String(event.cwd || '');
@@ -335,6 +459,8 @@ export function parseClaudeJsonlSignals(jsonlText = '', { todayStartMs = 0 } = {
 
   const pendingTools = [...signals.pendingToolsById.values()]
     .sort((a, b) => coerceNumber(b.signalAtMs) - coerceNumber(a.signalAtMs));
+  const pendingToolAtMs = pendingTools
+    .reduce((latest, tool) => Math.max(latest, coerceNumber(tool.signalAtMs)), 0);
   const tokensUsed = signals.resultTokensUsed || signals.assistantTokensUsed;
   const todayTokenUsage = signals.resultTokensUsed
     ? signals.resultTodayTokenUsage
@@ -346,6 +472,7 @@ export function parseClaudeJsonlSignals(jsonlText = '', { todayStartMs = 0 } = {
     todayTokenUsage,
     seenUsageKeys: undefined,
     pendingToolsById: undefined,
+    pendingToolAtMs,
     pendingTools,
     pendingToolCount: pendingTools.length,
   };
@@ -373,6 +500,99 @@ async function readTailText(filePath, maxBytes = DEFAULT_MAX_JSONL_BYTES) {
 
 async function readJsonFile(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'));
+}
+
+function firstJsonObjectText(text = '') {
+  const start = String(text).indexOf('{');
+  if (start < 0) return '';
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return '';
+}
+
+function parseJsonObjectFromText(text = '') {
+  const json = firstJsonObjectText(text);
+  if (!json) return null;
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function zstdFrames(buffer) {
+  const positions = [];
+  let offset = 0;
+  while (offset >= 0 && offset < buffer.length) {
+    const position = buffer.indexOf(ZSTD_MAGIC, offset);
+    if (position < 0) break;
+    positions.push(position);
+    offset = position + 1;
+  }
+  return positions;
+}
+
+export function parseClaudeUsageCacheEntry(buffer, { filePath = '', mtimeMs = 0 } = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return null;
+  const text = buffer.toString('utf8');
+  const usageMatch = text.match(CLAUDE_USAGE_CACHE_PATTERN);
+  if (!usageMatch) return null;
+
+  const bodyCandidates = [];
+  for (const position of zstdFrames(buffer)) {
+    if (!zlib.zstdDecompressSync) continue;
+    try {
+      bodyCandidates.push(zlib.zstdDecompressSync(buffer.subarray(position)).toString('utf8'));
+    } catch {
+      // Not every zstd-looking byte sequence is a complete cache body.
+    }
+  }
+  bodyCandidates.push(text.slice(Math.max(0, usageMatch.index || 0)));
+
+  for (const bodyText of bodyCandidates) {
+    const payload = parseJsonObjectFromText(bodyText);
+    const rateLimits = normalizeClaudeUsageRateLimits(payload);
+    if (!rateLimits) continue;
+
+    const dateMatch = text.match(/date:([^\0\r\n]+)/i);
+    const observedAtMs = timestampToMs(dateMatch?.[1]) || coerceNumber(mtimeMs);
+    return {
+      source: 'claude-desktop-cache',
+      sourcePath: filePath,
+      organizationId: usageMatch[1],
+      observedAtMs,
+      payload,
+      rateLimits,
+    };
+  }
+
+  return null;
 }
 
 async function walkFiles(root, predicate, output = []) {
@@ -410,6 +630,32 @@ async function recentFiles(root, predicate, maxCount = DEFAULT_MAX_COUNT) {
     .slice(0, maxCount);
 }
 
+export async function readClaudeUsageCache({
+  appDir = DEFAULT_CLAUDE_APP_DIR,
+  maxCount = DEFAULT_MAX_CACHE_COUNT,
+  maxBytes = DEFAULT_MAX_CACHE_ENTRY_BYTES,
+} = {}) {
+  const cacheDir = path.join(appDir, 'Cache', 'Cache_Data');
+  const files = await recentFiles(cacheDir, (_filePath, name) => !name.startsWith('index'), maxCount);
+  const entries = [];
+
+  await Promise.all(files.map(async ({ filePath, stat }) => {
+    if (stat.size <= 0 || stat.size > maxBytes) return;
+    try {
+      const entry = parseClaudeUsageCacheEntry(await fs.readFile(filePath), {
+        filePath,
+        mtimeMs: stat.mtimeMs,
+      });
+      if (entry) entries.push(entry);
+    } catch {
+      // Chromium cache entries can disappear or be partially written while Claude runs.
+    }
+  }));
+
+  return entries
+    .sort((a, b) => coerceNumber(b.observedAtMs) - coerceNumber(a.observedAtMs))[0] || null;
+}
+
 async function commandVersion(command, args, runCommand = execFileAsync) {
   const { stdout, stderr } = await runCommand(command, args, { timeout: 5000 });
   return String(stdout || stderr || '').trim();
@@ -422,6 +668,23 @@ function claudeResumeCommand({ externalId, cwd }) {
 
 function claudeAppCommand() {
   return 'open -a Claude';
+}
+
+function claudeDesktopCodeDeepLink(cliSessionId) {
+  const sessionId = String(cliSessionId || '');
+  if (!UUID_PATTERN.test(sessionId)) return '';
+  return `claude://resume?session=${encodeURIComponent(sessionId)}`;
+}
+
+function claudeDesktopCodeOpenCommand(cliSessionId) {
+  const deepLink = claudeDesktopCodeDeepLink(cliSessionId);
+  return deepLink ? `open ${shellQuote(deepLink)}` : '';
+}
+
+function openCommandForUrl(url, platform = process.platform) {
+  if (platform === 'darwin') return { command: 'open', args: [url] };
+  if (platform === 'win32') return { command: 'cmd', args: ['/c', 'start', '', url] };
+  return { command: 'xdg-open', args: [url] };
 }
 
 function deriveTitle(preferredTitle, signals, fallbackTitle) {
@@ -502,6 +765,8 @@ function baseClaudeThread({
     reasoningEffort: '',
     tokensUsed: coerceNumber(signals?.tokensUsed),
     todayTokenUsage: coerceNumber(signals?.todayTokenUsage),
+    rateLimits: signals?.rateLimits || null,
+    rateLimitUpdatedAtMs: coerceNumber(signals?.latestRateLimitAtMs) || null,
     hasUnreadTurn: false,
     awaitingPermission: pendingTools.length > 0,
     awaitingReview: false,
@@ -530,6 +795,21 @@ function baseClaudeThread({
   };
 
   return enrichThreadRuntime(thread, nowMs);
+}
+
+function dedupeClaudeDesktopCodeThreads(threads) {
+  const bySession = new Map();
+
+  for (const thread of threads) {
+    const key = thread.cliSessionId || thread.externalId || thread.id;
+    const existing = bySession.get(key);
+    if (!existing || coerceNumber(thread.updatedAtMs) > coerceNumber(existing.updatedAtMs)) {
+      bySession.set(key, thread);
+    }
+  }
+
+  return [...bySession.values()]
+    .sort((a, b) => coerceNumber(b.updatedAtMs) - coerceNumber(a.updatedAtMs));
 }
 
 export function normalizeClaudeCodeCliSession({ filePath = '', stat = {}, signals = {} }, nowMs = Date.now()) {
@@ -575,9 +855,13 @@ export function normalizeClaudeDesktopCodeSession(session, {
   const createdAtMs = timestampToMs(session.createdAt)
     || coerceNumber(signals.oldestEventAtMs)
     || updatedAtMs;
-  const resumeCommand = cliSessionId
-    ? claudeResumeCommand({ externalId: cliSessionId, cwd })
-    : claudeAppCommand();
+  const appDeepLink = claudeDesktopCodeDeepLink(cliSessionId);
+  let resumeCommand = claudeAppCommand();
+  if (appDeepLink) {
+    resumeCommand = claudeDesktopCodeOpenCommand(cliSessionId);
+  } else if (cliSessionId) {
+    resumeCommand = claudeResumeCommand({ externalId: cliSessionId, cwd });
+  }
 
   return baseClaudeThread({
     id: `${CLAUDE_DESKTOP_CODE_PROVIDER.id}:${externalId}`,
@@ -595,6 +879,7 @@ export function normalizeClaudeDesktopCodeSession(session, {
     signals,
     resumeCommand,
     extra: {
+      appDeepLink,
       cliSessionId,
       permissionMode: session.permissionMode || '',
       completedTurns: coerceNumber(session.completedTurns),
@@ -619,6 +904,8 @@ export function normalizeClaudeDesktopCoworkSession(session, {
   const createdAtMs = timestampToMs(session.createdAt)
     || coerceNumber(signals.oldestEventAtMs)
     || updatedAtMs;
+  const isAgentCompleted = optionalBoolean(session, 'isAgentCompleted');
+  const agentRunning = isAgentCompleted === false;
 
   return baseClaudeThread({
     id: `${CLAUDE_DESKTOP_COWORK_PROVIDER.id}:${externalId}`,
@@ -641,7 +928,12 @@ export function normalizeClaudeDesktopCoworkSession(session, {
       processName: session.processName || '',
       spaceId: session.spaceId || '',
       scheduledTaskId: session.scheduledTaskId || '',
-      isAgentCompleted: Boolean(session.isAgentCompleted),
+      isAgentCompleted,
+      agentRunning,
+      agentStartedAtMs: agentRunning
+        ? coerceNumber(signals.latestUserMessageAtMs || createdAtMs || updatedAtMs)
+        : null,
+      agentActivityAtMs: agentRunning ? updatedAtMs : null,
     },
   }, nowMs);
 }
@@ -652,6 +944,20 @@ async function readSignalsForFile(filePath, { todayStartMs, maxBytes = DEFAULT_M
   } catch {
     return parseClaudeJsonlSignals('', { todayStartMs });
   }
+}
+
+function mergeClaudeUsageCacheSignals(signals = {}, usageCache = null) {
+  if (!usageCache?.rateLimits) return signals;
+
+  const signalAtMs = coerceNumber(signals.latestRateLimitAtMs);
+  const cacheAtMs = coerceNumber(usageCache.observedAtMs);
+  if (signals.rateLimits && signalAtMs >= cacheAtMs) return signals;
+
+  return {
+    ...signals,
+    rateLimits: usageCache.rateLimits,
+    latestRateLimitAtMs: cacheAtMs || signalAtMs || signals.latestEventAtMs || null,
+  };
 }
 
 async function indexClaudeProjectFiles(projectsDir = DEFAULT_CLAUDE_PROJECTS_DIR) {
@@ -725,10 +1031,14 @@ export async function loadClaudeDesktopCodeThreads({
   maxBytes = DEFAULT_MAX_JSONL_BYTES,
   nowMs = Date.now(),
   todayStartMs = 0,
+  usageCache,
 } = {}) {
   const root = path.join(appDir, 'claude-code-sessions');
   const files = await recentFiles(root, (_filePath, name) => /^local_.*\.json$/.test(name), maxCount);
   const projectFiles = await indexClaudeProjectFiles(projectsDir).catch(() => new Map());
+  const desktopUsageCache = usageCache === undefined
+    ? await readClaudeUsageCache({ appDir }).catch(() => null)
+    : usageCache;
   const parsed = await Promise.all(files.map(async (entry) => {
     try {
       const session = await readJsonFile(entry.filePath);
@@ -736,15 +1046,19 @@ export async function loadClaudeDesktopCodeThreads({
       const signals = projectFile
         ? await readSignalsForFile(projectFile.filePath, { todayStartMs, maxBytes })
         : parseClaudeJsonlSignals('', { todayStartMs });
-      return { session, signals, stat: entry.stat };
+      return {
+        session,
+        signals: mergeClaudeUsageCacheSignals(signals, desktopUsageCache),
+        stat: entry.stat,
+      };
     } catch {
       return null;
     }
   }));
-  const threads = parsed
+  const threads = dedupeClaudeDesktopCodeThreads(parsed
     .filter(Boolean)
     .map((entry) => normalizeClaudeDesktopCodeSession(entry.session, entry, nowMs))
-    .filter((thread) => thread.externalId);
+    .filter((thread) => thread.externalId));
 
   return {
     provider: {
@@ -767,15 +1081,22 @@ export async function loadClaudeDesktopCoworkThreads({
   maxBytes = DEFAULT_MAX_JSONL_BYTES,
   nowMs = Date.now(),
   todayStartMs = 0,
+  usageCache,
 } = {}) {
   const root = path.join(appDir, 'local-agent-mode-sessions');
   const files = await recentFiles(root, (_filePath, name) => /^local_.*\.json$/.test(name), maxCount);
   const spaces = await readCoworkSpaces(appDir);
+  const desktopUsageCache = usageCache === undefined
+    ? await readClaudeUsageCache({ appDir }).catch(() => null)
+    : usageCache;
   const parsed = await Promise.all(files.map(async (entry) => {
     try {
       const session = await readJsonFile(entry.filePath);
       const auditPath = path.join(path.dirname(entry.filePath), path.basename(entry.filePath, '.json'), 'audit.jsonl');
-      const signals = await readSignalsForFile(auditPath, { todayStartMs, maxBytes });
+      const signals = mergeClaudeUsageCacheSignals(
+        await readSignalsForFile(auditPath, { todayStartMs, maxBytes }),
+        desktopUsageCache,
+      );
       return {
         session,
         signals,
@@ -847,6 +1168,37 @@ export async function openClaudeThread(thread, {
   platform = process.platform,
   runCommand = execFileAsync,
 } = {}) {
+  if (thread.provider === 'claude-desktop-code') {
+    const appDeepLink = thread.appDeepLink || claudeDesktopCodeDeepLink(thread.cliSessionId);
+    const resumeCommand = thread.resumeCommand
+      || (appDeepLink ? `open ${shellQuote(appDeepLink)}` : claudeAppCommand());
+
+    if (appDeepLink) {
+      const { command, args } = openCommandForUrl(appDeepLink, platform);
+      await runCommand(command, args);
+      return {
+        opened: true,
+        method: 'claude-desktop-deeplink',
+        resumeCommand,
+      };
+    }
+
+    if (platform === 'darwin') {
+      await runCommand('open', ['-a', 'Claude']);
+      return {
+        opened: true,
+        method: 'claude-app',
+        resumeCommand,
+      };
+    }
+
+    return {
+      opened: false,
+      method: 'copy-command',
+      resumeCommand,
+    };
+  }
+
   if (thread.provider === 'claude-desktop-cowork') {
     if (platform === 'darwin') {
       await runCommand('open', ['-a', 'Claude']);

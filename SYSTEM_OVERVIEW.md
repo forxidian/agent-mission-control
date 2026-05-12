@@ -28,9 +28,12 @@ http://127.0.0.1:4629/
 - 支持按来源、状态、项目筛选，支持显示归档线程。
 - 支持打开 Codex 线程 deep link：`codex://threads/<thread_id>`。
 - 支持打开 OpenCode Desktop 项目 deep link：`opencode://open-project?directory=...`。
-- 支持用 macOS Terminal 打开 Claude Code CLI / Claude Desktop Code resume 命令。
-- 支持打开 Claude Desktop 应用回到 Cowork 工作区入口；当前没有可靠的 Claude Desktop 单线程 deep link。
+- 支持用 macOS Terminal 打开 Claude Code CLI resume 命令。
+- 支持通过 `claude://resume?session=...` 拉起 Claude Desktop Code 会话。
+- 支持打开 Claude Desktop 应用回到 Cowork 工作区入口；当前 Cowork 没有可靠的单线程 deep link。
 - 支持复制 resume / open 命令。
+- 支持作为 PWA 安装到 Chrome / Edge 的独立应用窗口；安装后浏览器页优先通过本地 API 打开 macOS PWA app shim，失败时再尝试 `web+agentmissioncontrol:` 协议；只缓存静态前端壳，不缓存 `/api/*` Agent 元数据。
+- PWA 独立窗口内提供“收起”按钮，通过本地 API 最小化 macOS app shim；原生红色关闭按钮不能被网页改写，且不使用 `beforeunload` 拦截，避免误伤 deep link 跳转。
 - 桌面提醒暂时屏蔽：当前 macOS 脚本通知投递不够可靠，发布版本只保留站内待处理提醒。
 - 支持通知中心：等待验收、等待授权、标记已处理、稍后提醒。
 - 自动刷新：前端每 10 秒刷新；后端 notification monitor 每 20 秒扫描。
@@ -76,6 +79,9 @@ src/notifications.mjs   通知中心、通知持久化、软提醒过期
 public/index.html       页面结构
 public/app.js           前端状态、筛选、渲染、打开线程、通知操作、自动刷新
 public/styles.css       UI 样式
+public/manifest.webmanifest
+public/service-worker.js
+public/icon-*.png       PWA 安装清单、离线壳缓存和应用图标
 test/*.test.mjs         单元测试和 API 行为测试
 ```
 
@@ -139,7 +145,8 @@ token：
 quota：
 
 - 从最新 rollout `token_count.rate_limits` 获取。
-- 当前展示实时可用 quota、本周可用 quota、刷新时间。
+- Claude Desktop/Cowork 额外读取本地 Chromium Cache 里的 `https://claude.ai/api/organizations/.../usage` 响应，解压 zstd 后映射 `five_hour` / `seven_day` 为统一 quota 信号；如果未来 statusline JSONL 直接落 `rate_limits`，也走同一解析链路。
+- 当前展示实时可用 quota、本周可用 quota、刷新时间；存在多个 LLM 家族时按 GPT、Claude 等分组显示，每组取最新 rate limit 信号。
 - 不再展示“单线程限流用量”，因为实际限制看总 quota。
 
 通知：
@@ -147,7 +154,7 @@ quota：
 - 硬待处理：
   - Codex unread/blue dot：`source = codex-unread`
   - OpenCode pending permission：`source = opencode-permission`
-  - Claude pending user/tool request：`source = <provider>-permission`
+  - Claude explicit user/permission request：`source = <provider>-permission`（普通未完成 tool_use 不算硬待处理）
   - 这些会保留，直到信号消失、打开并标记处理、或手动处理。
 - 软提醒：
   - 从“Agent final answer after latest user message”推断的新进展：`source = observed-completion`

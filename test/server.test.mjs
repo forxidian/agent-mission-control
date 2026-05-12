@@ -50,6 +50,96 @@ test('serves static index html', async () => {
   }
 });
 
+test('serves PWA assets with installable metadata', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({ summary: {}, threads: [], projects: [], inbox: [] }),
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const manifestResponse = await fetch(`${base}/manifest.webmanifest`);
+    const manifest = await manifestResponse.json();
+    const serviceWorkerResponse = await fetch(`${base}/service-worker.js`);
+    const serviceWorker = await serviceWorkerResponse.text();
+    const iconResponse = await fetch(`${base}/icon-192.png`);
+
+    assert.equal(manifestResponse.status, 200);
+    assert.match(manifestResponse.headers.get('content-type') || '', /application\/manifest\+json/);
+    assert.equal(manifest.display, 'standalone');
+    assert.equal(manifest.start_url, '/');
+    assert.equal(manifest.protocol_handlers[0].protocol, 'web+agentmissioncontrol');
+    assert.equal(manifest.launch_handler.client_mode[0], 'focus-existing');
+    assert.ok(manifest.icons.some((icon) => icon.sizes === '192x192'));
+    assert.equal(serviceWorkerResponse.status, 200);
+    assert.match(serviceWorkerResponse.headers.get('content-type') || '', /text\/javascript/);
+    assert.match(serviceWorker, /pathname\.startsWith\('\/api\/'\)/);
+    assert.equal(iconResponse.status, 200);
+    assert.match(iconResponse.headers.get('content-type') || '', /image\/png/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('reports and opens the installed local PWA app through injected handlers', async () => {
+  const calls = [];
+  const server = createServer({
+    getInstalledAppStatus: async () => ({ installed: true, method: 'macos-pwa-app' }),
+    openInstalledApp: async () => {
+      calls.push('open');
+      return { opened: true, method: 'macos-pwa-app' };
+    },
+    minimizeInstalledApp: async () => {
+      calls.push('minimize');
+      return { minimized: true, method: 'macos-pwa-app' };
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const statusResponse = await fetch(`${base}/api/app/installed`);
+    const status = await statusResponse.json();
+    const openResponse = await fetch(`${base}/api/app/open-installed`, { method: 'POST' });
+    const opened = await openResponse.json();
+    const minimizeResponse = await fetch(`${base}/api/app/minimize-installed`, { method: 'POST' });
+    const minimized = await minimizeResponse.json();
+
+    assert.equal(statusResponse.status, 200);
+    assert.deepEqual(status, { installed: true, method: 'macos-pwa-app' });
+    assert.equal(openResponse.status, 200);
+    assert.deepEqual(opened, { opened: true, method: 'macos-pwa-app' });
+    assert.equal(minimizeResponse.status, 200);
+    assert.deepEqual(minimized, { minimized: true, method: 'macos-pwa-app' });
+    assert.deepEqual(calls, ['open', 'minimize']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('returns not found when the installed local PWA app cannot be opened', async () => {
+  const server = createServer({
+    openInstalledApp: async () => {
+      const error = new Error('Installed Agent Mission Control app was not found');
+      error.statusCode = 404;
+      throw error;
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/app/open-installed`, {
+      method: 'POST',
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.equal(body.error, 'Installed Agent Mission Control app was not found');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('opens a known Codex thread through the injected opener', async () => {
   const thread = {
     id: '123e4567-e89b-12d3-a456-426614174000',

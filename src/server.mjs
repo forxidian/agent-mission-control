@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -14,11 +15,29 @@ import { buildPendingSummary } from './pending-summary.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 const execFileAsync = promisify(execFile);
+const PWA_APP_NAMES = [
+  'Agent Mission Control.app',
+  'Agent 任务控制台.app',
+  'Agent 控制台.app',
+];
+const PWA_APP_SCRIPT_NAMES = [
+  'Agent Mission Control',
+  'Agent 任务控制台',
+  'Agent 控制台',
+];
+const PWA_APP_DIRS = [
+  path.join(os.homedir(), 'Applications', 'Chrome Apps.localized'),
+  path.join(os.homedir(), 'Applications', 'Chrome Apps'),
+  path.join(os.homedir(), 'Applications', 'Edge Apps.localized'),
+  path.join(os.homedir(), 'Applications', 'Edge Apps'),
+];
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
+  ['.webmanifest', 'application/manifest+json; charset=utf-8'],
+  ['.png', 'image/png'],
   ['.svg', 'image/svg+xml'],
 ]);
 
@@ -57,6 +76,89 @@ function openCommandForUrl(url) {
 
 function appleScriptString(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+async function firstExistingPath(paths) {
+  for (const candidate of paths) {
+    try {
+      const info = await stat(candidate);
+      if (info.isDirectory()) return candidate;
+    } catch {
+      // Try the next known app shim path.
+    }
+  }
+  return '';
+}
+
+export async function findInstalledPwaApp({
+  platform = process.platform,
+  appDirs = PWA_APP_DIRS,
+  appNames = PWA_APP_NAMES,
+} = {}) {
+  if (platform !== 'darwin') return '';
+
+  const candidates = appDirs.flatMap((dir) => appNames.map((name) => path.join(dir, name)));
+  return firstExistingPath(candidates);
+}
+
+export async function getInstalledPwaAppStatus(options = {}) {
+  const appPath = await findInstalledPwaApp(options);
+  return {
+    installed: Boolean(appPath),
+    method: appPath ? 'macos-pwa-app' : 'not-found',
+  };
+}
+
+export async function openInstalledPwaApp({
+  platform = process.platform,
+  runCommand = execFileAsync,
+  appDirs = PWA_APP_DIRS,
+  appNames = PWA_APP_NAMES,
+} = {}) {
+  if (platform !== 'darwin') {
+    const error = new Error('Installed PWA app opener is only supported on macOS');
+    error.statusCode = 501;
+    throw error;
+  }
+
+  const appPath = await findInstalledPwaApp({ platform, appDirs, appNames });
+  if (!appPath) {
+    const error = new Error('Installed Agent Mission Control app was not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  await runCommand('open', [appPath], { timeout: 5000 });
+  return { opened: true, method: 'macos-pwa-app' };
+}
+
+export async function minimizeInstalledPwaApp({
+  platform = process.platform,
+  runCommand = execFileAsync,
+  appScriptNames = PWA_APP_SCRIPT_NAMES,
+} = {}) {
+  if (platform !== 'darwin') {
+    const error = new Error('Installed PWA app minimizer is only supported on macOS');
+    error.statusCode = 501;
+    throw error;
+  }
+
+  let lastError = null;
+  for (const appName of appScriptNames) {
+    try {
+      await runCommand('osascript', [
+        '-e',
+        `tell application "${appleScriptString(appName)}" to set miniaturized of every window to true`,
+      ], { timeout: 5000 });
+      return { minimized: true, method: 'macos-pwa-app' };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const error = new Error(lastError?.message || 'Installed Agent Mission Control app window was not found');
+  error.statusCode = 404;
+  throw error;
 }
 
 export async function openThreadInCodex(thread) {
@@ -155,6 +257,9 @@ export function createServer({
   monitorNotifications = false,
   notificationScanIntervalMs = 20_000,
   openThread = openThreadInProvider,
+  openInstalledApp = openInstalledPwaApp,
+  minimizeInstalledApp = minimizeInstalledPwaApp,
+  getInstalledAppStatus = getInstalledPwaAppStatus,
   publicDir = DEFAULT_PUBLIC_DIR,
 } = {}) {
   const server = http.createServer(async (request, response) => {
@@ -262,6 +367,54 @@ export function createServer({
         error: 'Desktop notifications are disabled',
         detail: 'Desktop notification delivery is hidden until a reliable native notifier is available.',
       });
+      return;
+    }
+
+    if (url.pathname === '/api/app/installed') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const status = await getInstalledAppStatus();
+        sendJson(response, 200, status);
+      } catch (error) {
+        sendError(response, error, 'Failed to check installed app');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/app/open-installed') {
+      if (request.method !== 'POST') {
+        response.writeHead(405, { allow: 'POST' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const result = await openInstalledApp();
+        sendJson(response, 200, result);
+      } catch (error) {
+        sendError(response, error, 'Failed to open installed app');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/app/minimize-installed') {
+      if (request.method !== 'POST') {
+        response.writeHead(405, { allow: 'POST' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const result = await minimizeInstalledApp();
+        sendJson(response, 200, result);
+      } catch (error) {
+        sendError(response, error, 'Failed to minimize installed app');
+      }
       return;
     }
 

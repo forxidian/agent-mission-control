@@ -308,6 +308,49 @@ test('counts running host thread groups without inflating sub-agents', () => {
   assert.equal(dashboard.summary.runningHostThreads, 2);
 });
 
+test('counts explicit provider running signals as host threads', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'claude-active',
+      title: 'Claude active loop',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'claude-desktop-cowork',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 30 * 60 * 1000,
+      latestUserMessageAtMs: now - 2 * 60 * 60 * 1000,
+      latestAgentFinalAtMs: now - 90 * 60 * 1000,
+      agentRunning: true,
+      agentStartedAtMs: now - 2 * 60 * 60 * 1000,
+      agentActivityAtMs: now - 30 * 60 * 1000,
+    },
+    {
+      id: 'claude-stale',
+      title: 'Claude stale loop',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'claude-desktop-cowork',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 7 * 60 * 60 * 1000,
+      agentRunning: true,
+      agentStartedAtMs: now - 8 * 60 * 60 * 1000,
+      agentActivityAtMs: now - 7 * 60 * 60 * 1000,
+    },
+  ], now);
+
+  const active = dashboard.threads.find((thread) => thread.id === 'claude-active');
+  const stale = dashboard.threads.find((thread) => thread.id === 'claude-stale');
+
+  assert.equal(active.status, 'running');
+  assert.equal(active.currentTurnStartedAtMs, now - 2 * 60 * 60 * 1000);
+  assert.equal(stale.status, 'idle');
+  assert.equal(dashboard.summary.runningThreads, 1);
+  assert.equal(dashboard.summary.runningHostThreads, 1);
+});
+
 test('builds current quota and daily token summary from latest rate-limit signal', () => {
   const now = 1777427200000;
   const dashboard = buildDashboard([
@@ -316,6 +359,9 @@ test('builds current quota and daily token summary from latest rate-limit signal
       title: 'Latest quota',
       cwd: '/a',
       projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.2',
       tokensUsed: 100,
       todayTokenUsage: 700,
       archived: false,
@@ -331,6 +377,9 @@ test('builds current quota and daily token summary from latest rate-limit signal
       title: 'Older quota',
       cwd: '/b',
       projectName: 'b',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.1',
       tokensUsed: 300,
       todayTokenUsage: 50,
       archived: false,
@@ -361,4 +410,122 @@ test('builds current quota and daily token summary from latest rate-limit signal
   assert.equal(dashboard.summary.quota.weekly.availablePercent, 59);
   assert.equal(dashboard.summary.quota.weekly.windowMinutes, 10080);
   assert.equal(dashboard.summary.quota.observedAtMs, now - 1_000);
+  assert.equal(dashboard.summary.quota.groups.length, 1);
+  assert.equal(dashboard.summary.quota.groups[0].key, 'gpt');
+  assert.equal(dashboard.summary.quota.groups[0].label, 'GPT');
+  assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, '1');
+});
+
+test('groups quota by LLM family and keeps the freshest signal per family', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'gpt-new',
+      title: 'GPT current quota',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.2',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 14, window_minutes: 300, resets_at: 1777430000 },
+        secondary: { used_percent: 25, window_minutes: 10080, resets_at: 1778000000 },
+      },
+    },
+    {
+      id: 'gpt-old',
+      title: 'GPT stale quota',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.1',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 120_000,
+      rateLimitUpdatedAtMs: now - 90_000,
+      rateLimits: {
+        primary: { used_percent: 90, window_minutes: 300, resets_at: 1777429000 },
+        secondary: { used_percent: 80, window_minutes: 10080, resets_at: 1777990000 },
+      },
+    },
+    {
+      id: 'claude-new',
+      title: 'Claude quota',
+      cwd: '/c',
+      projectName: 'c',
+      provider: 'claude-code-cli',
+      providerLabel: 'Claude Code CLI',
+      model: 'claude-sonnet-4.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 30_000,
+      rateLimitUpdatedAtMs: now - 2_000,
+      rateLimits: {
+        primary: { used_percent: 44, window_minutes: 300, resets_at: 1777431000 },
+        secondary: { used_percent: 52, window_minutes: 10080, resets_at: 1778010000 },
+      },
+    },
+  ], now);
+
+  assert.deepEqual(
+    dashboard.summary.quota.groups.map((group) => group.key),
+    ['gpt', 'claude'],
+  );
+  assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, 'gpt-new');
+  assert.equal(dashboard.summary.quota.groups[0].realtime.availablePercent, 86);
+  assert.equal(dashboard.summary.quota.groups[1].label, 'Claude');
+  assert.equal(dashboard.summary.quota.groups[1].realtime.availablePercent, 56);
+});
+
+test('includes running LLM families even when they have no quota signal', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'gpt-quota',
+      title: 'GPT quota source',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60_000,
+      latestUserMessageAtMs: now - 5 * 60_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 8, window_minutes: 300, resets_at: 1777430000 },
+        secondary: { used_percent: 3, window_minutes: 10080, resets_at: 1778000000 },
+      },
+    },
+    {
+      id: 'claude-running',
+      title: 'Claude active loop',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'claude-desktop-cowork',
+      providerLabel: 'Claude Cowork',
+      model: 'claude-opus-4-7',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 30_000,
+      agentRunning: true,
+      agentStartedAtMs: now - 10 * 60_000,
+      agentActivityAtMs: now - 30_000,
+    },
+  ], now);
+
+  assert.deepEqual(
+    dashboard.summary.quota.groups.map((group) => group.key),
+    ['gpt', 'claude'],
+  );
+  assert.equal(dashboard.summary.quota.groups[0].realtime.availablePercent, 92);
+  assert.equal(dashboard.summary.quota.groups[1].label, 'Claude');
+  assert.equal(dashboard.summary.quota.groups[1].realtime, null);
+  assert.equal(dashboard.summary.quota.groups[1].sourceThreadId, 'claude-running');
 });

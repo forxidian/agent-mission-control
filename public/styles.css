@@ -119,6 +119,8 @@ h3 {
     minmax(18px, 1fr)
     var(--last-updated-width)
     var(--monitor-status-width)
+    max-content
+    max-content
     max-content;
   align-items: center;
   justify-content: stretch;
@@ -169,10 +171,25 @@ h3 {
   border-radius: 6px;
   background: rgba(255, 253, 247, 0.72);
   font-family: Menlo, Monaco, Consolas, monospace;
+  color: inherit;
 }
 
 .topbar-metric:first-child {
   min-width: 122px;
+}
+
+.topbar-metric-button {
+  cursor: pointer;
+}
+
+.topbar-metric-button:hover {
+  border-color: rgba(65, 70, 77, 0.58);
+  background: rgba(255, 250, 240, 0.94);
+}
+
+.topbar-metric-button:focus-visible {
+  outline: 2px solid rgba(44, 111, 187, 0.42);
+  outline-offset: 2px;
 }
 
 .topbar-metric span {
@@ -297,7 +314,7 @@ h3 {
 .refresh-controls {
   display: inline-flex;
   align-items: stretch;
-  grid-column: 5;
+  grid-column: 7;
   justify-self: end;
   height: 38px;
   overflow: hidden;
@@ -321,6 +338,71 @@ h3 {
 
 .refresh-controls .icon-button:disabled {
   background: transparent;
+}
+
+.pwa-window-button,
+.pwa-install-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.pwa-window-button {
+  grid-column: 5;
+}
+
+.pwa-minimize-button:not([hidden]) {
+  position: fixed;
+  top: calc(env(titlebar-area-y, 0px) + 10px);
+  left: calc(env(titlebar-area-x, 0px) + 74px);
+  z-index: 30;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 10px;
+  border-color: rgba(24, 23, 19, 0.42);
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 253, 247, 0.76);
+  box-shadow: 0 10px 24px rgba(25, 23, 18, 0.12);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.pwa-minimize-button:not([hidden]):hover {
+  background: rgba(255, 250, 240, 0.94);
+}
+
+.pwa-minimize-button:not([hidden]) svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pwa-minimize-button:not([hidden]) span {
+  font-size: 12px;
+}
+
+.pwa-install-button {
+  grid-column: 6;
+}
+
+.pwa-window-button[hidden],
+.pwa-install-button[hidden] {
+  display: none;
+}
+
+.pwa-window-button svg,
+.pwa-install-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .toggle {
@@ -504,6 +586,54 @@ h3 {
 .summary-card.summary-quota {
   border-color: rgba(15, 111, 124, 0.42);
   background: #f7fbf6;
+}
+
+.summary-card-with-lines {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  align-content: start;
+}
+
+.summary-card-lines {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.summary-card-line {
+  display: grid;
+  grid-template-columns: minmax(42px, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.summary-card-line-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-card-line strong {
+  margin-top: 0;
+  font-size: clamp(18px, 2.3vw, 26px);
+  text-align: right;
+}
+
+.summary-card-line small {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 .summary-card.summary-running {
@@ -802,6 +932,7 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
+  min-width: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
 }
@@ -823,6 +954,10 @@ h3 {
   color: var(--ink);
   text-align: left;
   background: transparent;
+}
+
+.thread-main > div {
+  min-width: 0;
 }
 
 .thread-row.is-subagent .thread-main {
@@ -858,14 +993,18 @@ h3 {
 .detail-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .row-actions {
+  justify-content: flex-end;
+  min-width: 0;
   padding: 12px 16px 12px 0;
 }
 
 .action-button {
+  max-width: 100%;
   min-height: 34px;
   border: 1px solid var(--ink);
   border-radius: 6px;
@@ -1346,6 +1485,24 @@ h3 {
     --last-updated-width: 132px;
     --monitor-status-width: 304px;
   }
+
+  .controls {
+    grid-template-columns: minmax(220px, 1.35fr) minmax(132px, 0.8fr) minmax(120px, 0.7fr) minmax(150px, 0.9fr);
+  }
+
+  .controls > .toggle {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .thread-row {
+    grid-template-columns: 1fr;
+  }
+
+  .row-actions {
+    justify-content: flex-end;
+    padding: 0 16px 12px;
+  }
 }
 
 @media (max-width: 1040px) {
@@ -1444,6 +1601,21 @@ h3 {
     justify-self: start;
   }
 
+  .pwa-install-button {
+    grid-column: auto;
+    justify-self: start;
+  }
+
+  .pwa-window-button {
+    grid-column: auto;
+    justify-self: start;
+  }
+
+  .pwa-minimize-button:not([hidden]) {
+    top: calc(env(titlebar-area-y, 0px) + 9px);
+    left: calc(env(titlebar-area-x, 0px) + 70px);
+  }
+
   .priority-inbox-panel .panel-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -1474,6 +1646,16 @@ h3 {
     flex-direction: column;
   }
 
+  .summary-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .summary-section-heading p {
+    text-align: left;
+  }
+
   .detail-section-heading p {
     text-align: left;
   }
@@ -1494,7 +1676,19 @@ h3 {
 
   .summary-card-grid,
   .summary-card-grid-lifetime {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .summary-card-line {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-card-line strong {
+    text-align: left;
+  }
+
+  .summary-card-line small {
+    grid-column: auto;
   }
 
   .thread-row,

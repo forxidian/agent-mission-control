@@ -1,0 +1,62 @@
+{
+  "id": "/",
+  "name": "Agent Mission Control",
+  "short_name": "Agent 控制台",
+  "description": "本地多 Agent 任务控制台，用来查看线程、token、quota 和待处理事项。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "navigate-existing",
+      "auto"
+    ]
+  },
+  "orientation": "any",
+  "theme_color": "#181713",
+  "background_color": "#f2f0ea",
+  "protocol_handlers": [
+    {
+      "protocol": "web+agentmissioncontrol",
+      "url": "/?launch=%s"
+    }
+  ],
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "/manifest.webmanifest",
+      "id": "/"
+    }
+  ],
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

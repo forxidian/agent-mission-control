@@ -3,16 +3,36 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import * as zlib from 'node:zlib';
 import {
   loadClaudeAgentThreads,
   loadClaudeDesktopCoworkThreads,
   normalizeClaudeCodeCliSession,
+  normalizeClaudeDesktopCodeSession,
+  normalizeClaudeDesktopCoworkSession,
   openClaudeThread,
   parseClaudeJsonlSignals,
+  readClaudeUsageCache,
 } from '../src/claude-data.mjs';
 
 function jsonl(records) {
   return `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
+}
+
+async function writeClaudeUsageCache(appDir, payload, {
+  organizationId = 'org_123',
+  observedAt = 'Tue, 12 May 2026 08:24:03 GMT',
+} = {}) {
+  const cacheDir = path.join(appDir, 'Cache', 'Cache_Data');
+  await mkdir(cacheDir, { recursive: true });
+  const header = Buffer.from(
+    `1/0/https://claude.ai/api/organizations/${organizationId}/usage\0`
+    + `HTTP/1.1 200\0date:${observedAt}\0content-type:application/json\0`
+    + `${zlib.zstdCompressSync ? 'content-encoding:zstd\0' : ''}\0`,
+  );
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const body = zlib.zstdCompressSync ? zlib.zstdCompressSync(rawBody) : rawBody;
+  await writeFile(path.join(cacheDir, 'usage-cache-entry_0'), Buffer.concat([header, body]));
 }
 
 test('parses Claude JSONL usage, running state, and pending user prompts', () => {
@@ -58,6 +78,135 @@ test('parses Claude JSONL usage, running state, and pending user prompts', () =>
   assert.equal(signals.latestAgentFinalAtMs, null);
   assert.equal(signals.pendingToolCount, 1);
   assert.equal(signals.pendingTools[0].title, '向用户提问');
+  assert.equal(signals.pendingTools[0].kind, 'permission');
+});
+
+test('parses Claude rate limits from status line JSONL events', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'system',
+      timestamp: '2026-05-12T08:00:00.000Z',
+      rate_limits: {
+        five_hour: {
+          used_percentage: 41,
+          resets_at: '2026-05-12T08:30:00.000Z',
+        },
+        seven_day: {
+          used_percentage: 5,
+          resets_at: '2026-05-16T12:00:00.000Z',
+        },
+      },
+    },
+  ]));
+
+  assert.equal(signals.rateLimits.primary.used_percent, 41);
+  assert.equal(signals.rateLimits.primary.window_minutes, 300);
+  assert.equal(signals.rateLimits.primary.resets_at, Date.parse('2026-05-12T08:30:00.000Z') / 1000);
+  assert.equal(signals.rateLimits.secondary.used_percent, 5);
+  assert.equal(signals.rateLimits.secondary.window_minutes, 10_080);
+  assert.equal(signals.latestRateLimitAtMs, Date.parse('2026-05-12T08:00:00.000Z'));
+});
+
+test('ignores ordinary unresolved Claude tool uses as user pending work', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:00:00.000Z',
+      sessionId: 'ses_cli',
+      cwd: '/Users/example/work',
+      message: { role: 'user', content: '跑一下测试' },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:01:00.000Z',
+      message: {
+        id: 'msg_tool',
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_bash',
+            name: 'Bash',
+            input: {
+              command: 'npm test',
+              description: 'Run test suite',
+            },
+          },
+        ],
+      },
+    },
+  ]));
+
+  assert.equal(signals.latestUserMessage, '跑一下测试');
+  assert.equal(signals.latestAgentFinalAtMs, null);
+  assert.equal(signals.pendingToolCount, 0);
+  assert.equal(signals.pendingToolAtMs, 0);
+  assert.deepEqual(signals.pendingTools, []);
+});
+
+test('keeps ordinary Claude tool results out of user pending work', () => {
+  const resolvedByToolResult = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:01:00.000Z',
+      message: {
+        id: 'msg_tool',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_bash',
+            name: 'Bash',
+            input: { description: 'Run test suite' },
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:02:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool_bash',
+            content: 'ok',
+          },
+        ],
+      },
+    },
+  ]));
+
+  const resolvedByResult = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:01:00.000Z',
+      message: {
+        id: 'msg_tool',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_bash',
+            name: 'Bash',
+            input: { description: 'Run test suite' },
+          },
+        ],
+      },
+    },
+    {
+      type: 'result',
+      timestamp: '2026-05-09T02:03:00.000Z',
+      terminal_reason: 'completed',
+    },
+  ]));
+
+  assert.equal(resolvedByToolResult.pendingToolCount, 0);
+  assert.equal(resolvedByToolResult.pendingToolAtMs, 0);
+  assert.equal(resolvedByResult.pendingToolCount, 0);
+  assert.equal(resolvedByResult.pendingToolAtMs, 0);
 });
 
 test('normalizes Claude Code CLI sessions into provider threads', () => {
@@ -127,6 +276,30 @@ test('prefers Claude result usage over duplicate assistant usage', () => {
   assert.equal(signals.todayTokenUsage, 30);
 });
 
+test('reads Claude Desktop usage cache as rate limits', async () => {
+  const appDir = await mkdtemp(path.join(os.tmpdir(), 'claude-usage-cache-'));
+  await writeClaudeUsageCache(appDir, {
+    five_hour: {
+      utilization: 41,
+      resets_at: '2026-05-12T08:30:00.000Z',
+    },
+    seven_day: {
+      utilization: 5,
+      resets_at: '2026-05-16T12:00:00.000Z',
+    },
+  });
+
+  const usageCache = await readClaudeUsageCache({ appDir });
+
+  assert.equal(usageCache.source, 'claude-desktop-cache');
+  assert.equal(usageCache.organizationId, 'org_123');
+  assert.equal(usageCache.observedAtMs, Date.parse('Tue, 12 May 2026 08:24:03 GMT'));
+  assert.equal(usageCache.rateLimits.primary.used_percent, 41);
+  assert.equal(usageCache.rateLimits.primary.resets_at, Date.parse('2026-05-12T08:30:00.000Z') / 1000);
+  assert.equal(usageCache.rateLimits.secondary.used_percent, 5);
+  assert.equal(usageCache.rateLimits.secondary.window_minutes, 10_080);
+});
+
 test('loads Claude Cowork desktop metadata and audit signals', async () => {
   const appDir = await mkdtemp(path.join(os.tmpdir(), 'claude-app-'));
   const root = path.join(appDir, 'local-agent-mode-sessions', 'account', 'workspace');
@@ -169,6 +342,16 @@ test('loads Claude Cowork desktop metadata and audit signals', async () => {
       usage: { input_tokens: 500, output_tokens: 200 },
     },
   ]));
+  await writeClaudeUsageCache(appDir, {
+    five_hour: {
+      utilization: 38,
+      resets_at: '2026-05-09T04:30:00.000Z',
+    },
+    seven_day: {
+      utilization: 12,
+      resets_at: '2026-05-16T12:00:00.000Z',
+    },
+  }, { observedAt: 'Sat, 09 May 2026 02:01:00 GMT' });
 
   const result = await loadClaudeDesktopCoworkThreads({
     appDir,
@@ -183,6 +366,11 @@ test('loads Claude Cowork desktop metadata and audit signals', async () => {
   assert.equal(result.threads[0].cwd, '/Users/example/research');
   assert.equal(result.threads[0].tokensUsed, 700);
   assert.equal(result.threads[0].resumeCommand, 'open -a Claude');
+  assert.equal(result.threads[0].isAgentCompleted, null);
+  assert.equal(result.threads[0].agentRunning, false);
+  assert.equal(result.threads[0].rateLimits.primary.used_percent, 38);
+  assert.equal(result.threads[0].rateLimits.secondary.used_percent, 12);
+  assert.equal(result.threads[0].rateLimitUpdatedAtMs, Date.parse('Sat, 09 May 2026 02:01:00 GMT'));
 });
 
 test('deduplicates Claude Desktop Code sessions from the CLI provider', async () => {
@@ -225,6 +413,121 @@ test('deduplicates Claude Desktop Code sessions from the CLI provider', async ()
   assert.equal(result.threads.filter((thread) => thread.provider === 'claude-desktop-code').length, 1);
 });
 
+test('deduplicates Claude Desktop Code metadata that points at the same CLI session', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-desktop-code-dedupe-'));
+  const projectsDir = path.join(dir, 'projects', '-Users-example-project');
+  const appDir = path.join(dir, 'Claude');
+  const desktopDir = path.join(appDir, 'claude-code-sessions', 'account', 'workspace');
+  const cliSessionId = 'cli_shared';
+  await mkdir(projectsDir, { recursive: true });
+  await mkdir(desktopDir, { recursive: true });
+  await writeFile(path.join(projectsDir, `${cliSessionId}.jsonl`), jsonl([
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T01:12:00.000Z',
+      sessionId: cliSessionId,
+      cwd: '/Users/example/project',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_pending',
+            name: 'Bash',
+            input: { description: 'Check status' },
+          },
+        ],
+      },
+    },
+  ]));
+  await writeFile(path.join(desktopDir, 'local_old.json'), JSON.stringify({
+    sessionId: 'local_old',
+    cliSessionId,
+    originCwd: '/Users/example/project',
+    createdAt: Date.parse('2026-05-09T01:00:00.000Z'),
+    lastActivityAt: Date.parse('2026-05-09T01:05:00.000Z'),
+    title: 'Older duplicate',
+  }));
+  await writeFile(path.join(desktopDir, 'local_new.json'), JSON.stringify({
+    sessionId: 'local_new',
+    cliSessionId,
+    originCwd: '/Users/example/project',
+    createdAt: Date.parse('2026-05-09T01:00:00.000Z'),
+    lastActivityAt: Date.parse('2026-05-09T01:10:00.000Z'),
+    title: 'Newer duplicate',
+  }));
+
+  const result = await loadClaudeAgentThreads({
+    appDir,
+    projectsDir,
+    nowMs: Date.parse('2026-05-09T03:00:00.000Z'),
+    todayStartMs: Date.parse('2026-05-09T00:00:00.000Z'),
+    runCommand: async () => ({ stdout: '2.1.89 (Claude Code)' }),
+  });
+  const desktopThreads = result.threads.filter((thread) => thread.provider === 'claude-desktop-code');
+
+  assert.equal(desktopThreads.length, 1);
+  assert.equal(desktopThreads[0].id, 'claude-desktop-code:local_new');
+  assert.equal(desktopThreads[0].pendingToolCount, 0);
+});
+
+test('uses Claude Cowork incomplete metadata as a running signal', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T01:00:00.000Z',
+      session_id: 'audit_123',
+      message: { role: 'user', content: '持续研究这个问题' },
+    },
+    {
+      type: 'result',
+      timestamp: '2026-05-09T01:20:00.000Z',
+      session_id: 'audit_123',
+      terminal_reason: 'completed',
+      result: '阶段性完成',
+      usage: { input_tokens: 10, output_tokens: 20 },
+    },
+  ]), { todayStartMs: Date.parse('2026-05-09T00:00:00.000Z') });
+  const thread = normalizeClaudeDesktopCoworkSession({
+    sessionId: 'local_running',
+    cliSessionId: 'cli_running',
+    cwd: '/Users/example/research',
+    createdAt: Date.parse('2026-05-09T01:00:00.000Z'),
+    lastActivityAt: Date.parse('2026-05-09T01:30:00.000Z'),
+    model: 'claude-opus-4-6',
+    isArchived: false,
+    isAgentCompleted: false,
+    title: '持续研究',
+    hostLoopMode: true,
+  }, {
+    signals,
+  }, Date.parse('2026-05-09T03:00:00.000Z'));
+
+  assert.equal(thread.provider, 'claude-desktop-cowork');
+  assert.equal(thread.isAgentCompleted, false);
+  assert.equal(thread.agentRunning, true);
+  assert.equal(thread.status, 'running');
+  assert.equal(thread.currentTurnStartedAtMs, Date.parse('2026-05-09T01:00:00.000Z'));
+});
+
+test('normalizes Claude Desktop Code sessions with a desktop resume deep link', () => {
+  const cliSessionId = '123e4567-e89b-12d3-a456-426614174000';
+  const thread = normalizeClaudeDesktopCodeSession({
+    sessionId: 'local_123',
+    cliSessionId,
+    originCwd: '/Users/example/project',
+    createdAt: Date.parse('2026-05-09T01:00:00.000Z'),
+    lastActivityAt: Date.parse('2026-05-09T01:10:00.000Z'),
+    title: '桌面 Code 任务',
+    model: 'claude-sonnet-4-6',
+  }, {}, Date.parse('2026-05-09T03:00:00.000Z'));
+
+  assert.equal(thread.provider, 'claude-desktop-code');
+  assert.equal(thread.appDeepLink, `claude://resume?session=${cliSessionId}`);
+  assert.equal(thread.resumeCommand, `open 'claude://resume?session=${cliSessionId}'`);
+  assert.equal(thread.cliSessionId, cliSessionId);
+});
+
 test('opens Claude CLI sessions in Terminal on macOS', async () => {
   const calls = [];
   const result = await openClaudeThread({
@@ -243,4 +546,29 @@ test('opens Claude CLI sessions in Terminal on macOS', async () => {
   assert.equal(result.method, 'claude-terminal');
   assert.equal(calls[0].command, 'osascript');
   assert.match(calls[0].args.join('\n'), /claude --resume ses_cli/);
+});
+
+test('opens Claude Desktop Code sessions through the registered resume deep link', async () => {
+  const cliSessionId = '123e4567-e89b-12d3-a456-426614174000';
+  const appDeepLink = `claude://resume?session=${cliSessionId}`;
+  const calls = [];
+  const result = await openClaudeThread({
+    provider: 'claude-desktop-code',
+    externalId: 'local_123',
+    cliSessionId,
+    appDeepLink,
+    resumeCommand: `open '${appDeepLink}'`,
+  }, {
+    platform: 'darwin',
+    runCommand: async (command, args) => {
+      calls.push({ command, args });
+    },
+  });
+
+  assert.equal(result.opened, true);
+  assert.equal(result.method, 'claude-desktop-deeplink');
+  assert.deepEqual(calls[0], {
+    command: 'open',
+    args: [appDeepLink],
+  });
 });

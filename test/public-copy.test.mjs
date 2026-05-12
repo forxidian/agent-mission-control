@@ -15,6 +15,12 @@ test('uses Chinese copy for visible system fields', async () => {
     '本地多 Agent 控制台',
     '等待数据',
     '自动刷新',
+    '安装应用',
+    '安装为应用',
+    '打开应用',
+    '打开桌面应用',
+    '收起',
+    '收起到 Dock',
     '监控未启动',
     '监控中',
     '心跳',
@@ -101,6 +107,73 @@ test('uses Chinese copy for visible system fields', async () => {
   }
 });
 
+test('declares an installable PWA shell without caching local API payloads', async () => {
+  const [html, app, styles, manifest, serviceWorker] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+    readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'),
+    readFile(new URL('../public/service-worker.js', import.meta.url), 'utf8'),
+  ]);
+  const manifestJson = JSON.parse(manifest);
+
+  assert.match(html, /rel="manifest" href="\/manifest\.webmanifest"/);
+  assert.match(html, /id="app-install-button"/);
+  assert.match(html, /id="app-minimize-button"/);
+  assert.match(app, /beforeinstallprompt/);
+  assert.doesNotMatch(app, /beforeunload/);
+  assert.match(app, /navigator\.serviceWorker\.register\('\/service-worker\.js'/);
+  assert.match(app, /navigator\.getInstalledRelatedApps/);
+  assert.match(app, /web\+agentmissioncontrol:open/);
+  assert.match(app, /fetch\('\/api\/app\/installed'/);
+  assert.match(app, /fetch\('\/api\/app\/open-installed', \{ method: 'POST' \}/);
+  assert.match(app, /fetch\('\/api\/app\/minimize-installed', \{ method: 'POST' \}/);
+  assert.match(app, /window\.launchQueue\?\.setConsumer/);
+  assert.match(styles, /\.pwa-install-button\s*\{/);
+  assert.match(styles, /\.pwa-window-button\s*\{/);
+  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*left:\s*calc\(env\(titlebar-area-x,\s*0px\) \+ 74px\);/);
+  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*backdrop-filter:\s*blur\(12px\);/);
+  assert.equal(manifestJson.name, 'Agent Mission Control');
+  assert.equal(manifestJson.start_url, '/');
+  assert.equal(manifestJson.scope, '/');
+  assert.equal(manifestJson.display, 'standalone');
+  assert.deepEqual(manifestJson.launch_handler.client_mode, ['focus-existing', 'navigate-existing', 'auto']);
+  assert.deepEqual(manifestJson.protocol_handlers, [{
+    protocol: 'web+agentmissioncontrol',
+    url: '/?launch=%s',
+  }]);
+  assert.ok(manifestJson.related_applications.some((appInfo) => (
+    appInfo.platform === 'webapp'
+    && appInfo.url === '/manifest.webmanifest'
+    && appInfo.id === '/'
+  )));
+  assert.ok(manifestJson.icons.some((icon) => icon.sizes === '192x192' && icon.type === 'image/png'));
+  assert.ok(manifestJson.icons.some((icon) => icon.sizes === '512x512' && icon.type === 'image/png'));
+  assert.match(serviceWorker, /CACHE_NAME = 'agent-mission-control-shell-v1'/);
+  assert.match(serviceWorker, /url\.pathname\.startsWith\('\/api\/'\)/);
+  assert.match(serviceWorker, /event\.request\.mode === 'navigate'/);
+});
+
+test('uses topbar metrics as panel shortcuts', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /data-topbar-action="running"/);
+  assert.match(app, /data-topbar-action="pending"/);
+  assert.match(app, /function focusTopbarAction\(action\)/);
+  assert.match(app, /elements\.searchInput\.value = ''/);
+  assert.match(app, /elements\.providerFilter\.value = 'all'/);
+  assert.match(app, /elements\.statusFilter\.value = 'running'/);
+  assert.match(app, /state\.inboxExpanded = true/);
+  assert.match(app, /clicked\.closest\('\[data-topbar-action\]'\)/);
+  assert.match(styles, /\.topbar-metric-button\s*\{/);
+  assert.match(styles, /\.topbar-metric-button:hover\s*\{/);
+  assert.match(styles, /\.topbar-metric-button:focus-visible\s*\{/);
+});
+
 test('separates soft progress notifications from hard pending work copy', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -138,6 +211,23 @@ test('does not expose per-thread rate limit copy', async () => {
   ]) {
     assert.equal(app.includes(staleThreadCopy), false, `stale per-thread quota copy: ${staleThreadCopy}`);
   }
+});
+
+test('renders grouped quota rows for multiple LLM families without adding extra metric cards', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function quotaSummaryCards\(quota\)/);
+  assert.match(app, /const groups = Array\.isArray\(quota\?\.groups\) \? quota\.groups : \[\]/);
+  assert.match(app, /rows: quotaRows\(groups, 'realtime'\)/);
+  assert.match(app, /rows: quotaRows\(groups, 'weekly'\)/);
+  assert.match(app, /暂无 quota 信号/);
+  assert.match(app, /summary-card-with-lines/);
+  assert.match(styles, /\.summary-card-with-lines\s*\{/);
+  assert.match(styles, /\.summary-card-line\s*\{/);
+  assert.match(styles, /\.summary-card-line-label\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
 });
 
 test('clamps long thread and notification titles in list views', async () => {
@@ -185,6 +275,28 @@ test('prioritizes today token usage while retaining historical usage in thread r
   assert.match(styles, /\.token-history/);
 });
 
+test('keeps thread list row actions compact on smaller screens', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+  const listStart = app.indexOf('function renderThreads()');
+  const listEnd = app.indexOf('function renderNotifications', listStart);
+  const listSource = app.slice(listStart, listEnd);
+  const detailStart = app.indexOf('function renderDetail(');
+  const detailEnd = app.indexOf('function renderDashboard', detailStart);
+  const detailSource = app.slice(detailStart, detailEnd);
+
+  assert.notEqual(listStart, -1);
+  assert.notEqual(listEnd, -1);
+  assert.doesNotMatch(listSource, /data-copy-command-id/);
+  assert.match(detailSource, /data-copy-command-id/);
+  assert.match(styles, /\.row-actions,[\s\S]*\.detail-actions\s*\{[\s\S]*flex-wrap:\s*wrap;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.thread-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.controls > \.toggle\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.summary-section-heading\s*\{[\s\S]*flex-direction:\s*column;/);
+});
+
 test('opens thread deep links without waiting for the local server round trip', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const start = app.indexOf('async function openThread');
@@ -198,6 +310,32 @@ test('opens thread deep links without waiting for the local server round trip', 
     openThreadSource.indexOf('window.location.href = thread.appDeepLink') < openThreadSource.indexOf('fetch(`/api/threads/'),
     'Codex deep link path should run before the server opener fallback',
   );
+});
+
+test('marks notifications done optimistically without a full notification refresh', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const doneStart = app.indexOf('async function markNotificationDone');
+  const doneEnd = app.indexOf('async function snoozeNotification', doneStart);
+  const updateStart = app.indexOf('async function updateNotification');
+  const updateEnd = app.indexOf('async function markNotificationDone', updateStart);
+  const loadStart = app.indexOf('async function loadDashboard');
+  const loadEnd = app.indexOf('async function loadNotifications', loadStart);
+  const doneSource = app.slice(doneStart, doneEnd);
+  const updateSource = app.slice(updateStart, updateEnd);
+  const loadSource = app.slice(loadStart, loadEnd);
+
+  assert.notEqual(doneStart, -1);
+  assert.notEqual(doneEnd, -1);
+  assert.notEqual(updateStart, -1);
+  assert.notEqual(updateEnd, -1);
+  assert.match(doneSource, /markNotificationDoneLocally\(notificationId\)/);
+  assert.ok(
+    doneSource.indexOf('markNotificationDoneLocally(notificationId)')
+      < doneSource.indexOf('await updateNotification(notificationId'),
+    'Done clicks should update the visible inbox before waiting on persistence',
+  );
+  assert.doesNotMatch(updateSource, /loadNotifications\(/);
+  assert.doesNotMatch(loadSource, /loadNotifications\(/);
 });
 
 test('offers privacy-limited thread summary copy from the detail panel', async () => {
