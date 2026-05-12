@@ -251,7 +251,7 @@ P0 不读取完整 JSONL 正文，降低隐私和解析复杂度。
 
 按 provider 分开实现：
 
-- Codex：支持。读取 `thread.rolloutPath` 的尾部 JSONL，解析最近 `user_message` 到 `agent_message` final answer 的完整 turn。读取上限为 512 KiB，prompt 内容上限为 24,000 字符，preview 上限为 800 字符；malformed JSONL 行会被忽略。
+- Codex：支持。读取 `thread.rolloutPath` 的尾部 JSONL，解析最近 `user_message` 到 `agent_message` final answer 的完整 turn。读取从 512 KiB tail 起步；如果长 final answer 把对应 user message 挤出窗口，则按倍数渐进扩读，最高 16 MiB。prompt 内容上限为 24,000 字符，preview 上限为 800 字符；malformed JSONL 行会被忽略。
 - Claude Code CLI：暂不支持自动定位。当前 `claude-data` 只提供 dashboard 所需的标准 thread 字段；没有稳定的 per-thread JSONL 路径暴露给 review extractor。P1 不猜 `~/.claude` 私有 cache，返回 422。
 - OpenCode：暂不支持。P1 不猜内部 cache；如果后续有稳定 export 或 thread transcript path，再接入 extractor。当前返回 422。
 

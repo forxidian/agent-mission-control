@@ -39,9 +39,10 @@ Review workflow:
   signals. It does not read provider transcript files.
 - The `latest-turn` review input can read more local session content. In P1 it
   is supported for Codex threads with an explicit `rolloutPath`; Mission
-  Control reads a bounded tail of that JSONL file and sends the latest
-  user-to-final-Agent turn to the target CLI Agent. Malformed JSONL lines are
-  ignored.
+  Control starts with a bounded tail of that JSONL file and can progressively
+  expand the read when a long final answer hides the matching user message.
+  The extracted prompt content remains capped before it is sent to the target
+  CLI Agent. Malformed JSONL lines are ignored.
 - Claude Code and OpenCode `latest-turn` inputs return an explicit unavailable
   error unless Mission Control has a stable transcript path or export source.
   The app does not guess private provider cache locations for this mode.

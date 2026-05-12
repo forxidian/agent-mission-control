@@ -429,6 +429,150 @@ test('limits latest-turn review input selector to Codex threads', async () => {
   assert.match(context.claudeOptions, /value="thread-summary"/);
 });
 
+test('refreshes review input preview when input mode changes', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const keyStart = app.indexOf('function reviewContentKey');
+  const keyEnd = app.indexOf('\nfunction selectedReviewInputMode', keyStart);
+  const changeStart = app.indexOf('async function changeReviewInputMode');
+  const changeEnd = app.indexOf('\nasync function refreshReviewJobs', changeStart);
+
+  assert.notEqual(keyStart, -1);
+  assert.notEqual(keyEnd, -1);
+  assert.notEqual(changeStart, -1);
+  assert.notEqual(changeEnd, -1);
+
+  const context = {
+    requested: [],
+    renders: 0,
+    notices: [],
+    state: {
+      review: {
+        inputModeByThread: new Map(),
+        contentByThread: new Map(),
+        contentErrorsByThread: new Map(),
+        isLoading: false,
+      },
+    },
+    async loadReviewContent(threadId, mode) {
+      globalThis.requested.push([threadId, mode]);
+      return { threadId, mode, preview: 'preview' };
+    },
+    renderSelectedDetail() {
+      globalThis.renders += 1;
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.requested = context.requested;
+  globalThis.renders = context.renders;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(keyStart, keyEnd)}
+      ${app.slice(changeStart, changeEnd)}
+      changeReviewInputMode('thread-1', 'thread-summary');
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.requested;
+    delete globalThis.renders;
+    delete globalThis.notices;
+  }
+
+  assert.deepEqual(context.requested, [['thread-1', 'thread-summary']]);
+  assert.equal(context.state.review.inputModeByThread.get('thread-1'), 'thread-summary');
+  assert.equal(context.state.review.isLoading, false);
+  assert.equal(context.renders >= 2, true);
+  assert.deepEqual(context.notices, []);
+});
+
+test('submits review jobs with the selected input mode payload', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const submitStart = app.indexOf('async function submitReview');
+  const submitEnd = app.indexOf('\nasync function copyReviewResult', submitStart);
+
+  assert.notEqual(submitStart, -1);
+  assert.notEqual(submitEnd, -1);
+
+  class FakeFormData {
+    constructor(form) {
+      this.form = form;
+    }
+
+    get(key) {
+      return this.form.values[key] || '';
+    }
+  }
+
+  const context = {
+    payload: null,
+    notices: [],
+    state: {
+      review: {
+        isLoading: false,
+        jobsByThread: new Map(),
+      },
+    },
+    FormData: FakeFormData,
+    JSON,
+    findThread(threadId) {
+      return threadId === 'thread-1' ? { id: threadId } : null;
+    },
+    renderSelectedDetail() {},
+    async fetchJson(_url, options) {
+      globalThis.payload = JSON.parse(options.body);
+      return { job: { id: 'review-1', status: 'queued' } };
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+    async refreshReviewJobs() {},
+    syncReviewPolling() {},
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+  };
+
+  globalThis.payload = context.payload;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(submitStart, submitEnd)}
+      submitReview({
+        dataset: { reviewFormThreadId: 'thread-1' },
+        values: {
+          targetProvider: 'claude-code-cli',
+          targetModel: 'sonnet',
+          templateId: 'technical-review',
+          inputMode: 'latest-turn'
+        }
+      });
+    `, context);
+    context.payload = globalThis.payload;
+  } finally {
+    delete globalThis.payload;
+    delete globalThis.notices;
+  }
+
+  assert.deepEqual(context.payload, {
+    sourceThreadId: 'thread-1',
+    targetProvider: 'claude-code-cli',
+    targetModel: 'sonnet',
+    templateId: 'technical-review',
+    inputMode: 'latest-turn',
+  });
+  assert.equal(context.state.review.jobsByThread.get('thread-1')[0].id, 'review-1');
+  assert.deepEqual(context.notices, ['评审任务已启动。']);
+});
+
 test('formats token totals with compact M and B units for consistent scanning', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const match = app.match(/function formatTokens\(value\) \{[\s\S]*?\n\}/);

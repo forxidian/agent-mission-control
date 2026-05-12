@@ -161,6 +161,30 @@ test('Codex latest-turn mode truncates long turn content with preview metadata',
   assert.equal(result.truncated, true);
 });
 
+test('Codex latest-turn mode expands rollout reads when long final output hides the user message', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'amc-review-turn-expand-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  const longFinal = '最终输出 '.repeat(90_000);
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ payload: { type: 'user_message', message: '请评审这轮被长输出挤出的用户输入' } }),
+    JSON.stringify({ payload: { type: 'agent_message', message: longFinal, phase: 'final_answer' } }),
+  ].join('\n'));
+
+  const result = await getReviewContentForThread({
+    thread: {
+      id: 'thread-1',
+      provider: 'codex',
+      rolloutPath,
+    },
+    mode: 'latest-turn',
+  });
+
+  assert.match(result.content, /用户输入:\n请评审这轮被长输出挤出的用户输入/);
+  assert.match(result.content, /Agent 输出:\n最终输出/);
+  assert.equal(result.truncated, true);
+});
+
 test('latest-turn mode returns 422 for providers without stable transcript support', async () => {
   await assert.rejects(
     () => getReviewContentForThread({

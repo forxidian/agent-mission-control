@@ -2,7 +2,8 @@ import { open, stat } from 'node:fs/promises';
 
 const DEFAULT_PREVIEW_CHARS = 800;
 const DEFAULT_MAX_CONTENT_CHARS = 24000;
-const DEFAULT_MAX_ROLLOUT_BYTES = 512 * 1024;
+const DEFAULT_INITIAL_ROLLOUT_BYTES = 512 * 1024;
+const DEFAULT_MAX_ROLLOUT_BYTES = 16 * 1024 * 1024;
 const SOURCE_DESCRIPTIONS = {
   'latest-agent-signal': '最近 Agent 输出信号',
   'thread-summary': '线程摘要和最近 Agent 输出',
@@ -66,9 +67,13 @@ async function readTail(filePath, maxBytes) {
     const buffer = Buffer.alloc(length);
     await handle.read(buffer, 0, length, start);
     const text = buffer.toString('utf8');
-    if (start === 0) return text;
+    if (start === 0) return { text, start, size: info.size };
     const firstNewline = text.indexOf('\n');
-    return firstNewline >= 0 ? text.slice(firstNewline + 1) : text;
+    return {
+      text: firstNewline >= 0 ? text.slice(firstNewline + 1) : text,
+      start,
+      size: info.size,
+    };
   } finally {
     await handle.close();
   }
@@ -140,32 +145,49 @@ function parseLatestCodexTurn(jsonlText) {
   return latestCompleteTurn;
 }
 
-async function codexLatestTurnContent(thread, maxRolloutBytes) {
+async function codexLatestTurnContent(thread, {
+  initialRolloutBytes = DEFAULT_INITIAL_ROLLOUT_BYTES,
+  maxRolloutBytes = DEFAULT_MAX_ROLLOUT_BYTES,
+} = {}) {
   if (!thread.rolloutPath) {
     throw httpError('Codex latest-turn requires a rollout path', 422);
   }
 
-  let text;
+  let bytesToRead = Math.max(1, Math.min(initialRolloutBytes, maxRolloutBytes));
+  let lastError = null;
   try {
-    text = await readTail(thread.rolloutPath, maxRolloutBytes);
+    while (bytesToRead > 0) {
+      const tail = await readTail(thread.rolloutPath, bytesToRead);
+      const turn = parseLatestCodexTurn(tail.text);
+      if (turn) {
+        return [
+          '最近一轮对话',
+          '',
+          '用户输入:',
+          turn.userText,
+          '',
+          'Agent 输出:',
+          turn.agentTexts.join('\n\n'),
+        ].join('\n');
+      }
+
+      if (tail.start === 0 || bytesToRead >= tail.size || bytesToRead >= maxRolloutBytes) {
+        break;
+      }
+
+      const nextBytes = Math.min(bytesToRead * 2, maxRolloutBytes, tail.size);
+      if (nextBytes === bytesToRead) break;
+      bytesToRead = nextBytes;
+    }
   } catch (error) {
-    throw httpError(`Unable to read Codex rollout for latest-turn: ${error.message}`, 422);
+    lastError = error;
   }
 
-  const turn = parseLatestCodexTurn(text);
-  if (!turn) {
-    throw httpError('Codex latest-turn is not available for this thread', 422);
+  if (lastError) {
+    throw httpError(`Unable to read Codex rollout for latest-turn: ${lastError.message}`, 422);
   }
 
-  return [
-    '最近一轮对话',
-    '',
-    '用户输入:',
-    turn.userText,
-    '',
-    'Agent 输出:',
-    turn.agentTexts.join('\n\n'),
-  ].join('\n');
+  throw httpError('Codex latest-turn is not available for this thread', 422);
 }
 
 function contentResult({
@@ -193,6 +215,7 @@ export async function getReviewContentForThread({
   mode = 'latest-agent-signal',
   maxPreviewChars = DEFAULT_PREVIEW_CHARS,
   maxContentChars = DEFAULT_MAX_CONTENT_CHARS,
+  initialRolloutBytes = DEFAULT_INITIAL_ROLLOUT_BYTES,
   maxRolloutBytes = DEFAULT_MAX_ROLLOUT_BYTES,
 } = {}) {
   if (!thread) {
@@ -234,7 +257,7 @@ export async function getReviewContentForThread({
     return contentResult({
       thread,
       mode,
-      content: await codexLatestTurnContent(thread, maxRolloutBytes),
+      content: await codexLatestTurnContent(thread, { initialRolloutBytes, maxRolloutBytes }),
       sourceDescription: SOURCE_DESCRIPTIONS[mode],
       maxContentChars,
       maxPreviewChars,
