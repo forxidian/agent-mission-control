@@ -1604,6 +1604,109 @@ h3 {
   font-weight: 500;
 }
 
+.review-panel {
+  gap: 14px;
+}
+
+.review-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.review-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.review-form label span,
+.review-preview span {
+  color: var(--muted);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.review-form select,
+.review-form input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #fffaf0;
+}
+
+.review-preview,
+.review-results {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.review-preview pre,
+.review-job pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.review-preview pre {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.review-results-heading,
+.review-job-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.review-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.review-job {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.review-job-heading span,
+.review-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-job[data-review-status="failed"] {
+  border-color: rgba(162, 78, 57, 0.52);
+}
+
+.review-job[data-review-status="succeeded"] {
+  border-color: rgba(78, 117, 89, 0.42);
+}
+
 .path-line,
 .message-line {
   overflow-wrap: anywhere;
@@ -1782,6 +1885,7 @@ h3 {
   .summary-card-grid,
   .summary-card-grid-lifetime,
   .controls,
+  .review-form,
   .detail-grid,
   .detail-grid-compact {
     grid-template-columns: 1fr;
