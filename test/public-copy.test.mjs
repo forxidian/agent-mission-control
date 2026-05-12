@@ -401,6 +401,34 @@ test('offers privacy-limited thread summary copy from the detail panel', async (
   assert.match(app, /Agent 输出信号/);
 });
 
+test('limits latest-turn review input selector to Codex threads', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const constStart = app.indexOf('const REVIEW_INPUT_MODES =');
+  const constEnd = app.indexOf('];', constStart) + 2;
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const codexStart = app.indexOf('function isCodexReviewThread');
+  const optionsEnd = app.indexOf('\nfunction reviewInputPrivacyHint', codexStart);
+
+  assert.notEqual(constStart, -1);
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(codexStart, -1);
+
+  const context = { codexOptions: '', claudeOptions: '' };
+  vm.runInNewContext(`
+    ${app.slice(constStart, constEnd)}
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(codexStart, optionsEnd)}
+    codexOptions = reviewInputModeOptions('latest-turn', { provider: 'codex' });
+    claudeOptions = reviewInputModeOptions('latest-turn', { provider: 'claude-code-cli' });
+  `, context);
+
+  assert.match(context.codexOptions, /value="latest-turn"/);
+  assert.doesNotMatch(context.claudeOptions, /value="latest-turn"/);
+  assert.match(context.claudeOptions, /value="thread-summary"/);
+});
+
 test('formats token totals with compact M and B units for consistent scanning', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const match = app.match(/function formatTokens\(value\) \{[\s\S]*?\n\}/);

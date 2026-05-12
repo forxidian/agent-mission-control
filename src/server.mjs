@@ -684,18 +684,19 @@ export function createServer({
             return;
           }
 
-          const dashboard = await loadDashboard();
-          const thread = findDashboardThread(dashboard, sourceThreadId);
-          const content = await getReviewContentForThread({
-            thread,
-            mode: body.inputMode || 'latest-agent-signal',
-          });
           const targets = await loadReviewTargets();
           const target = targets.items?.find((candidate) => candidate.provider === targetProvider);
           if (!target || !target.available) {
             sendJson(response, 422, { error: 'Selected review target is not available' });
             return;
           }
+
+          const dashboard = await loadDashboard();
+          const thread = findDashboardThread(dashboard, sourceThreadId);
+          const content = await getReviewContentForThread({
+            thread,
+            mode: body.inputMode || 'latest-agent-signal',
+          });
 
           const source = reviewSourceForThread(thread);
           const templateId = body.templateId || 'technical-review';

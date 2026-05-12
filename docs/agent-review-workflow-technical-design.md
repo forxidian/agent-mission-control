@@ -339,7 +339,7 @@ MVP 模板：
 点击后打开轻量面板或 dialog：
 
 - 源线程标题。
-- 输入模式：最近 Agent 输出、最近一轮对话、线程摘要和最近输出。
+- 输入模式：最近 Agent 输出、线程摘要和最近输出；Codex 线程额外显示最近一轮对话。
 - 目标 Agent，从 `GET /api/review-targets` 获取。
 - 评审模板。
 - 输入预览。
@@ -385,6 +385,7 @@ Review job 状态通过 polling 刷新：
 - `GET /api/threads/:id/review-content?mode=thread-summary` 返回摘要内容。
 - `GET /api/threads/:id/review-content?mode=latest-turn` 对 Codex 返回最近 turn，对不支持 provider 返回 422。
 - `POST /api/reviews` 支持 `latest-turn` / `thread-summary` input mode。
+- `POST /api/reviews` 先校验目标 Agent 可用性，再读取 review input，避免无效目标触发额外本地 transcript 读取。
 
 ### Frontend copy tests
 

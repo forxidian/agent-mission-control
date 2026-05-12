@@ -1330,7 +1330,9 @@ function reviewContentKey(threadId, mode) {
 }
 
 function selectedReviewInputMode(threadId) {
-  return state.review.inputModeByThread.get(threadId) || 'latest-agent-signal';
+  const thread = findThread(threadId);
+  const selected = state.review.inputModeByThread.get(threadId) || 'latest-agent-signal';
+  return reviewInputModesForThread(thread).some(([id]) => id === selected) ? selected : 'latest-agent-signal';
 }
 
 function reviewContentForThread(threadId, mode = selectedReviewInputMode(threadId)) {
@@ -1360,8 +1362,18 @@ function reviewTemplateOptions(selected = 'technical-review') {
   )).join('');
 }
 
-function reviewInputModeOptions(selected = 'latest-agent-signal') {
-  return REVIEW_INPUT_MODES.map(([id, label]) => (
+function isCodexReviewThread(thread = {}) {
+  const provider = String(thread.provider || thread.source || '').toLowerCase();
+  return provider === 'codex' || provider === 'codex-cli' || provider === '';
+}
+
+function reviewInputModesForThread(thread = {}) {
+  if (isCodexReviewThread(thread)) return REVIEW_INPUT_MODES;
+  return REVIEW_INPUT_MODES.filter(([id]) => id !== 'latest-turn');
+}
+
+function reviewInputModeOptions(selected = 'latest-agent-signal', thread = {}) {
+  return reviewInputModesForThread(thread).map(([id, label]) => (
     `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
   )).join('');
 }
@@ -1432,7 +1444,7 @@ function renderReviewPanel(thread) {
       <form class="review-form" data-review-form-thread-id="${escapeHtml(thread.id)}">
         <label>
           <span>评审输入</span>
-          <select name="inputMode" data-review-input-mode-id="${escapeHtml(thread.id)}">${reviewInputModeOptions(inputMode)}</select>
+          <select name="inputMode" data-review-input-mode-id="${escapeHtml(thread.id)}">${reviewInputModeOptions(inputMode, thread)}</select>
         </label>
         <label>
           <span>目标 Agent</span>

@@ -429,6 +429,46 @@ test('POST /api/reviews can create a review job from thread-summary input mode',
   }
 });
 
+test('POST /api/reviews validates target availability before reading review content', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        title: 'Build review workflow',
+        lastAgentMessage: 'Agent output ready for review',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    loadReviewTargets: async () => ({
+      items: [{ provider: 'claude-code-cli', label: 'Claude Code CLI', runner: 'claude-print', available: false }],
+    }),
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/reviews`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceThreadId: 'thread-1',
+        targetProvider: 'claude-code-cli',
+        templateId: 'technical-review',
+        inputMode: 'latest-turn',
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 422);
+    assert.equal(body.error, 'Selected review target is not available');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('POST /api/reviews saves failed runner metadata', async () => {
   const reviewStore = createFakeReviewStore();
   const server = createServer({
