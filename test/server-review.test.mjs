@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createServer } from '../src/server.mjs';
 
 function listen(server) {
@@ -152,6 +155,79 @@ test('GET /api/threads/:id/review-content returns 404 and 422 style errors', asy
   }
 });
 
+test('GET /api/threads/:id/review-content returns thread summary mode content', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        providerLabel: 'Codex',
+        title: 'Review me',
+        projectName: 'mission',
+        latestUserMessage: '用户要求',
+        lastAgentMessage: 'Agent 输出',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(
+      `http://${address.address}:${address.port}/api/threads/thread-1/review-content?mode=thread-summary`,
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.mode, 'thread-summary');
+    assert.match(body.content, /线程: Review me/);
+    assert.match(body.content, /最近 Agent 输出信号: Agent 输出/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('GET /api/threads/:id/review-content returns Codex latest-turn mode content', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'amc-server-review-turn-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ payload: { type: 'user_message', message: '请做 P1' } }),
+    JSON.stringify({ payload: { type: 'agent_message', message: 'P1 已做', phase: 'final_answer' } }),
+  ].join('\n'));
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        title: 'Review me',
+        rolloutPath,
+        lastAgentMessage: 'Agent 输出',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(
+      `http://${address.address}:${address.port}/api/threads/thread-1/review-content?mode=latest-turn`,
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.mode, 'latest-turn');
+    assert.match(body.content, /用户输入:\n请做 P1/);
+    assert.match(body.content, /Agent 输出:\nP1 已做/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('POST /api/reviews creates a review job and saves a succeeded result', async () => {
   const reviewStore = createFakeReviewStore();
   const runnerCalls = [];
@@ -215,6 +291,139 @@ test('POST /api/reviews creates a review job and saves a succeeded result', asyn
     assert.equal(runnerCalls[0].model, 'sonnet');
     assert.equal(runnerCalls[0].cwd, '/repo');
     assert.match(runnerCalls[0].prompt, /Agent output ready for review/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('POST /api/reviews can create a review job from latest-turn input mode', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'amc-server-review-post-turn-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ payload: { type: 'user_message', message: '请评审最新一轮' } }),
+    JSON.stringify({ payload: { type: 'agent_message', message: '最新一轮结果', phase: 'final_answer' } }),
+  ].join('\n'));
+  const reviewStore = createFakeReviewStore();
+  const runnerCalls = [];
+  const server = createServer({
+    reviewStore,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        title: 'Build review workflow',
+        cwd: '/repo',
+        rolloutPath,
+        lastAgentMessage: 'Agent output ready for review',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    loadReviewTargets: async () => ({
+      items: [{ provider: 'claude-code-cli', label: 'Claude Code CLI', runner: 'claude-print', available: true }],
+    }),
+    runReview: async (payload) => {
+      runnerCalls.push(payload);
+      return {
+        ok: true,
+        resultText: 'Review succeeded',
+        resultPreview: 'Review succeeded',
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        truncatedResult: false,
+      };
+    },
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/reviews`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceThreadId: 'thread-1',
+        targetProvider: 'claude-code-cli',
+        templateId: 'technical-review',
+        inputMode: 'latest-turn',
+      }),
+    });
+    const body = await response.json();
+    await nextTick();
+    const saved = await reviewStore.getJob(body.job.id);
+
+    assert.equal(response.status, 202);
+    assert.equal(saved.inputMode, 'latest-turn');
+    assert.match(saved.inputPreview, /用户输入/);
+    assert.match(runnerCalls[0].prompt, /请评审最新一轮/);
+    assert.match(runnerCalls[0].prompt, /最新一轮结果/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('POST /api/reviews can create a review job from thread-summary input mode', async () => {
+  const reviewStore = createFakeReviewStore();
+  const runnerCalls = [];
+  const server = createServer({
+    reviewStore,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        title: 'Build review workflow',
+        projectName: 'agent-mission-control',
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        latestUserMessage: '请继续实现 P1',
+        lastAgentMessage: 'thread summary agent signal',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    loadReviewTargets: async () => ({
+      items: [{ provider: 'claude-code-cli', label: 'Claude Code CLI', runner: 'claude-print', available: true }],
+    }),
+    runReview: async (payload) => {
+      runnerCalls.push(payload);
+      return {
+        ok: true,
+        resultText: 'Review succeeded',
+        resultPreview: 'Review succeeded',
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        truncatedResult: false,
+      };
+    },
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/reviews`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceThreadId: 'thread-1',
+        targetProvider: 'claude-code-cli',
+        templateId: 'technical-review',
+        inputMode: 'thread-summary',
+      }),
+    });
+    const body = await response.json();
+    await nextTick();
+    const saved = await reviewStore.getJob(body.job.id);
+
+    assert.equal(response.status, 202);
+    assert.equal(saved.inputMode, 'thread-summary');
+    assert.match(saved.inputPreview, /Agent Mission Control 线程摘要/);
+    assert.match(runnerCalls[0].prompt, /线程: Build review workflow/);
+    assert.match(runnerCalls[0].prompt, /最近 Agent 输出信号: thread summary agent signal/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

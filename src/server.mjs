@@ -644,7 +644,7 @@ export function createServer({
         const threadId = decodeURIComponent(reviewContentMatch[1]);
         const dashboard = await loadDashboard();
         const thread = findDashboardThread(dashboard, threadId);
-        const content = getReviewContentForThread({
+        const content = await getReviewContentForThread({
           thread,
           mode: url.searchParams.get('mode') || 'latest-agent-signal',
         });
@@ -686,7 +686,7 @@ export function createServer({
 
           const dashboard = await loadDashboard();
           const thread = findDashboardThread(dashboard, sourceThreadId);
-          const content = getReviewContentForThread({
+          const content = await getReviewContentForThread({
             thread,
             mode: body.inputMode || 'latest-agent-signal',
           });

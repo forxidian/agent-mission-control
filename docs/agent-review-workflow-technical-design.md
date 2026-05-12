@@ -1,6 +1,6 @@
 # Agent Review Workflow Technical Design
 
-更新时间：2026-05-12
+更新时间：2026-05-13
 
 ## 当前项目基础
 
@@ -77,7 +77,7 @@ test/server-review.test.mjs
     runner: 'claude-print'
   },
   templateId: 'technical-review',
-  inputMode: 'latest-agent-signal',
+  inputMode: 'latest-agent-signal' | 'latest-turn' | 'thread-summary',
   inputPreview: 'truncated text for UI',
   resultText: '...',
   resultPreview: '...',
@@ -172,22 +172,28 @@ MVP 使用 JSONL：
 
 查询参数：
 
-- `mode=latest-agent-signal`
-
-MVP 只支持 `latest-agent-signal`。`thread-summary` 和 `latest-turn` 留作 P1，不在 P0 API 中承诺。
+- `mode=latest-agent-signal`：只使用 dashboard 已经展示的最近 Agent 输出信号。
+- `mode=thread-summary`：使用 Mission Control 标准 thread 字段生成摘要，并附带最近用户/Agent 信号。
+- `mode=latest-turn`：读取 provider 支持的本地 transcript，提取最近一轮 user -> Agent final answer。
 
 返回：
 
 ```js
 {
   threadId: '...',
-  mode: 'latest-agent-signal',
+  mode: 'latest-agent-signal' | 'latest-turn' | 'thread-summary',
   content: '...',
   preview: '...',
   truncated: false,
   sourceDescription: '最近 Agent 输出信号'
 }
 ```
+
+错误语义：
+
+- 缺少线程返回 404。
+- 空的 `latest-agent-signal`、缺失 Codex `rolloutPath`、无法解析最近完整 turn、或 provider 暂不支持 `latest-turn` 返回 422。
+- malformed JSONL 行必须跳过，不应让整个 preview 失败。
 
 ### `POST /api/reviews`
 
@@ -201,7 +207,7 @@ MVP 只支持 `latest-agent-signal`。`thread-summary` 和 `latest-turn` 留作 
   targetProvider: 'claude-code-cli',
   targetModel: 'sonnet',
   templateId: 'technical-review',
-  inputMode: 'latest-agent-signal'
+  inputMode: 'latest-agent-signal' | 'latest-turn' | 'thread-summary'
 }
 ```
 
@@ -230,15 +236,26 @@ P0 不读取完整 JSONL 正文，降低隐私和解析复杂度。
 
 `thread-summary` 不放入 P0 fallback。原因是用户要求评审的是另一个 Agent 的“消息/回复”，线程摘要会混入状态、路径和 token 信息，容易让目标 Agent 评审对象变形。
 
-### P1：读取最近 turn
+### P1：thread-summary
+
+`thread-summary` 不读取 provider transcript，只使用 Mission Control 当前 thread 标准字段：
+
+- title / provider / project / cwd / model / status
+- today token / historical token
+- latest meaningful user signal
+- latest Agent output signal
+
+它适合在不扩大到完整 transcript 的情况下，让目标 Agent 理解线程上下文。内容仍会作为 prompt 的一部分发送给目标本地 CLI Agent。
+
+### P1：latest-turn
 
 按 provider 分开实现：
 
-- Codex：读取 `thread.rolloutPath`，解析最近 user message 到 final answer。
-- Claude Code CLI：读取对应 `~/.claude/projects/**/*.jsonl` 文件，解析最近 user/assistant/result。
-- OpenCode：优先使用 `opencode export <sessionID>`，避免猜内部 cache 格式。
+- Codex：支持。读取 `thread.rolloutPath` 的尾部 JSONL，解析最近 `user_message` 到 `agent_message` final answer 的完整 turn。读取上限为 512 KiB，prompt 内容上限为 24,000 字符，preview 上限为 800 字符；malformed JSONL 行会被忽略。
+- Claude Code CLI：暂不支持自动定位。当前 `claude-data` 只提供 dashboard 所需的标准 thread 字段；没有稳定的 per-thread JSONL 路径暴露给 review extractor。P1 不猜 `~/.claude` 私有 cache，返回 422。
+- OpenCode：暂不支持。P1 不猜内部 cache；如果后续有稳定 export 或 thread transcript path，再接入 extractor。当前返回 422。
 
-P1 必须设置最大字节数和最大输出字符数，避免页面或 prompt 爆掉。
+这些限制是有意的本地状态边界：review extractor 只读 Mission Control 已知的 thread 字段和明确路径，不扫描或写入第三方 Agent 状态。
 
 ## Runner 设计
 
@@ -322,10 +339,11 @@ MVP 模板：
 点击后打开轻量面板或 dialog：
 
 - 源线程标题。
-- 输入模式，MVP 固定为“最近 Agent 输出”。
+- 输入模式：最近 Agent 输出、最近一轮对话、线程摘要和最近输出。
 - 目标 Agent，从 `GET /api/review-targets` 获取。
 - 评审模板。
 - 输入预览。
+- 隐私提示：`latest-turn` 会读取并发送更多本地会话内容给目标 CLI Agent。
 - 确认按钮。
 
 ### Review panel
@@ -352,7 +370,7 @@ Review job 状态通过 polling 刷新：
 ### Unit tests
 
 - `review-prompts`：不同模板生成稳定 prompt。
-- `review-content`：缺少 lastAgentMessage 时返回 422 风格错误，不悄悄 fallback 成线程摘要。
+- `review-content`：缺少 lastAgentMessage 时返回 422 风格错误，不悄悄 fallback 成线程摘要；覆盖 `thread-summary`、Codex `latest-turn`、unsupported provider 422、截断和 malformed JSONL 容错。
 - `review-jobs`：JSONL append、读取、按 id 去重、状态更新、compact、结果/stderr 截断。
 - `review-runners`：使用 fake `runCommand` 验证命令参数、stdin、timeout 和错误 metadata，不调用真实 CLI。
 
@@ -364,10 +382,13 @@ Review job 状态通过 polling 刷新：
 - `GET /api/reviews` 返回最新 job snapshot。
 - `GET /api/threads/:id/review-content` 找不到线程时返回 404。
 - `GET /api/threads/:id/review-content` 没有 Agent 输出时返回 422。
+- `GET /api/threads/:id/review-content?mode=thread-summary` 返回摘要内容。
+- `GET /api/threads/:id/review-content?mode=latest-turn` 对 Codex 返回最近 turn，对不支持 provider 返回 422。
+- `POST /api/reviews` 支持 `latest-turn` / `thread-summary` input mode。
 
 ### Frontend copy tests
 
-更新 `test/public-copy.test.mjs`，确保新增按钮文案和隐私提示存在。
+更新 `test/public-copy.test.mjs`，确保新增按钮、input mode selector 文案和隐私提示存在。
 
 ## 实施顺序
 

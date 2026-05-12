@@ -34,11 +34,22 @@ Review workflow:
 - The P0 review input is the recent Agent output signal already shown in the
   dashboard. It does not read complete provider transcripts or write back to
   Codex, OpenCode, or Claude state.
+- The `thread-summary` review input sends a bounded summary built from the
+  current thread's standard Mission Control fields plus recent user/Agent
+  signals. It does not read provider transcript files.
+- The `latest-turn` review input can read more local session content. In P1 it
+  is supported for Codex threads with an explicit `rolloutPath`; Mission
+  Control reads a bounded tail of that JSONL file and sends the latest
+  user-to-final-Agent turn to the target CLI Agent. Malformed JSONL lines are
+  ignored.
+- Claude Code and OpenCode `latest-turn` inputs return an explicit unavailable
+  error unless Mission Control has a stable transcript path or export source.
+  The app does not guess private provider cache locations for this mode.
 - Review job metadata and results are stored only in Agent Mission Control's
   own local state file: `~/.agent-mission-control/reviews.jsonl`.
-- Future complete-transcript review modes would expand local data exposure and
-  should require an explicit confirmation before sending that larger content to
-  a target CLI Agent.
+- Future complete-transcript review modes would expand local data exposure
+  beyond P1 and should require an explicit confirmation before sending that
+  larger content to a target CLI Agent.
 
 What it avoids:
 

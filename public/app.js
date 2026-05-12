@@ -17,7 +17,9 @@ const state = {
     openThreadId: '',
     targets: null,
     contentByThread: new Map(),
+    contentErrorsByThread: new Map(),
     jobsByThread: new Map(),
+    inputModeByThread: new Map(),
     isLoading: false,
     pollTimer: null,
   },
@@ -115,6 +117,11 @@ const REVIEW_TEMPLATES = [
   ['product-review', '产品/需求审查'],
   ['technical-review', '技术方案审查'],
   ['response-quality-review', '回复质量审查'],
+];
+const REVIEW_INPUT_MODES = [
+  ['latest-agent-signal', '最近 Agent 输出'],
+  ['latest-turn', '最近一轮对话'],
+  ['thread-summary', '线程摘要和最近输出'],
 ];
 
 function escapeHtml(value = '') {
@@ -1318,8 +1325,20 @@ function reviewJobsForThread(threadId) {
   return state.review.jobsByThread.get(threadId) || [];
 }
 
-function reviewContentForThread(threadId) {
-  return state.review.contentByThread.get(threadId) || null;
+function reviewContentKey(threadId, mode) {
+  return `${threadId}:${mode}`;
+}
+
+function selectedReviewInputMode(threadId) {
+  return state.review.inputModeByThread.get(threadId) || 'latest-agent-signal';
+}
+
+function reviewContentForThread(threadId, mode = selectedReviewInputMode(threadId)) {
+  return state.review.contentByThread.get(reviewContentKey(threadId, mode)) || null;
+}
+
+function reviewContentErrorForThread(threadId, mode = selectedReviewInputMode(threadId)) {
+  return state.review.contentErrorsByThread.get(reviewContentKey(threadId, mode)) || '';
 }
 
 function hasRunningReviewJob(threadId) {
@@ -1339,6 +1358,22 @@ function reviewTemplateOptions(selected = 'technical-review') {
   return REVIEW_TEMPLATES.map(([id, label]) => (
     `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
   )).join('');
+}
+
+function reviewInputModeOptions(selected = 'latest-agent-signal') {
+  return REVIEW_INPUT_MODES.map(([id, label]) => (
+    `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
+  )).join('');
+}
+
+function reviewInputPrivacyHint(mode) {
+  if (mode === 'latest-turn') {
+    return '最近一轮会读取并发送更多本地会话内容给目标 CLI Agent。';
+  }
+  if (mode === 'thread-summary') {
+    return '线程摘要会发送标准线程字段和最近输出信号给目标 CLI Agent。';
+  }
+  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整线程正文。';
 }
 
 function reviewTargetOptions(targets) {
@@ -1379,7 +1414,9 @@ function renderReviewPanel(thread) {
   if (state.review.openThreadId !== thread.id) return '';
 
   const targets = state.review.targets;
-  const content = reviewContentForThread(thread.id);
+  const inputMode = selectedReviewInputMode(thread.id);
+  const content = reviewContentForThread(thread.id, inputMode);
+  const contentError = reviewContentErrorForThread(thread.id, inputMode);
   const jobs = reviewJobsForThread(thread.id);
   const isLoading = state.review.isLoading;
   const targetOptions = reviewTargetOptions(targets);
@@ -1390,9 +1427,13 @@ function renderReviewPanel(thread) {
     <section class="detail-section detail-section-wide review-panel" aria-labelledby="review-panel-heading">
       <div class="detail-section-heading">
         <h3 id="review-panel-heading">交给另一个 Agent 评审</h3>
-        <p>评审只会发送当前预览里的最近 Agent 输出，不会读取完整线程正文。</p>
+        <p>${escapeHtml(reviewInputPrivacyHint(inputMode))}</p>
       </div>
       <form class="review-form" data-review-form-thread-id="${escapeHtml(thread.id)}">
+        <label>
+          <span>评审输入</span>
+          <select name="inputMode" data-review-input-mode-id="${escapeHtml(thread.id)}">${reviewInputModeOptions(inputMode)}</select>
+        </label>
         <label>
           <span>目标 Agent</span>
           <select name="targetProvider"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
@@ -1407,7 +1448,7 @@ function renderReviewPanel(thread) {
         </label>
         <div class="review-preview">
           <span>输入预览</span>
-          <pre>${escapeHtml(content?.preview || (isLoading ? '正在读取最近 Agent 输出...' : '暂无可评审的 Agent 输出'))}</pre>
+          <pre>${escapeHtml(content?.preview || contentError || (isLoading ? '正在读取评审输入...' : '暂无可评审的 Agent 输出'))}</pre>
         </div>
         <div class="detail-actions">
           <button class="action-button primary" type="submit"${targetReady && contentReady && !isLoading ? '' : ' disabled'}>开始评审</button>
@@ -1926,11 +1967,13 @@ async function loadReviewTargets() {
   return state.review.targets;
 }
 
-async function loadReviewContent(threadId) {
-  const content = await fetchJson(`/api/threads/${encodeURIComponent(threadId)}/review-content?mode=latest-agent-signal`, {
+async function loadReviewContent(threadId, mode = selectedReviewInputMode(threadId)) {
+  const key = reviewContentKey(threadId, mode);
+  const content = await fetchJson(`/api/threads/${encodeURIComponent(threadId)}/review-content?mode=${encodeURIComponent(mode)}`, {
     cache: 'no-store',
   });
-  state.review.contentByThread.set(threadId, content);
+  state.review.contentByThread.set(key, content);
+  state.review.contentErrorsByThread.delete(key);
   return content;
 }
 
@@ -1964,9 +2007,10 @@ async function openReviewPanel(threadId) {
   renderSelectedDetail();
 
   try {
+    const inputMode = selectedReviewInputMode(threadId);
     await Promise.all([
       loadReviewTargets(),
-      loadReviewContent(threadId),
+      loadReviewContent(threadId, inputMode),
       loadReviewJobs(threadId),
     ]);
   } catch (error) {
@@ -1975,6 +2019,23 @@ async function openReviewPanel(threadId) {
     state.review.isLoading = false;
     renderSelectedDetail();
     syncReviewPolling();
+  }
+}
+
+async function changeReviewInputMode(threadId, inputMode) {
+  state.review.inputModeByThread.set(threadId, inputMode);
+  state.review.isLoading = true;
+  renderSelectedDetail();
+
+  try {
+    await loadReviewContent(threadId, inputMode);
+  } catch (error) {
+    state.review.contentByThread.delete(reviewContentKey(threadId, inputMode));
+    state.review.contentErrorsByThread.set(reviewContentKey(threadId, inputMode), error.message);
+    showError(`无法读取评审输入：${error.message}`);
+  } finally {
+    state.review.isLoading = false;
+    renderSelectedDetail();
   }
 }
 
@@ -2073,7 +2134,7 @@ async function submitReview(form) {
         targetProvider: formData.get('targetProvider'),
         targetModel: formData.get('targetModel'),
         templateId: formData.get('templateId'),
-        inputMode: 'latest-agent-signal',
+        inputMode: formData.get('inputMode') || selectedReviewInputMode(threadId),
       }),
     });
     const jobs = reviewJobsForThread(threadId);
@@ -2410,6 +2471,12 @@ document.addEventListener('submit', (event) => {
   event.preventDefault();
   submitReview(form);
 });
+
+  document.addEventListener('change', (event) => {
+    const target = event.target instanceof Element ? event.target.closest('[data-review-input-mode-id]') : null;
+    if (!target) return;
+    changeReviewInputMode(target.dataset.reviewInputModeId, target.value);
+  });
 
 initializeInstallPrompt();
 initializeLaunchHandling();
