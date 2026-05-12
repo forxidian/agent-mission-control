@@ -1399,6 +1399,29 @@ function reviewTargetOptions(targets) {
   `).join('');
 }
 
+function buildReviewDebugSummary(job) {
+  return [
+    'Agent Mission Control 评审调试摘要',
+    '用途：排查本地 review job；不包含完整 prompt 或评审正文。',
+    '',
+    `- job: ${job.id || '-'}`,
+    `- 状态: ${reviewStatusLabel(job.status)}`,
+    `- 来源: ${job.source?.providerLabel || job.source?.provider || '-'} / ${job.source?.title || '-'}`,
+    `- 目标: ${job.target?.label || job.target?.provider || '-'}`,
+    `- runner: ${job.target?.runner || '-'}`,
+    `- 模型: ${job.target?.model || '-'}`,
+    `- 模板: ${job.templateId || '-'}`,
+    `- 输入模式: ${job.inputMode || '-'}`,
+    `- startedAt: ${formatTimestamp(job.startedAtMs)}`,
+    `- completedAt: ${formatTimestamp(job.completedAtMs)}`,
+    `- exitCode: ${job.exitCode ?? '-'}`,
+    `- timedOut: ${job.timedOut ? 'yes' : 'no'}`,
+    `- truncatedResult: ${job.truncatedResult ? 'yes' : 'no'}`,
+    `- error: ${job.error || '-'}`,
+    `- stderr: ${job.stderr || '-'}`,
+  ].join('\n');
+}
+
 function renderReviewJobs(jobs) {
   if (!jobs.length) return '<p class="empty-state compact">暂无评审记录。</p>';
 
@@ -1415,6 +1438,7 @@ function renderReviewJobs(jobs) {
           ${job.stderr && job.status === 'failed' ? `<p class="detail-note">stderr: ${escapeHtml(job.stderr)}</p>` : ''}
           <div class="detail-actions">
             <button class="action-button secondary" type="button" data-copy-review-id="${escapeHtml(job.id)}"${job.resultText ? '' : ' disabled'}>复制评审结果</button>
+            <button class="action-button secondary" type="button" data-copy-review-debug-id="${escapeHtml(job.id)}">复制调试摘要</button>
           </div>
         </article>
       `).join('')}
@@ -2178,6 +2202,22 @@ async function copyReviewResult(reviewId) {
   }
 }
 
+async function copyReviewDebugInfo(reviewId) {
+  const jobs = [...state.review.jobsByThread.values()].flat();
+  const job = jobs.find((candidate) => candidate.id === reviewId);
+  if (!job) {
+    showError('找不到这条评审记录，刷新后再试。');
+    return;
+  }
+
+  try {
+    await copyText(buildReviewDebugSummary(job));
+    showNotice('已复制评审调试摘要。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制评审调试摘要。');
+  }
+}
+
 async function openThread(threadId, sourceButton, { notificationId = '' } = {}) {
   const thread = findThread(threadId);
   if (!thread) {
@@ -2449,6 +2489,13 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const copyReviewDebugTarget = clicked.closest('[data-copy-review-debug-id]');
+  if (copyReviewDebugTarget) {
+    event.preventDefault();
+    copyReviewDebugInfo(copyReviewDebugTarget.dataset.copyReviewDebugId);
+    return;
+  }
+
   const doneTarget = clicked.closest('[data-notification-done-id]');
   if (doneTarget) {
     event.preventDefault();
@@ -2484,11 +2531,11 @@ document.addEventListener('submit', (event) => {
   submitReview(form);
 });
 
-  document.addEventListener('change', (event) => {
-    const target = event.target instanceof Element ? event.target.closest('[data-review-input-mode-id]') : null;
-    if (!target) return;
-    changeReviewInputMode(target.dataset.reviewInputModeId, target.value);
-  });
+document.addEventListener('change', (event) => {
+  const target = event.target instanceof Element ? event.target.closest('[data-review-input-mode-id]') : null;
+  if (!target) return;
+  changeReviewInputMode(target.dataset.reviewInputModeId, target.value);
+});
 
 initializeInstallPrompt();
 initializeLaunchHandling();

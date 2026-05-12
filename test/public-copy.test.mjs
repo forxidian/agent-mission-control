@@ -74,6 +74,8 @@ test('uses Chinese copy for visible system fields', async () => {
     '线程摘要和最近输出',
     '最近一轮会读取并发送更多本地会话内容给目标 CLI Agent。',
     '复制评审结果',
+    '复制调试摘要',
+    '评审调试摘要',
     'resume 命令',
     '本轮耗时',
     '任务详情',
@@ -571,6 +573,81 @@ test('submits review jobs with the selected input mode payload', async () => {
   });
   assert.equal(context.state.review.jobsByThread.get('thread-1')[0].id, 'review-1');
   assert.deepEqual(context.notices, ['评审任务已启动。']);
+});
+
+test('builds and wires copyable review debug summaries', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewDebugSummary');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobs', buildStart);
+  const copyStart = app.indexOf('async function copyReviewDebugInfo');
+  const copyEnd = app.indexOf('\nasync function openThread', copyStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(copyStart, -1);
+  assert.notEqual(copyEnd, -1);
+  assert.match(app, /data-copy-review-debug-id/);
+
+  const context = {
+    copied: '',
+    notices: [],
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'failed',
+            templateId: 'technical-review',
+            inputMode: 'latest-turn',
+            source: { title: '源线程', providerLabel: 'Codex' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli', runner: 'claude-print', model: 'sonnet' },
+            error: 'Runner failed',
+            stderr: 'permission denied',
+            timedOut: false,
+            exitCode: 1,
+            truncatedResult: true,
+          }],
+        ]]),
+      },
+    },
+    reviewStatusLabel(status) {
+      return status === 'failed' ? '失败' : status;
+    },
+    formatTimestamp() {
+      return '-';
+    },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${app.slice(copyStart, copyEnd)}
+      copyReviewDebugInfo('review-1');
+    `, context);
+    context.copied = globalThis.copied;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.notices;
+  }
+
+  assert.match(context.copied, /Agent Mission Control 评审调试摘要/);
+  assert.match(context.copied, /- job: review-1/);
+  assert.match(context.copied, /- 输入模式: latest-turn/);
+  assert.match(context.copied, /- 目标: Claude Code CLI/);
+  assert.match(context.copied, /- stderr: permission denied/);
+  assert.deepEqual(context.notices, ['已复制评审调试摘要。']);
 });
 
 test('formats token totals with compact M and B units for consistent scanning', async () => {

@@ -48,6 +48,9 @@ Review workflow:
   The app does not guess private provider cache locations for this mode.
 - Review job metadata and results are stored only in Agent Mission Control's
   own local state file: `~/.agent-mission-control/reviews.jsonl`.
+- The review debug summary is generated from stored job metadata such as job
+  id, source, target, input mode, status, error, and stderr. It does not include
+  the full prompt or full review result.
 - Future complete-transcript review modes would expand local data exposure
   beyond P1 and should require an explicit confirmation before sending that
   larger content to a target CLI Agent.
