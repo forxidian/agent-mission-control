@@ -769,6 +769,21 @@ test('renders review result details with safe fix loop actions', async () => {
   assert.match(styles, /\.review-job-detail pre\s*\{[\s\S]*max-height:\s*none;/);
 });
 
+test('keeps review history visually separated from the selected detail pane', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  assert.match(app, /review-results-divider/);
+  assert.match(app, /review-results-layout/);
+  assert.match(app, /review-records-column/);
+  assert.match(app, /review-detail-column/);
+  assert.match(app, /选择左侧记录查看详情/);
+  assert.match(app, /review-job-meta/);
+  assert.match(styles, /\.review-results-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px,\s*0\.75fr\)\s*minmax\(0,\s*1\.45fr\);/);
+  assert.match(styles, /\.review-records-column\s*\{[\s\S]*overflow:\s*auto;/);
+  assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*\.review-results-layout,[\s\S]*grid-template-columns:\s*1fr;/);
+});
+
 test('keeps auto refresh from rerendering while review form is focused', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const activeStart = app.indexOf('function hasActiveReviewInteraction');

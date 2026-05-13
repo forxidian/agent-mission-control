@@ -1670,6 +1670,36 @@ h3 {
   background: #fffaf0;
 }
 
+.review-results-divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line-strong);
+}
+
+.review-results {
+  padding-top: 2px;
+}
+
+.review-results-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.45fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.review-records-column,
+.review-detail-column {
+  min-width: 0;
+}
+
+.review-records-column {
+  max-height: min(620px, 72vh);
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .review-job-detail pre {
   max-height: none;
 }
@@ -1681,6 +1711,16 @@ h3 {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
+}
+
+.review-results-heading p,
+.review-job-meta {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .review-job-list {
@@ -1718,8 +1758,11 @@ h3 {
   border-color: var(--ink);
 }
 
+.review-job.is-selected {
+  background: #fff5dd;
+}
+
 .review-job-detail {
-  margin-top: 4px;
   padding: 12px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -1910,9 +1953,15 @@ h3 {
   .summary-card-grid-lifetime,
   .controls,
   .review-form,
+  .review-results-layout,
   .detail-grid,
   .detail-grid-compact {
     grid-template-columns: 1fr;
+  }
+
+  .review-records-column {
+    max-height: none;
+    padding-right: 0;
   }
 
   .detail-section-heading {

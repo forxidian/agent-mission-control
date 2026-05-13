@@ -1541,6 +1541,7 @@ function renderReviewJobs(jobs, selectedJobId = '') {
             <strong>${escapeHtml(reviewStatusLabel(job.status))}</strong>
             <span>${escapeHtml(job.target?.label || job.target?.provider || 'Agent')}</span>
           </div>
+          <p class="review-job-meta">${escapeHtml(job.templateId || '-')} · ${escapeHtml(formatTimestamp(job.completedAtMs || job.startedAtMs))}</p>
           ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
           ${job.resultPreview ? `<pre>${escapeHtml(job.resultPreview)}</pre>` : ''}
           ${job.stderr && job.status === 'failed' ? `<p class="detail-note">stderr: ${escapeHtml(job.stderr)}</p>` : ''}
@@ -1603,13 +1604,23 @@ function renderReviewPanel(thread) {
           <button class="action-button primary" type="submit"${targetReady && contentReady && !isLoading ? '' : ' disabled'}>开始评审</button>
         </div>
       </form>
+      <div class="review-results-divider" aria-hidden="true"></div>
       <div class="review-results">
         <div class="review-results-heading">
-          <strong>评审记录</strong>
+          <div>
+            <strong>评审记录</strong>
+            <p>左侧是当前线程的历史评审，右侧显示选中记录的完整详情。</p>
+          </div>
           <button class="action-button secondary" type="button" data-refresh-review-jobs-id="${escapeHtml(thread.id)}">刷新</button>
         </div>
-        ${renderReviewJobs(jobs, selectedJobId)}
-        ${renderReviewJobDetail(selectedJob)}
+        <div class="review-results-layout">
+          <aside class="review-records-column" aria-label="评审记录列表">
+            ${renderReviewJobs(jobs, selectedJobId)}
+          </aside>
+          <div class="review-detail-column" aria-live="polite">
+            ${selectedJob ? renderReviewJobDetail(selectedJob) : '<p class="empty-state compact">选择左侧记录查看详情。</p>'}
+          </div>
+        </div>
       </div>
     </section>
   `;
