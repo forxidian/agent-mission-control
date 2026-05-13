@@ -1805,7 +1805,9 @@ h3 {
 }
 
 .review-job-detail .review-preview pre {
-  border: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   background: transparent;
   color: var(--ink);
   font-family: inherit;

@@ -1103,6 +1103,7 @@ test('renders review result details with safe fix loop actions', async () => {
   assert.match(context.html, /data-copy-review-fix-id="review-1"/);
   assert.match(context.html, /data-open-thread-id="thread-1"/);
   assert.match(styles, /\.review-job-detail pre\s*\{[\s\S]*max-height:\s*none;/);
+  assert.match(styles, /\.review-job-detail \.review-preview pre\s*\{[\s\S]*border:\s*1px solid var\(--line\);/);
 });
 
 test('keeps review history visually separated from the selected detail pane', async () => {
