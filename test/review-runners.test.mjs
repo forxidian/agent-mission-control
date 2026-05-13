@@ -44,9 +44,10 @@ test('codex runner calls codex exec with stdin prompt and read-only sandbox', as
 
 test('claude runner calls claude print with json output and disabled tools', async () => {
   const calls = [];
+  const prompt = 'Review this output\n--not-a-cli-flag';
   await runReviewWithProvider({
     provider: 'claude-code-cli',
-    prompt: 'Review this output',
+    prompt,
     cwd: '/repo',
     model: 'sonnet',
     runCommand: async (command, args, options) => {
@@ -58,7 +59,7 @@ test('claude runner calls claude print with json output and disabled tools', asy
   assert.equal(calls[0].command, 'claude');
   assert.deepEqual(calls[0].args, [
     '-p',
-    'Review this output',
+    prompt,
     '--output-format',
     'json',
     '--permission-mode',
