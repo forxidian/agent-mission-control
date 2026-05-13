@@ -13,6 +13,7 @@
 ## 最近更新
 
 - 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。
+- 新增 Agent 评审工作流：可把线程输出交给本机可用的 Codex / Claude / OpenCode 进行二次评审，支持多种评审模板、自定义审查要求、评审历史和完成提醒。
 - 支持安装为 Chrome / Edge PWA 独立窗口，并能从浏览器页或 macOS 菜单栏辅助工具优先切回已安装应用。
 - quota 总览支持按 GPT、Claude 等模型家族分组，Claude Desktop / Cowork 可从本地 Claude usage cache 读取聚合限额信号。
 - Claude Desktop Code 支持 `claude://resume` deep link 恢复会话，Claude Cowork 未完成任务会作为运行中信号展示。
@@ -28,6 +29,7 @@
 - 按 GPT、Claude 等模型家族展示实时和本周 quota 可用量。
 - 支持按来源、状态、项目和关键词筛选。
 - 支持打开 Codex / OpenCode / Claude Desktop Code deep link，或在 macOS Terminal 恢复 CLI 会话。
+- 支持从线程详情发起 Agent 评审：选择输入范围、目标 Agent、评审模板或自定义审查要求，并查看评审历史、复制结果或修复 Prompt。
 - 支持安装为本地 PWA 应用窗口；service worker 只缓存静态前端壳，不缓存 `/api/*` 本机 Agent 元数据。
 - 提供本地通知中心；系统桌面提醒当前隐藏，待后续接入可靠的原生通知实现。
 
@@ -36,7 +38,7 @@
 - Node.js `>=20`
 - macOS 推荐；Linux / Windows 可运行看板，但部分打开应用和桌面通知能力取决于系统命令
 - 可选：`sqlite3` 命令，用于读取 Codex 本地 SQLite 状态
-- 可选：`codex`、`opencode`、`claude` CLI，用于检测版本或恢复 CLI 会话
+- 可选：`codex`、`opencode`、`claude` CLI，用于检测版本、恢复 CLI 会话，或作为 Agent 评审目标
 
 ## 运行
 
@@ -92,10 +94,17 @@ Claude：
 本项目自己的通知状态：
 
 - `~/.agent-mission-control/notifications.json`
+- `~/.agent-mission-control/reviews.jsonl`
+
+Agent 评审：
+
+- 评审输入默认来自面板已经知道的线程字段，或 Codex 线程的本地 rollout JSONL。
+- 评审任务会调用本机已安装且可用的目标 CLI，并把生成的评审记录写入 `~/.agent-mission-control/reviews.jsonl`。
+- 评审 runner 默认以只读/禁用工具的方式运行，避免目标 Agent 在评审过程中改写项目文件。
 
 ## 隐私
 
-这个项目用于本地查看你的 Agent 工作状态。它可能在浏览器里展示线程标题、项目路径、最近消息信号、token 与 quota 信息。详见 [docs/PRIVACY.md](docs/PRIVACY.md)。
+这个项目用于本地查看你的 Agent 工作状态。它可能在浏览器里展示线程标题、项目路径、最近消息信号、token、quota 信息和评审结果。详见 [docs/PRIVACY.md](docs/PRIVACY.md)。
 
 请不要提交本机状态文件、日志、数据库、`.env`、截图里的私密文本、cookie、token 或 API key。
 
