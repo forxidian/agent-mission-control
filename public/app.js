@@ -20,6 +20,7 @@ const state = {
     contentErrorsByThread: new Map(),
     jobsByThread: new Map(),
     inputModeByThread: new Map(),
+    targetProviderByThread: new Map(),
     isLoading: false,
     pollTimer: null,
   },
@@ -1343,6 +1344,13 @@ function reviewContentErrorForThread(threadId, mode = selectedReviewInputMode(th
   return state.review.contentErrorsByThread.get(reviewContentKey(threadId, mode)) || '';
 }
 
+function selectedReviewTargetProvider(threadId) {
+  const selected = state.review.targetProviderByThread.get(threadId) || '';
+  const items = state.review.targets?.items || [];
+  if (selected && items.some((target) => target.provider === selected && target.available)) return selected;
+  return items.find((target) => target.available)?.provider || selected;
+}
+
 function hasRunningReviewJob(threadId) {
   return reviewJobsForThread(threadId).some((job) => job.status === 'running' || job.status === 'queued');
 }
@@ -1388,12 +1396,13 @@ function reviewInputPrivacyHint(mode) {
   return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整线程正文。';
 }
 
-function reviewTargetOptions(targets) {
+function reviewTargetOptions(targets, selectedProvider = '') {
   const items = targets?.items || [];
   if (!items.length) return '<option value="">正在检测目标 Agent</option>';
+  const selected = selectedProvider || items.find((target) => target.available)?.provider || '';
 
   return items.map((target) => `
-    <option value="${escapeHtml(target.provider)}"${target.available ? '' : ' disabled'}>
+    <option value="${escapeHtml(target.provider)}"${target.provider === selected ? ' selected' : ''}${target.available ? '' : ' disabled'}>
       ${escapeHtml(target.label || target.provider)}${target.available ? '' : '（不可用）'}
     </option>
   `).join('');
@@ -1455,7 +1464,8 @@ function renderReviewPanel(thread) {
   const contentError = reviewContentErrorForThread(thread.id, inputMode);
   const jobs = reviewJobsForThread(thread.id);
   const isLoading = state.review.isLoading;
-  const targetOptions = reviewTargetOptions(targets);
+  const selectedTargetProvider = selectedReviewTargetProvider(thread.id);
+  const targetOptions = reviewTargetOptions(targets, selectedTargetProvider);
   const targetReady = Boolean(targets?.items?.some((target) => target.available));
   const contentReady = Boolean(content?.preview);
 
@@ -1472,7 +1482,7 @@ function renderReviewPanel(thread) {
         </label>
         <label>
           <span>目标 Agent</span>
-          <select name="targetProvider"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
+          <select name="targetProvider" data-review-target-provider-id="${escapeHtml(thread.id)}"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
         </label>
         <label>
           <span>评审模板</span>
@@ -2075,6 +2085,15 @@ async function changeReviewInputMode(threadId, inputMode) {
   }
 }
 
+function changeReviewTargetProvider(threadId, targetProvider) {
+  if (targetProvider) {
+    state.review.targetProviderByThread.set(threadId, targetProvider);
+  } else {
+    state.review.targetProviderByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
 async function refreshReviewJobs(threadId, { silent = false } = {}) {
   try {
     await loadReviewJobs(threadId);
@@ -2167,7 +2186,7 @@ async function submitReview(form) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         sourceThreadId: threadId,
-        targetProvider: formData.get('targetProvider'),
+        targetProvider: formData.get('targetProvider') || selectedReviewTargetProvider(threadId),
         targetModel: formData.get('targetModel'),
         templateId: formData.get('templateId'),
         inputMode: formData.get('inputMode') || selectedReviewInputMode(threadId),
@@ -2532,9 +2551,19 @@ document.addEventListener('submit', (event) => {
 });
 
 document.addEventListener('change', (event) => {
-  const target = event.target instanceof Element ? event.target.closest('[data-review-input-mode-id]') : null;
-  if (!target) return;
-  changeReviewInputMode(target.dataset.reviewInputModeId, target.value);
+  const changed = event.target instanceof Element ? event.target : null;
+  if (!changed) return;
+
+  const inputModeTarget = changed.closest('[data-review-input-mode-id]');
+  if (inputModeTarget) {
+    changeReviewInputMode(inputModeTarget.dataset.reviewInputModeId, inputModeTarget.value);
+    return;
+  }
+
+  const reviewTarget = changed.closest('[data-review-target-provider-id]');
+  if (reviewTarget) {
+    changeReviewTargetProvider(reviewTarget.dataset.reviewTargetProviderId, reviewTarget.value);
+  }
 });
 
 initializeInstallPrompt();

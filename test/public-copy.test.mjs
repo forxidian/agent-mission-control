@@ -431,6 +431,71 @@ test('limits latest-turn review input selector to Codex threads', async () => {
   assert.match(context.claudeOptions, /value="thread-summary"/);
 });
 
+test('preserves selected review target options across detail rerenders', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const optionsStart = app.indexOf('function reviewTargetOptions');
+  const optionsEnd = app.indexOf('\nfunction buildReviewDebugSummary', optionsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(optionsStart, -1);
+  assert.notEqual(optionsEnd, -1);
+
+  const context = { options: '' };
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(optionsStart, optionsEnd)}
+    options = reviewTargetOptions({
+      items: [
+        { provider: 'codex-cli', label: 'Codex CLI', available: true },
+        { provider: 'claude-code-cli', label: 'Claude Code CLI', available: true },
+        { provider: 'opencode', label: 'OpenCode CLI', available: true }
+      ]
+    }, 'claude-code-cli');
+  `, context);
+
+  assert.match(context.options, /value="claude-code-cli" selected/);
+  assert.doesNotMatch(context.options, /value="codex-cli" selected/);
+});
+
+test('stores selected review target when target selector changes', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const changeStart = app.indexOf('function changeReviewTargetProvider');
+  const changeEnd = app.indexOf('\nasync function submitReview', changeStart);
+
+  assert.notEqual(changeStart, -1);
+  assert.notEqual(changeEnd, -1);
+
+  const context = {
+    renders: 0,
+    state: {
+      review: {
+        targetProviderByThread: new Map(),
+      },
+    },
+    renderSelectedDetail() {
+      globalThis.renders += 1;
+    },
+  };
+
+  globalThis.renders = context.renders;
+  try {
+    vm.runInNewContext(`
+      ${app.slice(changeStart, changeEnd)}
+      changeReviewTargetProvider('thread-1', 'claude-code-cli');
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.state.review.targetProviderByThread.get('thread-1'), 'claude-code-cli');
+  assert.equal(context.renders, 1);
+});
+
 test('refreshes review input preview when input mode changes', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const keyStart = app.indexOf('function reviewContentKey');
