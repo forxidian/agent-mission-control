@@ -2,7 +2,7 @@
 
 All notable changes to Agent Mission Control are documented here.
 
-## [Unreleased]
+## [0.2.3] - 2026-05-13
 
 ### English
 
