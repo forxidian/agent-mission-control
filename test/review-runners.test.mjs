@@ -58,6 +58,7 @@ test('claude runner calls claude print with json output and disabled tools', asy
   assert.equal(calls[0].command, 'claude');
   assert.deepEqual(calls[0].args, [
     '-p',
+    'Review this output',
     '--output-format',
     'json',
     '--permission-mode',
@@ -66,7 +67,6 @@ test('claude runner calls claude print with json output and disabled tools', asy
     '',
     '--model',
     'sonnet',
-    'Review this output',
   ]);
   assert.equal(calls[0].options.cwd, '/repo');
   assert.equal(calls[0].options.timeout, 300000);

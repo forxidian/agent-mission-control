@@ -134,6 +134,7 @@ function codexArgs({ cwd, model, outputPath }) {
 function claudeArgs({ prompt, model }) {
   const args = [
     '-p',
+    prompt,
     '--output-format',
     'json',
     '--permission-mode',
@@ -142,7 +143,6 @@ function claudeArgs({ prompt, model }) {
     '',
   ];
   if (model) args.push('--model', model);
-  args.push(prompt);
   return args;
 }
 
