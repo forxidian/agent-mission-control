@@ -2142,8 +2142,7 @@ function renderSelectedDetail() {
 
 function hasActiveReviewInteraction() {
   const active = document.activeElement;
-  if (active instanceof Element && active.closest('.review-panel')) return true;
-  return Boolean(state.review.openThreadId && state.review.selectedJobIdByThread.get(state.review.openThreadId));
+  return active instanceof Element && Boolean(active.closest('.review-form'));
 }
 
 function syncReviewPolling() {

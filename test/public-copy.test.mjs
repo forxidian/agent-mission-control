@@ -836,6 +836,42 @@ test('keeps auto refresh from rerendering while review form is focused', async (
   assert.equal(context.renders, 0);
 });
 
+test('does not pause review job rerenders just because a detail is open', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const activeStart = app.indexOf('function hasActiveReviewInteraction');
+  const activeEnd = app.indexOf('\nfunction syncReviewPolling', activeStart);
+
+  assert.notEqual(activeStart, -1);
+  assert.notEqual(activeEnd, -1);
+
+  class FakeElement {
+    closest() {
+      return null;
+    }
+  }
+
+  const context = {
+    result: null,
+    Element: FakeElement,
+    document: {
+      activeElement: new FakeElement(),
+    },
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        selectedJobIdByThread: new Map([['thread-1', 'review-1']]),
+      },
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(activeStart, activeEnd)}
+    result = hasActiveReviewInteraction();
+  `, context);
+
+  assert.equal(context.result, false);
+});
+
 test('copies a safe fix prompt from a completed review job', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const buildStart = app.indexOf('function buildReviewFixPrompt');
