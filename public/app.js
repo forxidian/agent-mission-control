@@ -1569,11 +1569,11 @@ function renderReviewJobDetail(job) {
       ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
       ${job.stderr ? `<p class="detail-note">stderr: ${escapeHtml(job.stderr)}</p>` : ''}
       <div class="review-preview">
-        <span>输入预览</span>
+        <h5>输入预览</h5>
         <pre>${escapeHtml(job.inputPreview || '暂无输入预览')}</pre>
       </div>
       <div class="review-preview">
-        <span>评审结果</span>
+        <h5>评审结果</h5>
         <pre>${escapeHtml(job.resultText || job.resultPreview || '暂无评审结果')}</pre>
       </div>
       <div class="detail-actions">

@@ -1796,7 +1796,28 @@ h3 {
   padding: 12px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: #fffaf0;
+  background: transparent;
+}
+
+.review-job-detail .detail-cell {
+  border: 0;
+  background: transparent;
+}
+
+.review-job-detail .review-preview pre {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.review-job-detail .review-preview h5 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
 .review-job-detail h4,
