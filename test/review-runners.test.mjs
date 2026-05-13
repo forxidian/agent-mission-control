@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createReviewTempFilePath,
   listReviewTargets,
   runReviewWithProvider,
 } from '../src/review-runners.mjs';
@@ -40,6 +41,49 @@ test('codex runner calls codex exec with stdin prompt and read-only sandbox', as
   assert.equal(calls[0].options.timeout, 300000);
   assert.equal(result.ok, true);
   assert.equal(result.resultText, 'Codex review result');
+});
+
+test('codex runner cleans temp output file when the command fails', async () => {
+  const unlinked = [];
+  const result = await runReviewWithProvider({
+    provider: 'codex-cli',
+    prompt: 'Review this output',
+    cwd: '/repo',
+    tempFilePath: () => '/tmp/codex-review-failed-output.txt',
+    unlink: async (filePath) => {
+      unlinked.push(filePath);
+    },
+    runCommand: async () => {
+      const error = new Error('exit 1');
+      error.exitCode = 1;
+      error.stdout = 'partial output';
+      error.stderr = 'failure detail';
+      throw error;
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.resultText, 'partial output');
+  assert.deepEqual(unlinked, ['/tmp/codex-review-failed-output.txt']);
+});
+
+test('codex temp output paths stay unique within the same millisecond and process', () => {
+  const first = createReviewTempFilePath({
+    tmpDir: '/tmp',
+    now: 1778688000000,
+    pid: 12345,
+    randomId: 'review-a',
+  });
+  const second = createReviewTempFilePath({
+    tmpDir: '/tmp',
+    now: 1778688000000,
+    pid: 12345,
+    randomId: 'review-b',
+  });
+
+  assert.notEqual(first, second);
+  assert.match(first, /agent-mission-control-review-1778688000000-12345-review-a\.txt$/);
+  assert.match(second, /agent-mission-control-review-1778688000000-12345-review-b\.txt$/);
 });
 
 test('claude runner calls claude print with read-only repo tools and write tools denied', async () => {

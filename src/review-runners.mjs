@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile, unlink as fsUnlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,8 +63,17 @@ function truncateText(value, maxChars) {
   };
 }
 
+export function createReviewTempFilePath({
+  tmpDir = os.tmpdir(),
+  now = Date.now(),
+  pid = process.pid,
+  randomId = randomUUID(),
+} = {}) {
+  return path.join(tmpDir, `agent-mission-control-review-${now}-${pid}-${randomId}.txt`);
+}
+
 function defaultTempFilePath() {
-  return path.join(os.tmpdir(), `agent-mission-control-review-${Date.now()}-${process.pid}.txt`);
+  return createReviewTempFilePath();
 }
 
 export function runCommand(command, args = [], options = {}) {
@@ -278,12 +288,6 @@ export async function runReviewWithProvider({
         stdout = await readFile(outputPath, 'utf8');
       } catch {
         // Fall back to stdout if the CLI did not write the last-message file.
-      } finally {
-        try {
-          await unlink(outputPath);
-        } catch {
-          // Best-effort cleanup for temp review output files.
-        }
       }
     }
     if (provider === 'claude-code-cli') {
@@ -304,6 +308,14 @@ export async function runReviewWithProvider({
       maxPreviewChars,
       maxStderrChars,
     });
+  } finally {
+    if (provider === 'codex-cli' && outputPath) {
+      try {
+        await unlink(outputPath);
+      } catch {
+        // Best-effort cleanup for temp review output files.
+      }
+    }
   }
 }
 
