@@ -1641,7 +1641,8 @@ h3 {
 }
 
 .review-preview,
-.review-results {
+.review-results,
+.review-job-detail {
   display: grid;
   gap: 8px;
   grid-column: 1 / -1;
@@ -1649,7 +1650,8 @@ h3 {
 }
 
 .review-preview pre,
-.review-job pre {
+.review-job pre,
+.review-job-detail pre {
   max-height: 180px;
   margin: 0;
   overflow: auto;
@@ -1705,6 +1707,24 @@ h3 {
 
 .review-job[data-review-status="succeeded"] {
   border-color: rgba(78, 117, 89, 0.42);
+}
+
+.review-job.is-selected,
+.review-job-detail {
+  border-color: var(--ink);
+}
+
+.review-job-detail {
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.review-job-detail h4,
+.review-job-detail p {
+  margin: 0;
 }
 
 .path-line,

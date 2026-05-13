@@ -715,6 +715,123 @@ test('builds and wires copyable review debug summaries', async () => {
   assert.deepEqual(context.notices, ['已复制评审调试摘要。']);
 });
 
+test('renders review result details with safe fix loop actions', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const detailStart = app.indexOf('function renderReviewJobDetail');
+  const detailEnd = app.indexOf('\nfunction renderReviewJobs', detailStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(detailStart, -1);
+  assert.notEqual(detailEnd, -1);
+  assert.match(app, /data-open-review-detail-id/);
+  assert.match(app, /data-copy-review-fix-id/);
+
+  const context = {
+    html: '',
+    formatTimestamp(value) {
+      return value ? '2026-05-13 10:00' : '-';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(detailStart, detailEnd)}
+    html = renderReviewJobDetail({
+      id: 'review-1',
+      status: 'succeeded',
+      templateId: 'technical-review',
+      inputMode: 'latest-turn',
+      inputPreview: '原始输入预览',
+      resultText: '评审完整结果',
+      resultPreview: '评审预览',
+      source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex', projectName: 'agent-mission-control' },
+      target: { label: 'Claude Code CLI', provider: 'claude-code-cli', model: 'sonnet' },
+      stderr: '',
+      error: ''
+    });
+  `, context);
+
+  assert.match(context.html, /评审结果详情/);
+  assert.match(context.html, /源线程/);
+  assert.match(context.html, /Claude Code CLI/);
+  assert.match(context.html, /评审完整结果/);
+  assert.match(context.html, /data-copy-review-fix-id="review-1"/);
+  assert.match(context.html, /data-open-thread-id="thread-1"/);
+});
+
+test('copies a safe fix prompt from a completed review job', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewFixPrompt');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobDetail', buildStart);
+  const copyStart = app.indexOf('async function copyReviewFixPrompt');
+  const copyEnd = app.indexOf('\nasync function openThread', copyStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(copyStart, -1);
+  assert.notEqual(copyEnd, -1);
+
+  const context = {
+    copied: '',
+    notices: [],
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'succeeded',
+            templateId: 'technical-review',
+            inputMode: 'latest-turn',
+            inputPreview: '源 Agent 输出预览',
+            resultText: '请补测试并简化实现。',
+            source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex', projectName: 'agent-mission-control' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli', model: 'sonnet' },
+          }],
+        ]]),
+      },
+    },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${copyStart && copyEnd ? app.slice(copyStart, copyEnd) : ''}
+      copyReviewFixPrompt('review-1');
+    `, context);
+    context.copied = globalThis.copied;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.notices;
+  }
+
+  assert.match(context.copied, /请继续处理这条跨 Agent 评审意见/);
+  assert.match(context.copied, /源线程/);
+  assert.match(context.copied, /Claude Code CLI/);
+  assert.match(context.copied, /请补测试并简化实现。/);
+  assert.match(context.copied, /不要假设这里包含完整线程历史/);
+  assert.deepEqual(context.notices, ['已复制修复 Prompt。']);
+});
+
 test('formats token totals with compact M and B units for consistent scanning', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const match = app.match(/function formatTokens\(value\) \{[\s\S]*?\n\}/);
