@@ -1450,7 +1450,7 @@ function reviewInputPrivacyHint(mode) {
   if (mode === 'thread-summary') {
     return '线程摘要会发送标准线程字段和最近输出信号给目标 CLI Agent。';
   }
-  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整线程正文。';
+  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。';
 }
 
 function reviewTargetOptions(targets, selectedProvider = '') {

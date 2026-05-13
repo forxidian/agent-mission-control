@@ -68,7 +68,7 @@ test('uses Chinese copy for visible system fields', async () => {
     '复制命令',
     '复制摘要',
     '交给另一个 Agent 评审',
-    '评审只会发送当前预览里的最近 Agent 输出，不会读取完整线程正文。',
+    '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。',
     '评审输入',
     '最近一轮对话',
     '线程摘要和最近输出',
@@ -1357,7 +1357,13 @@ test('refreshes the open review input preview after dashboard refresh', async ()
     fallbackNotificationsFromDashboard() {
       return [];
     },
+    dashboardDataSignature() {
+      return 'updated-dashboard';
+    },
     clearError() {},
+    showError(message) {
+      throw new Error(message);
+    },
     renderMonitorStatus() {},
     renderDashboard() {
       globalThis.renders += 1;
