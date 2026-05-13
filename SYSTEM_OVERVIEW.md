@@ -126,6 +126,9 @@ Claude：
 
 - `~/.agent-mission-control/notifications.json`
   - 通知状态、已观察 completion signal。
+- `~/.agent-mission-control/reviews.jsonl`
+  - Agent 评审 job 的快照、评审结果、错误信息和 Fix Loop 状态。
+  - `fixLoop` 记录轻量闭环状态：尚未处理、已复制 Prompt、已回源线程、已处理、不采纳；重启后不丢失。
 
 ## 核心概念
 

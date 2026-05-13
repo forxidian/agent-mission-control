@@ -620,3 +620,42 @@ test('GET /api/reviews and GET /api/reviews/:id return stored jobs', async () =>
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('PATCH /api/reviews/:id records fix loop metadata', async () => {
+  const reviewStore = createFakeReviewStore();
+  const job = await reviewStore.createJob({
+    source: { threadId: 'thread-1' },
+    target: { provider: 'claude-code-cli' },
+    templateId: 'technical-review',
+    inputMode: 'latest-agent-signal',
+    inputPreview: 'preview',
+  });
+  await reviewStore.updateJob(job.id, { status: 'succeeded', resultText: 'done' });
+
+  const server = createServer({ reviewStore });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/reviews/${job.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        fixLoop: {
+          status: 'applied',
+          promptCopiedAtMs: 1778515200000,
+          sourceOpenedAtMs: 1778515201000,
+          resolvedAtMs: 1778515202000,
+        },
+      }),
+    });
+    const body = await response.json();
+    const saved = await reviewStore.getJob(job.id);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.job.status, 'succeeded');
+    assert.equal(body.job.fixLoop.status, 'applied');
+    assert.equal(saved.fixLoop.resolvedAtMs, 1778515202000);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

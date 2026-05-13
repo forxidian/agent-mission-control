@@ -33,6 +33,12 @@ test('creating a job creates a stable review id and appends a queued snapshot', 
   assert.equal(job.status, 'queued');
   assert.equal(job.createdAtMs, 1778515200000);
   assert.equal(job.updatedAtMs, 1778515200000);
+  assert.deepEqual(job.fixLoop, {
+    status: 'not-started',
+    promptCopiedAtMs: null,
+    sourceOpenedAtMs: null,
+    resolvedAtMs: null,
+  });
 
   const snapshots = await readSnapshots(store);
   assert.equal(snapshots.length, 1);
@@ -70,6 +76,37 @@ test('reads the latest snapshot by id after status updates', async () => {
   const snapshots = await readSnapshots(store);
   assert.equal(snapshots.length, 3);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.status), ['queued', 'running', 'succeeded']);
+});
+
+test('updates review fix loop metadata without changing review runner status', async () => {
+  let time = 1778515200000;
+  const store = await tempStore({ now: () => time, randomSuffix: () => 'fix' });
+  const job = await store.createJob({
+    source: { threadId: 'thread-1' },
+    target: { provider: 'claude-code-cli' },
+    templateId: 'technical-review',
+    inputMode: 'latest-agent-signal',
+    inputPreview: 'preview',
+  });
+
+  time += 10;
+  await store.updateJob(job.id, { status: 'succeeded', resultText: 'done' });
+  time += 10;
+  const updated = await store.updateJob(job.id, {
+    fixLoop: {
+      status: 'source-opened',
+      promptCopiedAtMs: 1778515200020,
+      sourceOpenedAtMs: 1778515200020,
+    },
+  });
+
+  assert.equal(updated.status, 'succeeded');
+  assert.deepEqual(updated.fixLoop, {
+    status: 'source-opened',
+    promptCopiedAtMs: 1778515200020,
+    sourceOpenedAtMs: 1778515200020,
+    resolvedAtMs: null,
+  });
 });
 
 test('updates jobs to failed status with error metadata', async () => {

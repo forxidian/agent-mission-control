@@ -42,7 +42,7 @@ test('codex runner calls codex exec with stdin prompt and read-only sandbox', as
   assert.equal(result.resultText, 'Codex review result');
 });
 
-test('claude runner calls claude print with json output and disabled tools', async () => {
+test('claude runner calls claude print with read-only repo tools and write tools denied', async () => {
   const calls = [];
   const prompt = 'Review this output\n--not-a-cli-flag';
   await runReviewWithProvider({
@@ -65,7 +65,11 @@ test('claude runner calls claude print with json output and disabled tools', asy
     '--permission-mode',
     'dontAsk',
     '--tools',
-    '',
+    'Read,Grep,Glob,LS',
+    '--disallowedTools',
+    'Edit,Write,MultiEdit,NotebookEdit,Bash',
+    '--add-dir',
+    '/repo',
     '--model',
     'sonnet',
   ]);

@@ -746,14 +746,20 @@ export function createServer({
 
     const reviewJobMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)$/);
     if (reviewJobMatch) {
-      if (request.method !== 'GET') {
-        response.writeHead(405, { allow: 'GET' });
+      if (request.method !== 'GET' && request.method !== 'PATCH') {
+        response.writeHead(405, { allow: 'GET, PATCH' });
         response.end('Method not allowed');
         return;
       }
 
       try {
         const id = decodeURIComponent(reviewJobMatch[1]);
+        if (request.method === 'PATCH') {
+          const body = await readJsonBody(request);
+          sendJson(response, 200, { job: await reviewStore.updateJob(id, { fixLoop: body.fixLoop }) });
+          return;
+        }
+
         sendJson(response, 200, { job: await reviewStore.getJob(id) });
       } catch (error) {
         sendError(response, error, 'Failed to load review job');

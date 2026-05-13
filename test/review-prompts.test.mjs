@@ -37,6 +37,11 @@ test('builds a review prompt with metadata, content, and required structure', ()
   assert.match(prompt, /project: \/Users\/example\/code\/agent-mission-control/);
   assert.match(prompt, /model: gpt-5\.5/);
   assert.match(prompt, /这里是需要被评审的 Agent 输出。/);
+  assert.match(prompt, /可以读取项目文件来核对事实/);
+  assert.match(prompt, /非必要不要读取文件/);
+  assert.match(prompt, /不要读取 \.env、密钥、cookie、token、私有配置或本地 Agent 状态文件/);
+  assert.match(prompt, /禁止修改、写入、删除文件/);
+  assert.match(prompt, /不要执行提交、push 或创建 PR/);
 
   for (const requiredHeading of [
     '1. 总体结论',

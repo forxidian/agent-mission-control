@@ -13,6 +13,19 @@ const DEFAULT_COMPACT_THRESHOLD = 1000;
 const DEFAULT_MAX_RESULT_CHARS = 24000;
 const DEFAULT_MAX_STDERR_CHARS = 4000;
 const DEFAULT_MAX_PREVIEW_CHARS = 800;
+const FIX_LOOP_STATUSES = new Set([
+  'not-started',
+  'prompt-copied',
+  'source-opened',
+  'applied',
+  'dismissed',
+]);
+const EMPTY_FIX_LOOP = {
+  status: 'not-started',
+  promptCopiedAtMs: null,
+  sourceOpenedAtMs: null,
+  resolvedAtMs: null,
+};
 
 function httpError(message, statusCode) {
   const error = new Error(message);
@@ -36,6 +49,12 @@ function truncateText(value, maxChars) {
     text: `${text.slice(0, maxChars)}...`,
     truncated: true,
   };
+}
+
+function sanitizeTimestamp(value) {
+  if (value === null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
 function parseSnapshots(raw) {
@@ -110,7 +129,25 @@ export function createReviewJobStore({
     }
   }
 
-  function sanitizePatch(patch) {
+  function sanitizeFixLoopPatch(value, existing = EMPTY_FIX_LOOP) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw httpError('fixLoop must be an object', 400);
+    }
+
+    const next = { ...EMPTY_FIX_LOOP, ...existing };
+    if ('status' in value) {
+      if (!FIX_LOOP_STATUSES.has(value.status)) {
+        throw httpError(`Unknown fix loop status: ${value.status}`, 400);
+      }
+      next.status = value.status;
+    }
+    if ('promptCopiedAtMs' in value) next.promptCopiedAtMs = sanitizeTimestamp(value.promptCopiedAtMs);
+    if ('sourceOpenedAtMs' in value) next.sourceOpenedAtMs = sanitizeTimestamp(value.sourceOpenedAtMs);
+    if ('resolvedAtMs' in value) next.resolvedAtMs = sanitizeTimestamp(value.resolvedAtMs);
+    return next;
+  }
+
+  function sanitizePatch(patch, existing = {}) {
     const sanitized = { ...patch };
 
     if ('resultText' in sanitized) {
@@ -127,6 +164,10 @@ export function createReviewJobStore({
 
     if ('stderr' in sanitized) {
       sanitized.stderr = truncateText(sanitized.stderr, maxStderrChars).text;
+    }
+
+    if ('fixLoop' in sanitized) {
+      sanitized.fixLoop = sanitizeFixLoopPatch(sanitized.fixLoop, existing.fixLoop);
     }
 
     return sanitized;
@@ -166,6 +207,7 @@ export function createReviewJobStore({
           timedOut: false,
           truncatedResult: false,
           exitCode: null,
+          fixLoop: { ...EMPTY_FIX_LOOP },
         };
         await appendSnapshot(job);
         return job;
@@ -181,7 +223,7 @@ export function createReviewJobStore({
 
         const updated = {
           ...existing,
-          ...sanitizePatch(patch),
+          ...sanitizePatch(patch, existing),
           updatedAtMs: now(),
         };
         await appendSnapshot(updated);

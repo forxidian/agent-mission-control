@@ -99,6 +99,12 @@ export function buildReviewPrompt({
 请重点检查：
 ${template.focus.map((item) => `- ${item}`).join('\n')}
 ${customInstructionSection}
+评审方式：
+- 可以读取项目文件来核对事实、架构边界和实现细节。
+- 非必要不要读取文件；如果待评审内容已经足够，请直接基于已提供上下文评审，避免无谓消耗 token。
+- 不要读取 .env、密钥、cookie、token、私有配置或本地 Agent 状态文件，除非用户明确要求审查这些文件本身。
+- 禁止修改、写入、删除文件，禁止改动工作区状态。
+- 不要执行提交、push 或创建 PR。
 
 来源：
 - provider: ${provider}

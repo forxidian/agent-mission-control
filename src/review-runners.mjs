@@ -131,7 +131,7 @@ function codexArgs({ cwd, model, outputPath }) {
   return args;
 }
 
-function claudeArgs({ prompt, model }) {
+function claudeArgs({ prompt, cwd, model }) {
   const args = [
     '-p',
     prompt,
@@ -140,7 +140,11 @@ function claudeArgs({ prompt, model }) {
     '--permission-mode',
     'dontAsk',
     '--tools',
-    '',
+    'Read,Grep,Glob,LS',
+    '--disallowedTools',
+    'Edit,Write,MultiEdit,NotebookEdit,Bash',
+    '--add-dir',
+    cwd || process.cwd(),
   ];
   if (model) args.push('--model', model);
   return args;
@@ -249,7 +253,7 @@ export async function runReviewWithProvider({
     args = codexArgs({ cwd, model, outputPath });
     options.input = prompt;
   } else if (provider === 'claude-code-cli') {
-    args = claudeArgs({ prompt, model });
+    args = claudeArgs({ prompt, cwd, model });
   } else if (provider === 'opencode-cli') {
     args = opencodeArgs({ prompt, cwd, model, agent });
   }

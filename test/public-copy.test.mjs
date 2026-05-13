@@ -785,7 +785,7 @@ test('builds and wires copyable review debug summaries', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const buildStart = app.indexOf('function buildReviewDebugSummary');
   const buildEnd = app.indexOf('\nfunction renderReviewJobs', buildStart);
-  const copyStart = app.indexOf('async function copyReviewDebugInfo');
+  const copyStart = app.indexOf('function findReviewJob');
   const copyEnd = app.indexOf('\nasync function openThread', copyStart);
 
   assert.notEqual(buildStart, -1);
@@ -896,6 +896,7 @@ test('renders review result details with safe fix loop actions', async () => {
       resultPreview: '评审预览',
       source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex', projectName: 'agent-mission-control' },
       target: { label: 'Claude Code CLI', provider: 'claude-code-cli', model: 'sonnet' },
+      fixLoop: { status: 'source-opened' },
       stderr: 'OpenAI Codex v0.130.0 workdir: local-private-path prompt text',
       error: ''
     });
@@ -906,6 +907,10 @@ test('renders review result details with safe fix loop actions', async () => {
   assert.match(context.html, /Claude Code CLI/);
   assert.match(context.html, /评审完整结果/);
   assert.match(context.html, /data-copy-review-fix-id="review-1"/);
+  assert.match(context.html, /data-copy-open-review-fix-id="review-1"/);
+  assert.match(context.html, /data-review-fix-status-id="review-1"/);
+  assert.match(context.html, /修复状态/);
+  assert.match(context.html, /已回源线程/);
   assert.match(context.html, /data-open-thread-id="thread-1"/);
   assert.doesNotMatch(context.html, /stderr:/);
   assert.doesNotMatch(context.html, /OpenAI Codex/);
@@ -1240,7 +1245,7 @@ test('copies a safe fix prompt from a completed review job', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const buildStart = app.indexOf('function buildReviewFixPrompt');
   const buildEnd = app.indexOf('\nfunction renderReviewJobDetail', buildStart);
-  const copyStart = app.indexOf('async function copyReviewFixPrompt');
+  const copyStart = app.indexOf('function findReviewJob');
   const copyEnd = app.indexOf('\nasync function openThread', copyStart);
 
   assert.notEqual(buildStart, -1);
@@ -1251,6 +1256,8 @@ test('copies a safe fix prompt from a completed review job', async () => {
   const context = {
     copied: '',
     notices: [],
+    patch: null,
+    Date: { now: () => 123 },
     state: {
       review: {
         jobsByThread: new Map([[
@@ -1271,6 +1278,10 @@ test('copies a safe fix prompt from a completed review job', async () => {
     async copyText(value) {
       globalThis.copied = value;
     },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
     showNotice(message) {
       globalThis.notices.push(message);
     },
@@ -1288,17 +1299,144 @@ test('copies a safe fix prompt from a completed review job', async () => {
       copyReviewFixPrompt('review-1');
     `, context);
     context.copied = globalThis.copied;
+    context.patch = globalThis.patch;
   } finally {
     delete globalThis.copied;
     delete globalThis.notices;
+    delete globalThis.patch;
   }
 
-  assert.match(context.copied, /请继续处理这条跨 Agent 评审意见/);
+  assert.match(context.copied, /请根据下面的评审结果修复当前线程中的工作/);
+  assert.match(context.copied, /这条 Prompt 会粘贴回源线程继续执行/);
+  assert.match(context.copied, /评审上下文/);
+  assert.match(context.copied, /只处理评审中明确指出的问题/);
+  assert.match(context.copied, /不要 push，不要创建 PR/);
   assert.match(context.copied, /源线程/);
   assert.match(context.copied, /Claude Code CLI/);
   assert.match(context.copied, /请补测试并简化实现。/);
-  assert.match(context.copied, /不要假设这里包含完整线程历史/);
+  assert.doesNotMatch(context.copied, /源内容预览/);
+  assert.doesNotMatch(context.copied, /源 Agent 输出预览/);
+  assert.equal(context.patch.reviewId, 'review-1');
+  assert.equal(context.patch.patch.fixLoop.status, 'prompt-copied');
+  assert.equal(context.patch.patch.fixLoop.promptCopiedAtMs, 123);
   assert.deepEqual(context.notices, ['已复制修复 Prompt。']);
+});
+
+test('copies a fix prompt and opens the source thread without overwriting the clipboard', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewFixPrompt');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobDetail', buildStart);
+  const helperStart = app.indexOf('function findReviewJob');
+  const helperEnd = app.indexOf('\nasync function openThread', helperStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+
+  const context = {
+    copied: '',
+    opened: null,
+    patch: null,
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'succeeded',
+            templateId: 'technical-review',
+            inputMode: 'latest-agent-signal',
+            inputPreview: '源 Agent 输出预览',
+            resultPreview: '请补测试。',
+            source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli' },
+          }],
+        ]]),
+      },
+    },
+    Date: { now: () => 456 },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
+    async openThread(threadId, sourceButton, options) {
+      globalThis.opened = { threadId, sourceButton, options };
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.opened = context.opened;
+  globalThis.patch = context.patch;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${app.slice(helperStart, helperEnd)}
+      copyAndOpenReviewFix('review-1', 'button-ref');
+    `, context);
+    context.copied = globalThis.copied;
+    context.opened = globalThis.opened;
+    context.patch = globalThis.patch;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.opened;
+    delete globalThis.patch;
+  }
+
+  assert.match(context.copied, /请根据下面的评审结果修复当前线程中的工作/);
+  assert.equal(context.patch.patch.fixLoop.status, 'source-opened');
+  assert.equal(context.patch.patch.fixLoop.sourceOpenedAtMs, 456);
+  assert.equal(context.opened.threadId, 'thread-1');
+  assert.equal(context.opened.options.copyResume, false);
+});
+
+test('marks a review fix loop as applied or dismissed', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const helperStart = app.indexOf('function findReviewJob');
+  const helperEnd = app.indexOf('\nasync function openThread', helperStart);
+
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+
+  const context = {
+    notices: [],
+    patch: null,
+    Date: { now: () => 789 },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+  };
+
+  globalThis.notices = context.notices;
+  globalThis.patch = context.patch;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(helperStart, helperEnd)}
+      markReviewFixLoopStatus('review-1', 'applied');
+    `, context);
+    context.patch = globalThis.patch;
+  } finally {
+    delete globalThis.notices;
+    delete globalThis.patch;
+  }
+
+  assert.equal(context.patch.reviewId, 'review-1');
+  assert.equal(context.patch.patch.fixLoop.status, 'applied');
+  assert.equal(context.patch.patch.fixLoop.resolvedAtMs, 789);
+  assert.deepEqual(context.notices, ['已标记为已处理。']);
 });
 
 test('formats token totals with compact M and B units for consistent scanning', async () => {

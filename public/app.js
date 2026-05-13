@@ -1368,6 +1368,14 @@ function reviewStatusLabel(status) {
   return status || '未知';
 }
 
+function fixLoopStatusLabel(status) {
+  if (status === 'prompt-copied') return '已复制修复 Prompt';
+  if (status === 'source-opened') return '已回源线程';
+  if (status === 'applied') return '已处理';
+  if (status === 'dismissed') return '不采纳';
+  return '尚未处理';
+}
+
 function reviewTemplateOptions(selected = 'technical-review') {
   return REVIEW_TEMPLATES.map(([id, label]) => (
     `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
@@ -1442,14 +1450,12 @@ function buildReviewDebugSummary(job) {
 
 function buildReviewFixPrompt(job) {
   return [
-    '请继续处理这条跨 Agent 评审意见。',
+    '请根据下面的评审结果修复当前线程中的工作。',
     '',
-    '目标：',
-    '- 基于下面的评审意见修正原任务输出或实现。',
-    '- 优先处理阻塞问题和可验证的风险。',
-    '- 不要假设这里包含完整线程历史；如果需要更多上下文，请先查看当前项目和源线程已有内容。',
+    '这条 Prompt 会粘贴回源线程继续执行。请基于当前线程已有上下文、项目文件和下面的评审结果完成修复。',
     '',
-    '来源：',
+    '评审上下文：',
+    `- 评审 job: ${job.id || '-'}`,
     `- 源 Agent: ${job.source?.providerLabel || job.source?.provider || '-'}`,
     `- 源线程: ${job.source?.title || '-'}`,
     `- 源线程 ID: ${job.source?.threadId || '-'}`,
@@ -1458,8 +1464,13 @@ function buildReviewFixPrompt(job) {
     `- 评审模板: ${job.templateId || '-'}`,
     `- 输入模式: ${job.inputMode || '-'}`,
     '',
-    '源内容预览：',
-    job.inputPreview || '-',
+    '修复约束：',
+    '- 先阅读相关文件和现有实现，不要凭空修改。',
+    '- 只处理评审中明确指出的问题，避免无关重构。',
+    '- 保持当前分支和用户已有改动，不要 reset 或回滚他人修改。',
+    '- 修改后运行相关测试；如果无法运行，说明原因。',
+    '- 不要 push，不要创建 PR，除非用户明确要求。',
+    '- 不要假设这里包含完整线程历史；如果需要更多上下文，请先查看当前项目和源线程已有内容。',
     '',
     '评审意见：',
     job.resultText || job.resultPreview || '-',
@@ -1517,6 +1528,10 @@ function renderReviewJobDetail(job) {
           <span>完成</span>
           <strong>${escapeHtml(formatTimestamp(job.completedAtMs))}</strong>
         </div>
+        <div class="detail-cell">
+          <span>修复状态</span>
+          <strong>${escapeHtml(fixLoopStatusLabel(job.fixLoop?.status))}</strong>
+        </div>
       </div>
       ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
       <div class="review-preview">
@@ -1530,6 +1545,9 @@ function renderReviewJobDetail(job) {
       <div class="detail-actions">
         <button class="action-button secondary" type="button" data-copy-review-id="${escapeHtml(job.id)}"${job.resultText ? '' : ' disabled'}>复制评审结果</button>
         <button class="action-button secondary" type="button" data-copy-review-fix-id="${escapeHtml(job.id)}"${job.resultText || job.resultPreview ? '' : ' disabled'}>复制修复 Prompt</button>
+        <button class="action-button secondary" type="button" data-copy-open-review-fix-id="${escapeHtml(job.id)}"${(job.resultText || job.resultPreview) && job.source?.threadId ? '' : ' disabled'}>复制并打开源线程</button>
+        <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="applied"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记已处理</button>
+        <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="dismissed"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记不采纳</button>
         <button class="action-button secondary" type="button" data-copy-review-debug-id="${escapeHtml(job.id)}">复制调试摘要</button>
         <button class="action-button secondary" type="button" data-open-thread-id="${escapeHtml(job.source?.threadId || '')}"${job.source?.threadId ? '' : ' disabled'}>打开源线程</button>
       </div>
@@ -2392,8 +2410,34 @@ async function submitReview(form) {
   }
 }
 
+async function updateReviewJobMetadata(reviewId, patch) {
+  const body = await fetchJson(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  mergeReviewJob(body.job);
+  renderSelectedDetail();
+  return body.job;
+}
+
+function findReviewJob(reviewId) {
+  return [...state.review.jobsByThread.values()].flat().find((candidate) => candidate.id === reviewId);
+}
+
+function mergeReviewJob(job) {
+  const threadId = job?.source?.threadId;
+  if (!threadId) return;
+
+  const jobs = reviewJobsForThread(threadId);
+  const nextJobs = jobs.some((candidate) => candidate.id === job.id)
+    ? jobs.map((candidate) => (candidate.id === job.id ? job : candidate))
+    : [job, ...jobs];
+  state.review.jobsByThread.set(threadId, nextJobs);
+}
+
 async function copyReviewResult(reviewId) {
-  const job = [...state.review.jobsByThread.values()].flat().find((candidate) => candidate.id === reviewId);
+  const job = findReviewJob(reviewId);
   if (!job?.resultText) {
     showError('这条评审还没有可复制的结果。');
     return;
@@ -2408,7 +2452,7 @@ async function copyReviewResult(reviewId) {
 }
 
 async function copyReviewDebugInfo(reviewId) {
-  const job = [...state.review.jobsByThread.values()].flat().find((candidate) => candidate.id === reviewId);
+  const job = findReviewJob(reviewId);
   if (!job) {
     showError('找不到这条评审记录，刷新后再试。');
     return;
@@ -2423,7 +2467,7 @@ async function copyReviewDebugInfo(reviewId) {
 }
 
 async function copyReviewFixPrompt(reviewId) {
-  const job = [...state.review.jobsByThread.values()].flat().find((candidate) => candidate.id === reviewId);
+  const job = findReviewJob(reviewId);
   if (!job?.resultText && !job?.resultPreview) {
     showError('这条评审还没有可生成修复 Prompt 的结果。');
     return;
@@ -2431,13 +2475,74 @@ async function copyReviewFixPrompt(reviewId) {
 
   try {
     await copyText(buildReviewFixPrompt(job));
-    showNotice('已复制修复 Prompt。');
   } catch {
     showError('无法写入剪贴板，请手动复制修复 Prompt。');
+    return;
+  }
+
+  try {
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status: 'prompt-copied',
+        promptCopiedAtMs: Date.now(),
+      },
+    });
+    showNotice('已复制修复 Prompt。');
+  } catch (error) {
+    showError(`已复制修复 Prompt，但无法记录状态：${error.message}`);
   }
 }
 
-async function openThread(threadId, sourceButton, { notificationId = '' } = {}) {
+async function copyAndOpenReviewFix(reviewId, sourceButton) {
+  const job = findReviewJob(reviewId);
+  if (!job?.resultText && !job?.resultPreview) {
+    showError('这条评审还没有可生成修复 Prompt 的结果。');
+    return;
+  }
+  if (!job.source?.threadId) {
+    showError('这条评审缺少源线程，无法打开。');
+    return;
+  }
+
+  try {
+    const timestamp = Date.now();
+    await copyText(buildReviewFixPrompt(job));
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status: 'source-opened',
+        promptCopiedAtMs: timestamp,
+        sourceOpenedAtMs: timestamp,
+      },
+    });
+    await openThread(job.source.threadId, sourceButton, {
+      copyResume: false,
+      noticeMessage: '已复制修复 Prompt，正在打开源线程。',
+    });
+  } catch (error) {
+    showError(`无法启动回源修复：${error.message}`);
+  }
+}
+
+async function markReviewFixLoopStatus(reviewId, status) {
+  if (status !== 'applied' && status !== 'dismissed') {
+    showError('未知的修复状态。');
+    return;
+  }
+
+  try {
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status,
+        resolvedAtMs: Date.now(),
+      },
+    });
+    showNotice(status === 'applied' ? '已标记为已处理。' : '已标记为不采纳。');
+  } catch (error) {
+    showError(`无法更新修复状态：${error.message}`);
+  }
+}
+
+async function openThread(threadId, sourceButton, { notificationId = '', copyResume = true, noticeMessage = '' } = {}) {
   const thread = findThread(threadId);
   if (!thread) {
     showError('找不到这个任务，先刷新看板再试。');
@@ -2448,7 +2553,7 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
   disableButtonBriefly(sourceButton);
 
   if (thread.appDeepLink) {
-    void copyText(resumeCommand).catch(() => {});
+    if (copyResume) void copyText(resumeCommand).catch(() => {});
 
     if (notificationId) {
       markNotificationDoneLocally(notificationId);
@@ -2458,9 +2563,9 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
     }
 
     const label = providerLabel(thread);
-    showNotice(notificationId
+    showNotice(noticeMessage || (notificationId
       ? `正在切换到 ${label}，并已标记为已处理。`
-      : `正在切换到 ${label}。`);
+      : `正在切换到 ${label}。`));
     window.location.href = thread.appDeepLink;
     return;
   }
@@ -2477,15 +2582,19 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
 
-    await copyText(body.resumeCommand || resumeCommand).catch(() => {});
+    if (copyResume) await copyText(body.resumeCommand || resumeCommand).catch(() => {});
     if (notificationId) markNotificationDoneLocally(notificationId);
 
     const label = providerLabel(thread);
-    showNotice(body.opened
+    showNotice(noticeMessage || (body.opened
       ? `正在打开 ${label}，并已复制命令。`
-      : `已复制 ${label} 命令，请在终端继续。`);
+      : `已复制 ${label} 命令，请在终端继续。`));
     loadDashboard({ silent: true });
   } catch (error) {
+    if (!copyResume) {
+      showError(`无法直接打开任务，请手动打开源线程：${thread.title || thread.id}`);
+      return;
+    }
     try {
       await copyText(resumeCommand);
       showError(`无法直接打开任务，已复制命令：${resumeCommand}`);
@@ -2729,6 +2838,23 @@ document.addEventListener('click', (event) => {
   if (copyReviewFixTarget) {
     event.preventDefault();
     copyReviewFixPrompt(copyReviewFixTarget.dataset.copyReviewFixId);
+    return;
+  }
+
+  const copyOpenReviewFixTarget = clicked.closest('[data-copy-open-review-fix-id]');
+  if (copyOpenReviewFixTarget) {
+    event.preventDefault();
+    copyAndOpenReviewFix(copyOpenReviewFixTarget.dataset.copyOpenReviewFixId, copyOpenReviewFixTarget);
+    return;
+  }
+
+  const reviewFixStatusTarget = clicked.closest('[data-review-fix-status-id]');
+  if (reviewFixStatusTarget) {
+    event.preventDefault();
+    markReviewFixLoopStatus(
+      reviewFixStatusTarget.dataset.reviewFixStatusId,
+      reviewFixStatusTarget.dataset.reviewFixStatus,
+    );
     return;
   }
 

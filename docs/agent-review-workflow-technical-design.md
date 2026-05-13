@@ -281,12 +281,12 @@ codex exec -C <cwd> --sandbox read-only -c 'approval_policy="never"' --output-la
 命令：
 
 ```bash
-claude -p <prompt> --output-format json --permission-mode dontAsk --tools ""
+claude -p <prompt> --output-format json --permission-mode dontAsk --tools Read,Grep,Glob,LS --disallowedTools Edit,Write,MultiEdit,NotebookEdit,Bash --add-dir <cwd>
 ```
 
 当前 Claude Code CLI 版本要求 prompt 紧跟 `-p/--print`。如果把 prompt 放在所有 flags 后面，CLI 会报 `Input must be provided either through stdin or as a prompt argument when using --print`。
 
-建议默认禁用工具，避免评审任务意外读写文件。需要代码上下文时，再让用户选择允许工具或 add-dir。不要依赖 shell 拼接；用 `spawn`/`execFile` 参数数组传递 prompt，因此 prompt 中的换行或 `--` 文本会作为同一个参数传入，不会被 shell 重新解析为 CLI flag。
+默认允许只读文件工具，便于所有评审模板在需要时核对 repo 文件；Prompt 需要引导 Agent 非必要不读取文件，避免无谓 token 消耗。显式禁用编辑、写入和 Bash，避免评审任务改动工作区。不要依赖 shell 拼接；用 `spawn`/`execFile` 参数数组传递 prompt，因此 prompt 中的换行或 `--` 文本会作为同一个参数传入，不会被 shell 重新解析为 CLI flag。
 
 ### OpenCode runner
 

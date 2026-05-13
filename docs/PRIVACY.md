@@ -51,6 +51,10 @@ Review workflow:
 - The review debug summary is generated from stored job metadata such as job
   id, source, target, input mode, status, error, and stderr. It does not include
   the full prompt or full review result.
+- Fix Loop metadata records only local workflow status and timestamps, such as
+  whether a fix prompt was copied, the source thread was opened, or the review
+  was marked applied/dismissed. It does not write to Codex, Claude, or OpenCode
+  conversation databases.
 - Future complete-transcript review modes would expand local data exposure
   beyond P1 and should require an explicit confirmation before sending that
   larger content to a target CLI Agent.
