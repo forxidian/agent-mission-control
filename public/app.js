@@ -13,6 +13,21 @@ const state = {
   refreshError: '',
   noticeTimer: null,
   inboxExpanded: false,
+  review: {
+    openThreadId: '',
+    targets: null,
+    contentByThread: new Map(),
+    contentErrorsByThread: new Map(),
+    jobsByThread: new Map(),
+    fixLoopFilterByThread: new Map(),
+    inputModeByThread: new Map(),
+    selectedJobIdByThread: new Map(),
+    targetProviderByThread: new Map(),
+    templateByThread: new Map(),
+    customInstructionByThread: new Map(),
+    isLoading: false,
+    pollTimer: null,
+  },
 };
 
 const elements = {
@@ -47,6 +62,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
 const REFRESH_INTERVAL_OPTIONS_MS = new Set([10_000, 30_000, 60_000]);
 const UNFOCUSED_REFRESH_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
+const REVIEW_POLL_INTERVAL_MS = 5_000;
 const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
 const REFRESH_INTERVAL_STORAGE_KEY = 'codex-mission-control:refresh-interval-ms';
@@ -101,6 +117,18 @@ const SOFT_PROGRESS_STATUS_LABELS = {
 
 const ACTIVE_NOTIFICATION_STATUSES = new Set(['unread', 'read']);
 const CLOSED_TODO_STATUSES = new Set(['completed', 'done', 'cancelled', 'canceled']);
+const REVIEW_TEMPLATES = [
+  ['code-review', '代码审查'],
+  ['product-review', '产品/需求审查'],
+  ['technical-review', '技术方案审查'],
+  ['response-quality-review', '回复质量审查'],
+  ['custom-review', '自定义审查'],
+];
+const REVIEW_INPUT_MODES = [
+  ['latest-agent-signal', '最近 Agent 输出'],
+  ['latest-turn', '最近一轮对话'],
+  ['thread-summary', '线程摘要和最近输出'],
+];
 
 function escapeHtml(value = '') {
   return String(value)
@@ -1299,6 +1327,396 @@ function buildThreadSummary(thread) {
   ].join('\n');
 }
 
+function reviewJobsForThread(threadId) {
+  return state.review.jobsByThread.get(threadId) || [];
+}
+
+function reviewContentKey(threadId, mode) {
+  return `${threadId}:${mode}`;
+}
+
+function selectedReviewInputMode(threadId) {
+  const thread = findThread(threadId);
+  const selected = state.review.inputModeByThread.get(threadId) || 'latest-agent-signal';
+  return reviewInputModesForThread(thread).some(([id]) => id === selected) ? selected : 'latest-agent-signal';
+}
+
+function reviewContentForThread(threadId, mode = selectedReviewInputMode(threadId)) {
+  return state.review.contentByThread.get(reviewContentKey(threadId, mode)) || null;
+}
+
+function reviewContentErrorForThread(threadId, mode = selectedReviewInputMode(threadId)) {
+  return state.review.contentErrorsByThread.get(reviewContentKey(threadId, mode)) || '';
+}
+
+function selectedReviewTargetProvider(threadId) {
+  const selected = state.review.targetProviderByThread.get(threadId) || '';
+  const items = state.review.targets?.items || [];
+  if (selected && items.some((target) => target.provider === selected && target.available)) return selected;
+  return items.find((target) => target.available)?.provider || selected;
+}
+
+function hasRunningReviewJob(threadId) {
+  return reviewJobsForThread(threadId).some((job) => job.status === 'running' || job.status === 'queued');
+}
+
+function reviewStatusLabel(status) {
+  if (status === 'queued') return '排队中';
+  if (status === 'running') return '评审中';
+  if (status === 'succeeded') return '已完成';
+  if (status === 'failed') return '失败';
+  if (status === 'cancelled') return '已取消';
+  return status || '未知';
+}
+
+function fixLoopStatusLabel(status) {
+  if (status === 'prompt-copied') return '已复制修复 Prompt';
+  if (status === 'source-opened') return '已回源线程';
+  if (status === 'applied') return '已处理';
+  if (status === 'dismissed') return '不采纳';
+  return '尚未处理';
+}
+
+function fixLoopFilterLabel(filter) {
+  if (filter === 'pending') return '待修复';
+  if (filter === 'applied') return '已处理';
+  if (filter === 'dismissed') return '不采纳';
+  return '全部';
+}
+
+function selectedReviewFixLoopFilter(threadId) {
+  const selected = state.review.fixLoopFilterByThread.get(threadId) || 'all';
+  return ['all', 'pending', 'applied', 'dismissed'].includes(selected) ? selected : 'all';
+}
+
+function reviewFixLoopFilterTabs(threadId, selected = 'all') {
+  return ['all', 'pending', 'applied', 'dismissed'].map((filter) => (
+    `<button class="review-filter-tab${filter === selected ? ' is-selected' : ''}" type="button" data-review-fix-filter-thread-id="${escapeHtml(threadId)}" data-review-fix-filter="${escapeHtml(filter)}">${escapeHtml(fixLoopFilterLabel(filter))}</button>`
+  )).join('');
+}
+
+function isPendingFixLoopJob(job) {
+  if (job.status !== 'succeeded') return false;
+  const status = job.fixLoop?.status || 'not-started';
+  return status !== 'applied' && status !== 'dismissed';
+}
+
+function filterReviewJobsByFixLoop(jobs, filter = 'all') {
+  if (filter === 'pending') return jobs.filter(isPendingFixLoopJob);
+  if (filter === 'applied') return jobs.filter((job) => job.fixLoop?.status === 'applied');
+  if (filter === 'dismissed') return jobs.filter((job) => job.fixLoop?.status === 'dismissed');
+  return jobs;
+}
+
+function reviewTemplateOptions(selected = 'technical-review') {
+  return REVIEW_TEMPLATES.map(([id, label]) => (
+    `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
+  )).join('');
+}
+
+function selectedReviewTemplate(threadId) {
+  const selected = state.review.templateByThread.get(threadId) || 'technical-review';
+  return REVIEW_TEMPLATES.some(([id]) => id === selected) ? selected : 'technical-review';
+}
+
+function isCodexReviewThread(thread = {}) {
+  const provider = String(thread.provider || thread.source || '').toLowerCase();
+  return provider === 'codex' || provider === 'codex-cli' || provider === '';
+}
+
+function reviewInputModesForThread(thread = {}) {
+  if (isCodexReviewThread(thread)) return REVIEW_INPUT_MODES;
+  return REVIEW_INPUT_MODES.filter(([id]) => id !== 'latest-turn');
+}
+
+function reviewInputModeOptions(selected = 'latest-agent-signal', thread = {}) {
+  return reviewInputModesForThread(thread).map(([id, label]) => (
+    `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
+  )).join('');
+}
+
+function reviewInputPrivacyHint(mode) {
+  if (mode === 'latest-turn') {
+    return '最近一轮会读取并发送更多本地会话内容给目标 CLI Agent。';
+  }
+  if (mode === 'thread-summary') {
+    return '线程摘要会发送标准线程字段和最近输出信号给目标 CLI Agent。';
+  }
+  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。';
+}
+
+function reviewTargetOptions(targets, selectedProvider = '') {
+  const items = targets?.items || [];
+  if (!items.length) return '<option value="">正在检测目标 Agent</option>';
+  const selected = selectedProvider || items.find((target) => target.available)?.provider || '';
+
+  return items.map((target) => `
+    <option value="${escapeHtml(target.provider)}"${target.provider === selected ? ' selected' : ''}${target.available ? '' : ' disabled'}>
+      ${escapeHtml(target.label || target.provider)} · ${escapeHtml(reviewTargetCapabilitySummary(target))}${target.available ? '' : '（不可用）'}
+    </option>
+  `).join('');
+}
+
+function selectedReviewTarget(threadId) {
+  const provider = selectedReviewTargetProvider(threadId);
+  return (state.review.targets?.items || []).find((target) => target.provider === provider) || null;
+}
+
+function reviewTargetCapabilitySummary(target = {}) {
+  const repoAccess = target.capabilities?.repoAccess;
+  const writeProtection = target.capabilities?.writeProtection;
+
+  if (repoAccess === 'readonly' && writeProtection === 'sandbox-readonly') return '可读 repo · 只读沙盒';
+  if (repoAccess === 'readonly' && writeProtection === 'write-tools-denied') return '可读 repo · 禁写工具';
+  if (repoAccess === 'prompt-guarded') return '可读 repo · Prompt 禁写';
+  if (repoAccess === 'text-only') return '仅文本评审';
+  return '能力未知';
+}
+
+function buildReviewDebugSummary(job) {
+  return [
+    'Agent Mission Control 评审调试摘要',
+    '用途：排查本地 review job；不包含完整 prompt 或评审正文。',
+    '',
+    `- job: ${job.id || '-'}`,
+    `- 状态: ${reviewStatusLabel(job.status)}`,
+    `- 来源: ${job.source?.providerLabel || job.source?.provider || '-'} / ${job.source?.title || '-'}`,
+    `- 目标: ${job.target?.label || job.target?.provider || '-'}`,
+    `- runner: ${job.target?.runner || '-'}`,
+    `- 模型: ${job.target?.model || '-'}`,
+    `- 模板: ${job.templateId || '-'}`,
+    `- 输入模式: ${job.inputMode || '-'}`,
+    `- startedAt: ${formatTimestamp(job.startedAtMs)}`,
+    `- completedAt: ${formatTimestamp(job.completedAtMs)}`,
+    `- exitCode: ${job.exitCode ?? '-'}`,
+    `- timedOut: ${job.timedOut ? 'yes' : 'no'}`,
+    `- truncatedResult: ${job.truncatedResult ? 'yes' : 'no'}`,
+    `- error: ${job.error || '-'}`,
+    `- stderr: ${job.stderr || '-'}`,
+  ].join('\n');
+}
+
+function buildReviewFixPrompt(job) {
+  return [
+    '请根据下面的评审结果修复当前线程中的工作。',
+    '',
+    '这条 Prompt 会粘贴回源线程继续执行。请基于当前线程已有上下文、项目文件和下面的评审结果完成修复。',
+    '',
+    '评审上下文：',
+    `- 评审 job: ${job.id || '-'}`,
+    `- 源 Agent: ${job.source?.providerLabel || job.source?.provider || '-'}`,
+    `- 源线程: ${job.source?.title || '-'}`,
+    `- 源线程 ID: ${job.source?.threadId || '-'}`,
+    `- 项目: ${job.source?.projectName || job.source?.cwd || '-'}`,
+    `- 评审 Agent: ${job.target?.label || job.target?.provider || '-'}`,
+    `- 评审模板: ${job.templateId || '-'}`,
+    `- 输入模式: ${job.inputMode || '-'}`,
+    '',
+    '修复约束：',
+    '- 先阅读相关文件和现有实现，不要凭空修改。',
+    '- 只处理评审中明确指出的问题，避免无关重构。',
+    '- 保持当前分支和用户已有改动，不要 reset 或回滚他人修改。',
+    '- 修改后运行相关测试；如果无法运行，说明原因。',
+    '- 不要 push，不要创建 PR，除非用户明确要求。',
+    '- 不要假设这里包含完整线程历史；如果需要更多上下文，请先查看当前项目和源线程已有内容。',
+    '',
+    '评审意见：',
+    job.resultText || job.resultPreview || '-',
+    '',
+    '请输出：',
+    '1. 你接受哪些评审意见，哪些不接受，并说明原因。',
+    '2. 你实际修改或建议修改的内容。',
+    '3. 已运行或建议运行的验证命令。',
+    '4. 仍需人工确认的部分。',
+  ].join('\n');
+}
+
+function renderReviewJobDetail(job) {
+  if (!job) return '';
+
+  return `
+    <article class="review-job-detail" aria-labelledby="review-job-detail-heading">
+      <div class="review-results-heading">
+        <div>
+          <h4 id="review-job-detail-heading">评审结果详情</h4>
+          <p class="detail-note">${escapeHtml(job.id || '')}</p>
+        </div>
+        <button class="action-button secondary" type="button" data-close-review-detail-id="${escapeHtml(job.source?.threadId || '')}">关闭详情</button>
+      </div>
+      <div class="detail-grid detail-grid-compact">
+        <div class="detail-cell">
+          <span>状态</span>
+          <strong>${escapeHtml(reviewStatusLabel(job.status))}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>来源</span>
+          <strong>${escapeHtml(job.source?.providerLabel || job.source?.provider || '-')}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>源线程</span>
+          <strong>${escapeHtml(job.source?.title || '-')}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>目标 Agent</span>
+          <strong>${escapeHtml(job.target?.label || job.target?.provider || '-')}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>模板</span>
+          <strong>${escapeHtml(job.templateId || '-')}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>输入模式</span>
+          <strong>${escapeHtml(job.inputMode || '-')}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>开始</span>
+          <strong>${escapeHtml(formatTimestamp(job.startedAtMs))}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>完成</span>
+          <strong>${escapeHtml(formatTimestamp(job.completedAtMs))}</strong>
+        </div>
+        <div class="detail-cell">
+          <span>修复状态</span>
+          <strong>${escapeHtml(fixLoopStatusLabel(job.fixLoop?.status))}</strong>
+        </div>
+      </div>
+      ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
+      <div class="review-preview">
+        <h5>输入预览</h5>
+        <pre>${escapeHtml(job.inputPreview || '暂无输入预览')}</pre>
+      </div>
+      <div class="review-preview">
+        <h5>评审结果</h5>
+        <pre>${escapeHtml(job.resultText || job.resultPreview || '暂无评审结果')}</pre>
+      </div>
+      <div class="detail-actions">
+        <button class="action-button secondary" type="button" data-copy-review-id="${escapeHtml(job.id)}"${job.resultText ? '' : ' disabled'}>复制评审结果</button>
+        <button class="action-button secondary" type="button" data-copy-review-fix-id="${escapeHtml(job.id)}"${job.resultText || job.resultPreview ? '' : ' disabled'}>复制修复 Prompt</button>
+        <button class="action-button secondary" type="button" data-copy-open-review-fix-id="${escapeHtml(job.id)}"${(job.resultText || job.resultPreview) && job.source?.threadId ? '' : ' disabled'}>复制并打开源线程</button>
+        <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="applied"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记已处理</button>
+        <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="dismissed"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记不采纳</button>
+        <button class="action-button secondary" type="button" data-copy-review-debug-id="${escapeHtml(job.id)}">复制调试摘要</button>
+        <button class="action-button secondary" type="button" data-open-thread-id="${escapeHtml(job.source?.threadId || '')}"${job.source?.threadId ? '' : ' disabled'}>打开源线程</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderReviewJobs(jobs, selectedJobId = '', fixLoopFilter = 'all') {
+  const visibleJobs = filterReviewJobsByFixLoop(jobs, fixLoopFilter);
+  if (!visibleJobs.length) {
+    return `<p class="empty-state compact">${fixLoopFilter === 'all' ? '暂无评审记录。' : `暂无${fixLoopFilterLabel(fixLoopFilter)}记录。`}</p>`;
+  }
+
+  return `
+    <div class="review-job-list">
+      ${visibleJobs.map((job) => `
+        <article class="review-job${job.id === selectedJobId ? ' is-selected' : ''}" data-review-status="${escapeHtml(job.status)}" data-review-fix-status="${escapeHtml(job.fixLoop?.status || 'not-started')}">
+          <div class="review-job-heading">
+            <strong>${escapeHtml(reviewStatusLabel(job.status))}</strong>
+            <span>${escapeHtml(job.target?.label || job.target?.provider || 'Agent')}</span>
+          </div>
+          <p class="review-job-meta">${escapeHtml(job.templateId || '-')} · ${escapeHtml(fixLoopStatusLabel(job.fixLoop?.status))} · ${escapeHtml(formatTimestamp(job.completedAtMs || job.startedAtMs))}</p>
+          ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
+          ${job.resultPreview ? `<pre>${escapeHtml(job.resultPreview)}</pre>` : ''}
+          ${job.stderr && job.status === 'failed' ? `<p class="detail-note">stderr: ${escapeHtml(job.stderr)}</p>` : ''}
+          <div class="detail-actions">
+            <button class="action-button secondary" type="button" data-open-review-detail-id="${escapeHtml(job.id)}" data-review-detail-thread-id="${escapeHtml(job.source?.threadId || '')}">查看详情</button>
+            <button class="action-button secondary" type="button" data-copy-review-id="${escapeHtml(job.id)}"${job.resultText ? '' : ' disabled'}>复制评审结果</button>
+            <button class="action-button secondary" type="button" data-copy-review-fix-id="${escapeHtml(job.id)}"${job.resultText || job.resultPreview ? '' : ' disabled'}>复制修复 Prompt</button>
+            <button class="action-button secondary" type="button" data-copy-review-debug-id="${escapeHtml(job.id)}">复制调试摘要</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderReviewPanel(thread) {
+  if (state.review.openThreadId !== thread.id) return '';
+
+  const targets = state.review.targets;
+  const inputMode = selectedReviewInputMode(thread.id);
+  const content = reviewContentForThread(thread.id, inputMode);
+  const contentError = reviewContentErrorForThread(thread.id, inputMode);
+  const jobs = reviewJobsForThread(thread.id);
+  const isLoading = state.review.isLoading;
+  const selectedTargetProvider = selectedReviewTargetProvider(thread.id);
+  const target = selectedReviewTarget(thread.id);
+  const targetOptions = reviewTargetOptions(targets, selectedTargetProvider);
+  const targetReady = Boolean(targets?.items?.some((target) => target.available));
+  const contentReady = Boolean(content?.preview);
+  const selectedJobId = state.review.selectedJobIdByThread.get(thread.id) || '';
+  const fixLoopFilter = selectedReviewFixLoopFilter(thread.id);
+  const visibleJobs = filterReviewJobsByFixLoop(jobs, fixLoopFilter);
+  const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) || null;
+  const selectedTemplate = selectedReviewTemplate(thread.id);
+  const customInstruction = state.review.customInstructionByThread.get(thread.id) || '';
+
+  return `
+    <section class="detail-section detail-section-wide review-panel" aria-labelledby="review-panel-heading">
+      <div class="detail-section-heading">
+        <h3 id="review-panel-heading">交给另一个 Agent 评审</h3>
+        <p>${escapeHtml(reviewInputPrivacyHint(inputMode))}</p>
+      </div>
+      <form class="review-form" data-review-form-thread-id="${escapeHtml(thread.id)}">
+        <label>
+          <span>评审输入</span>
+          <select name="inputMode" data-review-input-mode-id="${escapeHtml(thread.id)}">${reviewInputModeOptions(inputMode, thread)}</select>
+        </label>
+        <label>
+          <span>目标 Agent</span>
+          <select name="targetProvider" data-review-target-provider-id="${escapeHtml(thread.id)}"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
+          <small class="review-target-capability">${escapeHtml(reviewTargetCapabilitySummary(target))}</small>
+        </label>
+        <label>
+          <span>评审模板</span>
+          <select name="templateId" data-review-template-id="${escapeHtml(thread.id)}">${reviewTemplateOptions(selectedTemplate)}</select>
+        </label>
+        <label>
+          <span>目标模型</span>
+          <input name="targetModel" type="text" autocomplete="off" placeholder="可选，例如 sonnet">
+        </label>
+        ${selectedTemplate === 'custom-review' ? `
+          <label class="review-custom-instruction">
+            <span>自定义审查</span>
+            <textarea name="customReviewInstruction" rows="4" data-review-custom-instruction-id="${escapeHtml(thread.id)}" placeholder="例如：只检查是否存在跨线程串台、状态刷新覆盖、隐私泄露风险。">${escapeHtml(customInstruction)}</textarea>
+          </label>
+        ` : ''}
+        <div class="review-preview">
+          <span>输入预览</span>
+          <pre>${escapeHtml(content?.preview || contentError || (isLoading ? '正在读取评审输入...' : '暂无可评审的 Agent 输出'))}</pre>
+        </div>
+        <div class="detail-actions">
+          <button class="action-button primary" type="submit"${targetReady && contentReady && !isLoading ? '' : ' disabled'}>开始评审</button>
+        </div>
+      </form>
+      <div class="review-results-divider" aria-hidden="true"></div>
+      <div class="review-results">
+        <div class="review-results-heading">
+          <div>
+            <strong>评审记录</strong>
+            <p>左侧是当前线程的历史评审，右侧显示选中记录的完整详情。</p>
+          </div>
+          <button class="action-button secondary" type="button" data-refresh-review-jobs-id="${escapeHtml(thread.id)}">刷新</button>
+        </div>
+        <div class="review-filter-tabs" role="group" aria-label="Fix Loop 状态筛选">
+          ${reviewFixLoopFilterTabs(thread.id, fixLoopFilter)}
+        </div>
+        <div class="review-results-layout">
+          <aside class="review-records-column" aria-label="评审记录列表">
+            ${renderReviewJobs(jobs, selectedJobId, fixLoopFilter)}
+          </aside>
+          <div class="review-detail-column" aria-live="polite">
+            ${selectedJob ? renderReviewJobDetail(selectedJob) : '<p class="empty-state compact">选择左侧记录查看详情。</p>'}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderDetail(thread) {
   if (!thread) {
     elements.detail.innerHTML = '<p class="empty-state">选择一个任务查看结构化审计信号。</p>';
@@ -1369,8 +1787,10 @@ function renderDetail(thread) {
           <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>打开</button>
           <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
           <button class="action-button secondary" type="button" data-copy-summary-id="${escapeHtml(thread.id)}">复制摘要</button>
+          <button class="action-button secondary" type="button" data-open-review-panel-id="${escapeHtml(thread.id)}">交给另一个 Agent 评审</button>
         </div>
       </section>
+      ${renderReviewPanel(thread)}
 
       <section class="detail-section detail-section-wide" aria-labelledby="detail-summary-heading">
         <div class="detail-section-heading">
@@ -1750,6 +2170,7 @@ async function loadDashboard({ silent = false, force = false } = {}) {
   if (state.isLoading) return;
 
   state.isLoading = true;
+  const deferRender = silent && hasActiveReviewInteraction();
   renderMonitorStatus();
   elements.refreshButton.disabled = true;
 
@@ -1764,11 +2185,14 @@ async function loadDashboard({ silent = false, force = false } = {}) {
     state.lastRefreshAtMs = Date.now();
     state.refreshError = '';
     if (!silent || elements.statusBanner.dataset.tone === 'error') clearError();
-    if (shouldRenderDashboard) {
-      renderDashboard();
-    } else {
-      state.dashboardSignature = nextSignature;
-      renderDashboardStatusOnly();
+    await refreshOpenReviewContent({ silent });
+    if (!deferRender) {
+      if (shouldRenderDashboard) {
+        renderDashboard();
+      } else {
+        state.dashboardSignature = nextSignature;
+        renderDashboardStatusOnly();
+      }
     }
   } catch (error) {
     state.refreshError = error.message;
@@ -1784,6 +2208,166 @@ async function loadNotifications() {
   const response = await fetch('/api/notifications', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   setNotifications(await response.json());
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+  return body;
+}
+
+async function loadReviewTargets() {
+  if (state.review.targets) return state.review.targets;
+  state.review.targets = await fetchJson('/api/review-targets', { cache: 'no-store' });
+  return state.review.targets;
+}
+
+async function loadReviewContent(threadId, mode = selectedReviewInputMode(threadId)) {
+  const key = reviewContentKey(threadId, mode);
+  const content = await fetchJson(`/api/threads/${encodeURIComponent(threadId)}/review-content?mode=${encodeURIComponent(mode)}`, {
+    cache: 'no-store',
+  });
+  state.review.contentByThread.set(key, content);
+  state.review.contentErrorsByThread.delete(key);
+  return content;
+}
+
+async function refreshOpenReviewContent({ silent = false } = {}) {
+  const threadId = state.review.openThreadId;
+  if (!threadId || !findThread(threadId)) return;
+
+  const inputMode = selectedReviewInputMode(threadId);
+  try {
+    await loadReviewContent(threadId, inputMode);
+  } catch (error) {
+    state.review.contentByThread.delete(reviewContentKey(threadId, inputMode));
+    state.review.contentErrorsByThread.set(reviewContentKey(threadId, inputMode), error.message);
+    if (!silent) showError(`无法刷新评审输入：${error.message}`);
+  }
+}
+
+async function loadReviewJobs(threadId) {
+  const jobs = await fetchJson(`/api/reviews?threadId=${encodeURIComponent(threadId)}`, { cache: 'no-store' });
+  const items = jobs.items || [];
+  state.review.jobsByThread.set(threadId, items);
+  return items;
+}
+
+function renderSelectedDetail() {
+  renderDetail(findThread(state.selectedThreadId));
+}
+
+function hasActiveReviewInteraction() {
+  const active = document.activeElement;
+  return active instanceof Element && Boolean(active.closest('.review-form'));
+}
+
+function syncReviewPolling() {
+  if (state.review.pollTimer) {
+    clearInterval(state.review.pollTimer);
+    state.review.pollTimer = null;
+  }
+
+  const threadId = state.review.openThreadId;
+  if (!threadId || !hasRunningReviewJob(threadId)) return;
+
+  state.review.pollTimer = setInterval(() => {
+    refreshReviewJobs(threadId, { silent: true });
+  }, REVIEW_POLL_INTERVAL_MS);
+}
+
+async function openReviewPanel(threadId) {
+  state.review.openThreadId = threadId;
+  state.review.isLoading = true;
+  renderSelectedDetail();
+
+  try {
+    const inputMode = selectedReviewInputMode(threadId);
+    await Promise.all([
+      loadReviewTargets(),
+      loadReviewContent(threadId, inputMode),
+      loadReviewJobs(threadId),
+    ]);
+  } catch (error) {
+    showError(`无法加载评审面板：${error.message}`);
+  } finally {
+    state.review.isLoading = false;
+    renderSelectedDetail();
+    syncReviewPolling();
+  }
+}
+
+async function changeReviewInputMode(threadId, inputMode) {
+  state.review.inputModeByThread.set(threadId, inputMode);
+  state.review.isLoading = true;
+  renderSelectedDetail();
+
+  try {
+    await loadReviewContent(threadId, inputMode);
+  } catch (error) {
+    state.review.contentByThread.delete(reviewContentKey(threadId, inputMode));
+    state.review.contentErrorsByThread.set(reviewContentKey(threadId, inputMode), error.message);
+    showError(`无法读取评审输入：${error.message}`);
+  } finally {
+    state.review.isLoading = false;
+    renderSelectedDetail();
+  }
+}
+
+function changeReviewTargetProvider(threadId, targetProvider) {
+  if (targetProvider) {
+    state.review.targetProviderByThread.set(threadId, targetProvider);
+  } else {
+    state.review.targetProviderByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
+function changeReviewTemplate(threadId, templateId) {
+  if (REVIEW_TEMPLATES.some(([id]) => id === templateId)) {
+    state.review.templateByThread.set(threadId, templateId);
+  } else {
+    state.review.templateByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
+function changeReviewFixLoopFilter(threadId, filter) {
+  if (['pending', 'applied', 'dismissed'].includes(filter)) {
+    state.review.fixLoopFilterByThread.set(threadId, filter);
+  } else {
+    state.review.fixLoopFilterByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
+function updateCustomReviewInstruction(threadId, value) {
+  state.review.customInstructionByThread.set(threadId, value || '');
+}
+
+function openReviewJobDetail(threadId, reviewId) {
+  if (threadId && reviewId) {
+    state.review.selectedJobIdByThread.set(threadId, reviewId);
+  }
+  renderSelectedDetail();
+}
+
+function closeReviewJobDetail(threadId) {
+  if (threadId) {
+    state.review.selectedJobIdByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
+async function refreshReviewJobs(threadId, { silent = false } = {}) {
+  try {
+    await loadReviewJobs(threadId);
+    if (!silent || !hasActiveReviewInteraction()) renderSelectedDetail();
+    syncReviewPolling();
+  } catch (error) {
+    if (!silent) showError(`无法刷新评审记录：${error.message}`);
+  }
 }
 
 function selectThread(threadId) {
@@ -1850,7 +2434,182 @@ async function copyThreadSummary(threadId) {
   }
 }
 
-async function openThread(threadId, sourceButton, { notificationId = '' } = {}) {
+async function submitReview(form) {
+  const threadId = form.dataset.reviewFormThreadId;
+  const thread = findThread(threadId);
+  if (!thread) {
+    showError('找不到这个线程，先刷新看板再试。');
+    return;
+  }
+
+  const formData = new FormData(form);
+  const templateId = formData.get('templateId') || selectedReviewTemplate(threadId);
+  const payload = {
+    sourceThreadId: threadId,
+    targetProvider: formData.get('targetProvider') || selectedReviewTargetProvider(threadId),
+    targetModel: formData.get('targetModel'),
+    templateId,
+    inputMode: formData.get('inputMode') || selectedReviewInputMode(threadId),
+  };
+  if (templateId === 'custom-review') {
+    payload.customReviewInstruction = formData.get('customReviewInstruction') || '';
+  }
+
+  state.review.isLoading = true;
+  renderSelectedDetail();
+
+  try {
+    const body = await fetchJson('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const jobs = reviewJobsForThread(threadId);
+    state.review.jobsByThread.set(threadId, [body.job, ...jobs.filter((job) => job.id !== body.job.id)]);
+    showNotice('评审任务已启动。');
+    await refreshReviewJobs(threadId, { silent: true });
+  } catch (error) {
+    showError(`无法启动评审任务：${error.message}`);
+  } finally {
+    state.review.isLoading = false;
+    renderSelectedDetail();
+    syncReviewPolling();
+  }
+}
+
+async function updateReviewJobMetadata(reviewId, patch) {
+  const body = await fetchJson(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  mergeReviewJob(body.job);
+  renderSelectedDetail();
+  return body.job;
+}
+
+function findReviewJob(reviewId) {
+  return [...state.review.jobsByThread.values()].flat().find((candidate) => candidate.id === reviewId);
+}
+
+function mergeReviewJob(job) {
+  const threadId = job?.source?.threadId;
+  if (!threadId) return;
+
+  const jobs = reviewJobsForThread(threadId);
+  const nextJobs = jobs.some((candidate) => candidate.id === job.id)
+    ? jobs.map((candidate) => (candidate.id === job.id ? job : candidate))
+    : [job, ...jobs];
+  state.review.jobsByThread.set(threadId, nextJobs);
+}
+
+async function copyReviewResult(reviewId) {
+  const job = findReviewJob(reviewId);
+  if (!job?.resultText) {
+    showError('这条评审还没有可复制的结果。');
+    return;
+  }
+
+  try {
+    await copyText(job.resultText);
+    showNotice('已复制评审结果。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制评审结果。');
+  }
+}
+
+async function copyReviewDebugInfo(reviewId) {
+  const job = findReviewJob(reviewId);
+  if (!job) {
+    showError('找不到这条评审记录，刷新后再试。');
+    return;
+  }
+
+  try {
+    await copyText(buildReviewDebugSummary(job));
+    showNotice('已复制评审调试摘要。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制评审调试摘要。');
+  }
+}
+
+async function copyReviewFixPrompt(reviewId) {
+  const job = findReviewJob(reviewId);
+  if (!job?.resultText && !job?.resultPreview) {
+    showError('这条评审还没有可生成修复 Prompt 的结果。');
+    return;
+  }
+
+  try {
+    await copyText(buildReviewFixPrompt(job));
+  } catch {
+    showError('无法写入剪贴板，请手动复制修复 Prompt。');
+    return;
+  }
+
+  try {
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status: 'prompt-copied',
+        promptCopiedAtMs: Date.now(),
+      },
+    });
+    showNotice('已复制修复 Prompt。');
+  } catch (error) {
+    showError(`已复制修复 Prompt，但无法记录状态：${error.message}`);
+  }
+}
+
+async function copyAndOpenReviewFix(reviewId, sourceButton) {
+  const job = findReviewJob(reviewId);
+  if (!job?.resultText && !job?.resultPreview) {
+    showError('这条评审还没有可生成修复 Prompt 的结果。');
+    return;
+  }
+  if (!job.source?.threadId) {
+    showError('这条评审缺少源线程，无法打开。');
+    return;
+  }
+
+  try {
+    const timestamp = Date.now();
+    await copyText(buildReviewFixPrompt(job));
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status: 'source-opened',
+        promptCopiedAtMs: timestamp,
+        sourceOpenedAtMs: timestamp,
+      },
+    });
+    await openThread(job.source.threadId, sourceButton, {
+      copyResume: false,
+      noticeMessage: '已复制修复 Prompt，正在打开源线程。',
+    });
+  } catch (error) {
+    showError(`无法启动回源修复：${error.message}`);
+  }
+}
+
+async function markReviewFixLoopStatus(reviewId, status) {
+  if (status !== 'applied' && status !== 'dismissed') {
+    showError('未知的修复状态。');
+    return;
+  }
+
+  try {
+    await updateReviewJobMetadata(reviewId, {
+      fixLoop: {
+        status,
+        resolvedAtMs: Date.now(),
+      },
+    });
+    showNotice(status === 'applied' ? '已标记为已处理。' : '已标记为不采纳。');
+  } catch (error) {
+    showError(`无法更新修复状态：${error.message}`);
+  }
+}
+
+async function openThread(threadId, sourceButton, { notificationId = '', copyResume = true, noticeMessage = '' } = {}) {
   const thread = findThread(threadId);
   if (!thread) {
     showError('找不到这个任务，先刷新看板再试。');
@@ -1861,7 +2620,7 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
   disableButtonBriefly(sourceButton);
 
   if (thread.appDeepLink) {
-    void copyText(resumeCommand).catch(() => {});
+    if (copyResume) void copyText(resumeCommand).catch(() => {});
 
     if (notificationId) {
       markNotificationDoneLocally(notificationId);
@@ -1871,9 +2630,9 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
     }
 
     const label = providerLabel(thread);
-    showNotice(notificationId
+    showNotice(noticeMessage || (notificationId
       ? `正在切换到 ${label}，并已标记为已处理。`
-      : `正在切换到 ${label}。`);
+      : `正在切换到 ${label}。`));
     window.location.href = thread.appDeepLink;
     return;
   }
@@ -1890,15 +2649,19 @@ async function openThread(threadId, sourceButton, { notificationId = '' } = {}) 
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
 
-    await copyText(body.resumeCommand || resumeCommand).catch(() => {});
+    if (copyResume) await copyText(body.resumeCommand || resumeCommand).catch(() => {});
     if (notificationId) markNotificationDoneLocally(notificationId);
 
     const label = providerLabel(thread);
-    showNotice(body.opened
+    showNotice(noticeMessage || (body.opened
       ? `正在打开 ${label}，并已复制命令。`
-      : `已复制 ${label} 命令，请在终端继续。`);
+      : `已复制 ${label} 命令，请在终端继续。`));
     loadDashboard({ silent: true });
   } catch (error) {
+    if (!copyResume) {
+      showError(`无法直接打开任务，请手动打开源线程：${thread.title || thread.id}`);
+      return;
+    }
     try {
       await copyText(resumeCommand);
       showError(`无法直接打开任务，已复制命令：${resumeCommand}`);
@@ -2100,6 +2863,85 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const reviewPanelTarget = clicked.closest('[data-open-review-panel-id]');
+  if (reviewPanelTarget) {
+    event.preventDefault();
+    openReviewPanel(reviewPanelTarget.dataset.openReviewPanelId);
+    return;
+  }
+
+  const refreshReviewTarget = clicked.closest('[data-refresh-review-jobs-id]');
+  if (refreshReviewTarget) {
+    event.preventDefault();
+    refreshReviewJobs(refreshReviewTarget.dataset.refreshReviewJobsId);
+    return;
+  }
+
+  const openReviewDetailTarget = clicked.closest('[data-open-review-detail-id]');
+  if (openReviewDetailTarget) {
+    event.preventDefault();
+    openReviewJobDetail(
+      openReviewDetailTarget.dataset.reviewDetailThreadId,
+      openReviewDetailTarget.dataset.openReviewDetailId,
+    );
+    return;
+  }
+
+  const closeReviewDetailTarget = clicked.closest('[data-close-review-detail-id]');
+  if (closeReviewDetailTarget) {
+    event.preventDefault();
+    closeReviewJobDetail(closeReviewDetailTarget.dataset.closeReviewDetailId);
+    return;
+  }
+
+  const copyReviewTarget = clicked.closest('[data-copy-review-id]');
+  if (copyReviewTarget) {
+    event.preventDefault();
+    copyReviewResult(copyReviewTarget.dataset.copyReviewId);
+    return;
+  }
+
+  const copyReviewFixTarget = clicked.closest('[data-copy-review-fix-id]');
+  if (copyReviewFixTarget) {
+    event.preventDefault();
+    copyReviewFixPrompt(copyReviewFixTarget.dataset.copyReviewFixId);
+    return;
+  }
+
+  const copyOpenReviewFixTarget = clicked.closest('[data-copy-open-review-fix-id]');
+  if (copyOpenReviewFixTarget) {
+    event.preventDefault();
+    copyAndOpenReviewFix(copyOpenReviewFixTarget.dataset.copyOpenReviewFixId, copyOpenReviewFixTarget);
+    return;
+  }
+
+  const reviewFixStatusTarget = clicked.closest('[data-review-fix-status-id]');
+  if (reviewFixStatusTarget) {
+    event.preventDefault();
+    markReviewFixLoopStatus(
+      reviewFixStatusTarget.dataset.reviewFixStatusId,
+      reviewFixStatusTarget.dataset.reviewFixStatus,
+    );
+    return;
+  }
+
+  const reviewFixFilterTarget = clicked.closest('[data-review-fix-filter-thread-id]');
+  if (reviewFixFilterTarget) {
+    event.preventDefault();
+    changeReviewFixLoopFilter(
+      reviewFixFilterTarget.dataset.reviewFixFilterThreadId,
+      reviewFixFilterTarget.dataset.reviewFixFilter,
+    );
+    return;
+  }
+
+  const copyReviewDebugTarget = clicked.closest('[data-copy-review-debug-id]');
+  if (copyReviewDebugTarget) {
+    event.preventDefault();
+    copyReviewDebugInfo(copyReviewDebugTarget.dataset.copyReviewDebugId);
+    return;
+  }
+
   const doneTarget = clicked.closest('[data-notification-done-id]');
   if (doneTarget) {
     event.preventDefault();
@@ -2126,6 +2968,45 @@ document.addEventListener('click', (event) => {
   const target = clicked.closest('[data-thread-id]');
   if (!target) return;
   selectThread(target.dataset.threadId);
+});
+
+document.addEventListener('submit', (event) => {
+  const form = event.target instanceof Element ? event.target.closest('[data-review-form-thread-id]') : null;
+  if (!form) return;
+  event.preventDefault();
+  submitReview(form);
+});
+
+document.addEventListener('change', (event) => {
+  const changed = event.target instanceof Element ? event.target : null;
+  if (!changed) return;
+
+  const inputModeTarget = changed.closest('[data-review-input-mode-id]');
+  if (inputModeTarget) {
+    changeReviewInputMode(inputModeTarget.dataset.reviewInputModeId, inputModeTarget.value);
+    return;
+  }
+
+  const reviewTarget = changed.closest('[data-review-target-provider-id]');
+  if (reviewTarget) {
+    changeReviewTargetProvider(reviewTarget.dataset.reviewTargetProviderId, reviewTarget.value);
+    return;
+  }
+
+  const reviewTemplate = changed.closest('[data-review-template-id]');
+  if (reviewTemplate) {
+    changeReviewTemplate(reviewTemplate.dataset.reviewTemplateId, reviewTemplate.value);
+  }
+});
+
+document.addEventListener('input', (event) => {
+  const changed = event.target instanceof Element ? event.target : null;
+  if (!changed) return;
+
+  const customInstruction = changed.closest('[data-review-custom-instruction-id]');
+  if (customInstruction) {
+    updateCustomReviewInstruction(customInstruction.dataset.reviewCustomInstructionId, customInstruction.value);
+  }
 });
 
 initializeInstallPrompt();

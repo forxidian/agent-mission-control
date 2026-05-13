@@ -67,6 +67,15 @@ test('uses Chinese copy for visible system fields', async () => {
     '打开',
     '复制命令',
     '复制摘要',
+    '交给另一个 Agent 评审',
+    '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。',
+    '评审输入',
+    '最近一轮对话',
+    '线程摘要和最近输出',
+    '最近一轮会读取并发送更多本地会话内容给目标 CLI Agent。',
+    '复制评审结果',
+    '复制调试摘要',
+    '评审调试摘要',
     'resume 命令',
     '本轮耗时',
     '任务详情',
@@ -392,6 +401,1147 @@ test('offers privacy-limited thread summary copy from the detail panel', async (
   assert.match(app, /只含本地元数据和截断信号，不含完整内容/);
   assert.match(app, /用户输入信号/);
   assert.match(app, /Agent 输出信号/);
+});
+
+test('limits latest-turn review input selector to Codex threads', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const constStart = app.indexOf('const REVIEW_INPUT_MODES =');
+  const constEnd = app.indexOf('];', constStart) + 2;
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const codexStart = app.indexOf('function isCodexReviewThread');
+  const optionsEnd = app.indexOf('\nfunction reviewInputPrivacyHint', codexStart);
+
+  assert.notEqual(constStart, -1);
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(codexStart, -1);
+
+  const context = { codexOptions: '', claudeOptions: '' };
+  vm.runInNewContext(`
+    ${app.slice(constStart, constEnd)}
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(codexStart, optionsEnd)}
+    codexOptions = reviewInputModeOptions('latest-turn', { provider: 'codex' });
+    claudeOptions = reviewInputModeOptions('latest-turn', { provider: 'claude-code-cli' });
+  `, context);
+
+  assert.match(context.codexOptions, /value="latest-turn"/);
+  assert.doesNotMatch(context.claudeOptions, /value="latest-turn"/);
+  assert.match(context.claudeOptions, /value="thread-summary"/);
+});
+
+test('preserves selected review target options across detail rerenders', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const optionsStart = app.indexOf('function reviewTargetOptions');
+  const optionsEnd = app.indexOf('\nfunction buildReviewDebugSummary', optionsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(optionsStart, -1);
+  assert.notEqual(optionsEnd, -1);
+
+  const context = { options: '' };
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(optionsStart, optionsEnd)}
+    options = reviewTargetOptions({
+      items: [
+        { provider: 'codex-cli', label: 'Codex CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' } },
+        { provider: 'claude-code-cli', label: 'Claude Code CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'write-tools-denied' } },
+        { provider: 'opencode', label: 'OpenCode CLI', available: true, capabilities: { repoAccess: 'prompt-guarded', writeProtection: 'prompt-only' } }
+      ]
+    }, 'claude-code-cli');
+  `, context);
+
+  assert.match(context.options, /value="claude-code-cli" selected/);
+  assert.match(context.options, /Claude Code CLI · 可读 repo · 禁写工具/);
+  assert.match(context.options, /OpenCode CLI · 可读 repo · Prompt 禁写/);
+  assert.doesNotMatch(context.options, /value="codex-cli" selected/);
+});
+
+test('stores selected review target when target selector changes', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const changeStart = app.indexOf('function changeReviewTargetProvider');
+  const changeEnd = app.indexOf('\nasync function submitReview', changeStart);
+
+  assert.notEqual(changeStart, -1);
+  assert.notEqual(changeEnd, -1);
+
+  const context = {
+    renders: 0,
+    state: {
+      review: {
+        targetProviderByThread: new Map(),
+      },
+    },
+    renderSelectedDetail() {
+      globalThis.renders += 1;
+    },
+  };
+
+  globalThis.renders = context.renders;
+  try {
+    vm.runInNewContext(`
+      ${app.slice(changeStart, changeEnd)}
+      changeReviewTargetProvider('thread-1', 'claude-code-cli');
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.state.review.targetProviderByThread.get('thread-1'), 'claude-code-cli');
+  assert.equal(context.renders, 1);
+});
+
+test('refreshes review input preview when input mode changes', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const keyStart = app.indexOf('function reviewContentKey');
+  const keyEnd = app.indexOf('\nfunction selectedReviewInputMode', keyStart);
+  const changeStart = app.indexOf('async function changeReviewInputMode');
+  const changeEnd = app.indexOf('\nasync function refreshReviewJobs', changeStart);
+
+  assert.notEqual(keyStart, -1);
+  assert.notEqual(keyEnd, -1);
+  assert.notEqual(changeStart, -1);
+  assert.notEqual(changeEnd, -1);
+
+  const context = {
+    requested: [],
+    renders: 0,
+    notices: [],
+    state: {
+      review: {
+        inputModeByThread: new Map(),
+        contentByThread: new Map(),
+        contentErrorsByThread: new Map(),
+        isLoading: false,
+      },
+    },
+    async loadReviewContent(threadId, mode) {
+      globalThis.requested.push([threadId, mode]);
+      return { threadId, mode, preview: 'preview' };
+    },
+    renderSelectedDetail() {
+      globalThis.renders += 1;
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.requested = context.requested;
+  globalThis.renders = context.renders;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(keyStart, keyEnd)}
+      ${app.slice(changeStart, changeEnd)}
+      changeReviewInputMode('thread-1', 'thread-summary');
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.requested;
+    delete globalThis.renders;
+    delete globalThis.notices;
+  }
+
+  assert.deepEqual(context.requested, [['thread-1', 'thread-summary']]);
+  assert.equal(context.state.review.inputModeByThread.get('thread-1'), 'thread-summary');
+  assert.equal(context.state.review.isLoading, false);
+  assert.equal(context.renders >= 2, true);
+  assert.deepEqual(context.notices, []);
+});
+
+test('submits review jobs with the selected input mode payload', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const submitStart = app.indexOf('async function submitReview');
+  const submitEnd = app.indexOf('\nasync function copyReviewResult', submitStart);
+
+  assert.notEqual(submitStart, -1);
+  assert.notEqual(submitEnd, -1);
+
+  class FakeFormData {
+    constructor(form) {
+      this.form = form;
+    }
+
+    get(key) {
+      return this.form.values[key] || '';
+    }
+  }
+
+  const context = {
+    payload: null,
+    notices: [],
+    state: {
+      review: {
+        isLoading: false,
+        jobsByThread: new Map(),
+      },
+    },
+    FormData: FakeFormData,
+    JSON,
+    findThread(threadId) {
+      return threadId === 'thread-1' ? { id: threadId } : null;
+    },
+    renderSelectedDetail() {},
+    async fetchJson(_url, options) {
+      globalThis.payload = JSON.parse(options.body);
+      return { job: { id: 'review-1', status: 'queued' } };
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+    async refreshReviewJobs() {},
+    syncReviewPolling() {},
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+  };
+
+  globalThis.payload = context.payload;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(submitStart, submitEnd)}
+      submitReview({
+        dataset: { reviewFormThreadId: 'thread-1' },
+        values: {
+          targetProvider: 'claude-code-cli',
+          targetModel: 'sonnet',
+          templateId: 'technical-review',
+          inputMode: 'latest-turn'
+        }
+      });
+    `, context);
+    context.payload = globalThis.payload;
+  } finally {
+    delete globalThis.payload;
+    delete globalThis.notices;
+  }
+
+  assert.deepEqual(context.payload, {
+    sourceThreadId: 'thread-1',
+    targetProvider: 'claude-code-cli',
+    targetModel: 'sonnet',
+    templateId: 'technical-review',
+    inputMode: 'latest-turn',
+  });
+  assert.equal(context.state.review.jobsByThread.get('thread-1')[0].id, 'review-1');
+  assert.deepEqual(context.notices, ['评审任务已启动。']);
+});
+
+test('renders and submits custom review instructions when custom template is selected', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+  const submitStart = app.indexOf('async function submitReview');
+  const submitEnd = app.indexOf('\nasync function copyReviewResult', submitStart);
+
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+  assert.notEqual(submitStart, -1);
+  assert.notEqual(submitEnd, -1);
+  assert.match(app, /custom-review/);
+  assert.match(app, /customReviewInstruction/);
+
+  class FakeFormData {
+    constructor(form) {
+      this.form = form;
+    }
+
+    get(key) {
+      return this.form.values[key] || '';
+    }
+  }
+
+  const context = {
+    html: '',
+    payload: null,
+    notices: [],
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: {
+          items: [{
+            provider: 'codex-cli',
+            label: 'Codex CLI',
+            available: true,
+            capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' },
+          }],
+        },
+        isLoading: false,
+        selectedJobIdByThread: new Map(),
+        templateByThread: new Map([['thread-1', 'custom-review']]),
+        customInstructionByThread: new Map([['thread-1', '只检查串台风险']]),
+        fixLoopFilterByThread: new Map(),
+        jobsByThread: new Map(),
+      },
+    },
+    FormData: FakeFormData,
+    JSON,
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return { preview: '输入预览' };
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    selectedReviewTargetProvider() {
+      return 'codex-cli';
+    },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
+    selectedReviewTemplate() {
+      return 'custom-review';
+    },
+    reviewTargetOptions() {
+      return '<option>Codex CLI · 可读 repo · 只读沙盒</option>';
+    },
+    selectedReviewTarget() {
+      return context.state.review.targets.items[0];
+    },
+    reviewTargetCapabilitySummary() {
+      return '可读 repo · 只读沙盒';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option value="custom-review" selected>自定义审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '';
+    },
+    renderReviewJobDetail() {
+      return '';
+    },
+    findThread(threadId) {
+      return threadId === 'thread-1' ? { id: threadId } : null;
+    },
+    renderSelectedDetail() {},
+    async fetchJson(_url, options) {
+      globalThis.payload = JSON.parse(options.body);
+      return { job: { id: 'review-1', status: 'queued' } };
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+    async refreshReviewJobs() {},
+    syncReviewPolling() {},
+  };
+
+  globalThis.payload = context.payload;
+  globalThis.notices = context.notices;
+  try {
+    vm.runInNewContext(`
+      ${app.slice(panelStart, panelEnd)}
+      html = renderReviewPanel({ id: 'thread-1' });
+    `, context);
+
+    await vm.runInNewContext(`
+      ${app.slice(submitStart, submitEnd)}
+      submitReview({
+        dataset: { reviewFormThreadId: 'thread-1' },
+        values: {
+          targetProvider: 'codex-cli',
+          targetModel: '',
+          templateId: 'custom-review',
+          inputMode: 'latest-agent-signal',
+          customReviewInstruction: '只检查串台风险'
+        }
+      });
+    `, context);
+    context.payload = globalThis.payload;
+  } finally {
+    delete globalThis.payload;
+    delete globalThis.notices;
+  }
+
+  assert.match(context.html, /自定义审查/);
+  assert.match(context.html, /可读 repo · 只读沙盒/);
+  assert.match(context.html, /name="customReviewInstruction"/);
+  assert.match(context.html, /只检查串台风险/);
+  assert.equal(context.payload.templateId, 'custom-review');
+  assert.equal(context.payload.customReviewInstruction, '只检查串台风险');
+});
+
+test('keeps browser review notifications hidden for release', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(app, /开启评审结果通知/);
+  assert.doesNotMatch(app, /data-review-notification-opt-in/);
+  assert.doesNotMatch(app, /Notification\.requestPermission/);
+  assert.doesNotMatch(app, /new Notification/);
+});
+
+test('builds and wires copyable review debug summaries', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewDebugSummary');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobs', buildStart);
+  const copyStart = app.indexOf('function findReviewJob');
+  const copyEnd = app.indexOf('\nasync function openThread', copyStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(copyStart, -1);
+  assert.notEqual(copyEnd, -1);
+  assert.match(app, /data-copy-review-debug-id/);
+
+  const context = {
+    copied: '',
+    notices: [],
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'failed',
+            templateId: 'technical-review',
+            inputMode: 'latest-turn',
+            source: { title: '源线程', providerLabel: 'Codex' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli', runner: 'claude-print', model: 'sonnet' },
+            error: 'Runner failed',
+            stderr: 'permission denied',
+            timedOut: false,
+            exitCode: 1,
+            truncatedResult: true,
+          }],
+        ]]),
+      },
+    },
+    reviewStatusLabel(status) {
+      return status === 'failed' ? '失败' : status;
+    },
+    formatTimestamp() {
+      return '-';
+    },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${app.slice(copyStart, copyEnd)}
+      copyReviewDebugInfo('review-1');
+    `, context);
+    context.copied = globalThis.copied;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.notices;
+  }
+
+  assert.match(context.copied, /Agent Mission Control 评审调试摘要/);
+  assert.match(context.copied, /- job: review-1/);
+  assert.match(context.copied, /- 输入模式: latest-turn/);
+  assert.match(context.copied, /- 目标: Claude Code CLI/);
+  assert.match(context.copied, /- stderr: permission denied/);
+  assert.deepEqual(context.notices, ['已复制评审调试摘要。']);
+});
+
+test('renders review result details with safe fix loop actions', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const detailStart = app.indexOf('function renderReviewJobDetail');
+  const detailEnd = app.indexOf('\nfunction renderReviewJobs', detailStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(detailStart, -1);
+  assert.notEqual(detailEnd, -1);
+  assert.match(app, /data-open-review-detail-id/);
+  assert.match(app, /data-copy-review-fix-id/);
+
+  const context = {
+    html: '',
+    formatTimestamp(value) {
+      return value ? '2026-05-13 10:00' : '-';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(detailStart, detailEnd)}
+    html = renderReviewJobDetail({
+      id: 'review-1',
+      status: 'succeeded',
+      templateId: 'technical-review',
+      inputMode: 'latest-turn',
+      inputPreview: '原始输入预览',
+      resultText: '评审完整结果',
+      resultPreview: '评审预览',
+      source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex', projectName: 'agent-mission-control' },
+      target: { label: 'Claude Code CLI', provider: 'claude-code-cli', model: 'sonnet' },
+      fixLoop: { status: 'source-opened' },
+      stderr: 'OpenAI Codex v0.130.0 workdir: local-private-path prompt text',
+      error: ''
+    });
+  `, context);
+
+  assert.match(context.html, /评审结果详情/);
+  assert.match(context.html, /源线程/);
+  assert.match(context.html, /Claude Code CLI/);
+  assert.match(context.html, /评审完整结果/);
+  assert.match(context.html, /data-copy-review-fix-id="review-1"/);
+  assert.match(context.html, /data-copy-open-review-fix-id="review-1"/);
+  assert.match(context.html, /data-review-fix-status-id="review-1"/);
+  assert.match(context.html, /修复状态/);
+  assert.match(context.html, /已回源线程/);
+  assert.match(context.html, /data-open-thread-id="thread-1"/);
+  assert.doesNotMatch(context.html, /stderr:/);
+  assert.doesNotMatch(context.html, /OpenAI Codex/);
+  assert.doesNotMatch(context.html, /private prompt text/);
+  assert.match(styles, /\.review-job-detail pre\s*\{[\s\S]*max-height:\s*none;/);
+  assert.match(styles, /\.review-job-detail \.review-preview pre\s*\{[\s\S]*border:\s*1px solid var\(--line\);/);
+});
+
+test('keeps review history visually separated from the selected detail pane', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  assert.match(app, /review-results-divider/);
+  assert.match(app, /review-results-layout/);
+  assert.match(app, /review-records-column/);
+  assert.match(app, /review-detail-column/);
+  assert.match(app, /选择左侧记录查看详情/);
+  assert.match(app, /review-job-meta/);
+  assert.match(styles, /\.review-form\s*\{[\s\S]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(styles, /\.review-results-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px,\s*0\.75fr\)\s*minmax\(0,\s*1\.45fr\);/);
+  assert.match(styles, /\.review-records-column\s*\{[\s\S]*overflow:\s*visible;/);
+  assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*\.review-results-layout,[\s\S]*grid-template-columns:\s*1fr;/);
+});
+
+test('renders selected review history items with metadata and highlight state', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const jobsStart = app.indexOf('function renderReviewJobs');
+  const jobsEnd = app.indexOf('\nfunction renderReviewPanel', jobsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(jobsStart, -1);
+  assert.notEqual(jobsEnd, -1);
+
+  const context = {
+    html: '',
+    formatTimestamp(value) {
+      return value ? '2026-05-13 16:00' : '-';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(jobsStart, jobsEnd)}
+    html = renderReviewJobs([
+      {
+        id: 'review-1',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        completedAtMs: 1778660000000,
+        resultPreview: '完整性检查通过',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Claude Code CLI' },
+      },
+      {
+        id: 'review-2',
+        status: 'running',
+        templateId: 'response-quality-review',
+        startedAtMs: 1778660100000,
+        source: { threadId: 'thread-1' },
+        target: { label: 'Codex CLI' },
+      },
+    ], 'review-1');
+  `, context);
+
+  assert.match(context.html, /review-job is-selected/);
+  assert.match(context.html, /technical-review · 尚未处理 · 2026-05-13 16:00/);
+  assert.match(context.html, /Claude Code CLI/);
+  assert.match(context.html, /完整性检查通过/);
+});
+
+test('filters review history by fix loop status', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const jobsStart = app.indexOf('function renderReviewJobs');
+  const jobsEnd = app.indexOf('\nfunction renderReviewPanel', jobsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(jobsStart, -1);
+  assert.notEqual(jobsEnd, -1);
+
+  const context = {
+    html: '',
+    formatTimestamp() {
+      return '2026-05-13 16:00';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(jobsStart, jobsEnd)}
+    const jobs = [
+      {
+        id: 'review-pending',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '待修复项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Claude Code CLI' },
+        fixLoop: { status: 'source-opened' }
+      },
+      {
+        id: 'review-applied',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '已处理项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Codex CLI' },
+        fixLoop: { status: 'applied' }
+      },
+      {
+        id: 'review-dismissed',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '不采纳项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'OpenCode CLI' },
+        fixLoop: { status: 'dismissed' }
+      }
+    ];
+    html = renderReviewJobs(jobs, '', 'pending');
+  `, context);
+
+  assert.match(context.html, /待修复项/);
+  assert.doesNotMatch(context.html, /已处理项/);
+  assert.doesNotMatch(context.html, /不采纳项/);
+});
+
+test('renders review detail empty state beside the history list when no job is selected', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+
+  const context = {
+    html: '',
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: { items: [{ provider: 'codex-cli', available: true }] },
+        isLoading: false,
+        selectedJobIdByThread: new Map(),
+        customInstructionByThread: new Map(),
+      },
+    },
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return { preview: '输入预览' };
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [{ id: 'review-1', status: 'succeeded' }];
+    },
+    selectedReviewTargetProvider() {
+      return 'codex-cli';
+    },
+    selectedReviewTarget() {
+      return { provider: 'codex-cli', label: 'Codex CLI' };
+    },
+    reviewTargetCapabilitySummary() {
+      return '可读 repo · 只读沙盒';
+    },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
+    selectedReviewTemplate() {
+      return 'technical-review';
+    },
+    reviewTargetOptions() {
+      return '<option>Codex CLI</option>';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option>技术方案审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '<div class="review-job-list">历史记录</div>';
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
+    },
+    renderReviewJobDetail() {
+      throw new Error('detail should not render without a selected job');
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(panelStart, panelEnd)}
+    html = renderReviewPanel({ id: 'thread-1' });
+  `, context);
+
+  assert.match(context.html, /review-results-layout/);
+  assert.match(context.html, /review-records-column/);
+  assert.match(context.html, /review-detail-column/);
+  assert.match(context.html, /历史记录/);
+  assert.match(context.html, /选择左侧记录查看详情/);
+});
+
+test('keeps auto refresh from rerendering while review form is focused', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const activeStart = app.indexOf('function hasActiveReviewInteraction');
+  const loadStart = app.indexOf('async function loadDashboard');
+  const loadEnd = app.indexOf('\nasync function loadNotifications', loadStart);
+
+  assert.notEqual(activeStart, -1);
+  assert.notEqual(loadStart, -1);
+  assert.notEqual(loadEnd, -1);
+
+  const context = {
+    renders: 0,
+    state: {
+      dashboard: null,
+      isLoading: false,
+      refreshError: '',
+      lastRefreshAtMs: null,
+    },
+    elements: {
+      refreshButton: { disabled: false },
+      statusBanner: { dataset: { tone: '' } },
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() {
+          return {
+            generatedAtMs: 1778659200000,
+            notifications: { items: [], summary: { activeCount: 0 } },
+          };
+        },
+      };
+    },
+    setNotifications() {},
+    fallbackNotificationsFromDashboard() {
+      return { items: [], summary: { activeCount: 0 } };
+    },
+    renderMonitorStatus() {},
+    clearError() {},
+    showError(message) {
+      throw new Error(message);
+    },
+    renderDashboard() {
+      globalThis.renders += 1;
+    },
+    hasActiveReviewInteraction() {
+      return true;
+    },
+    Date,
+  };
+
+  globalThis.renders = context.renders;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(activeStart, loadStart)}
+      ${app.slice(loadStart, loadEnd)}
+      loadDashboard({ silent: true });
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.state.dashboard.generatedAtMs, 1778659200000);
+  assert.equal(context.renders, 0);
+});
+
+test('refreshes the open review input preview after dashboard refresh', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const loadStart = app.indexOf('async function loadDashboard');
+  const loadEnd = app.indexOf('\nasync function loadNotifications', loadStart);
+
+  assert.notEqual(loadStart, -1);
+  assert.notEqual(loadEnd, -1);
+
+  const context = {
+    refreshed: 0,
+    renders: 0,
+    state: {
+      dashboard: null,
+      isLoading: false,
+      refreshError: '',
+      lastRefreshAtMs: null,
+      review: {
+        openThreadId: 'thread-1',
+      },
+    },
+    elements: {
+      refreshButton: { disabled: false },
+      statusBanner: { dataset: { tone: '' } },
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() {
+          return {
+            threads: [{ id: 'thread-1', lastAgentMessage: '新的 Agent 输出' }],
+            notifications: [],
+          };
+        },
+      };
+    },
+    Date: { now: () => 123 },
+    setNotifications() {},
+    fallbackNotificationsFromDashboard() {
+      return [];
+    },
+    dashboardDataSignature() {
+      return 'updated-dashboard';
+    },
+    clearError() {},
+    showError(message) {
+      throw new Error(message);
+    },
+    renderMonitorStatus() {},
+    renderDashboard() {
+      globalThis.renders += 1;
+    },
+    hasActiveReviewInteraction() {
+      return false;
+    },
+    async refreshOpenReviewContent() {
+      globalThis.refreshed += 1;
+    },
+  };
+
+  globalThis.refreshed = context.refreshed;
+  globalThis.renders = context.renders;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(loadStart, loadEnd)}
+      loadDashboard();
+    `, context);
+    context.refreshed = globalThis.refreshed;
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.refreshed;
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.refreshed, 1);
+  assert.equal(context.renders, 1);
+});
+
+test('does not pause review job rerenders just because a detail is open', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const activeStart = app.indexOf('function hasActiveReviewInteraction');
+  const activeEnd = app.indexOf('\nfunction syncReviewPolling', activeStart);
+
+  assert.notEqual(activeStart, -1);
+  assert.notEqual(activeEnd, -1);
+
+  class FakeElement {
+    closest() {
+      return null;
+    }
+  }
+
+  const context = {
+    result: null,
+    Element: FakeElement,
+    document: {
+      activeElement: new FakeElement(),
+    },
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        selectedJobIdByThread: new Map([['thread-1', 'review-1']]),
+      },
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(activeStart, activeEnd)}
+    result = hasActiveReviewInteraction();
+  `, context);
+
+  assert.equal(context.result, false);
+});
+
+test('copies a safe fix prompt from a completed review job', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewFixPrompt');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobDetail', buildStart);
+  const copyStart = app.indexOf('function findReviewJob');
+  const copyEnd = app.indexOf('\nasync function openThread', copyStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(copyStart, -1);
+  assert.notEqual(copyEnd, -1);
+
+  const context = {
+    copied: '',
+    notices: [],
+    patch: null,
+    Date: { now: () => 123 },
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'succeeded',
+            templateId: 'technical-review',
+            inputMode: 'latest-turn',
+            inputPreview: '源 Agent 输出预览',
+            resultText: '请补测试并简化实现。',
+            source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex', projectName: 'agent-mission-control' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli', model: 'sonnet' },
+          }],
+        ]]),
+      },
+    },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${copyStart && copyEnd ? app.slice(copyStart, copyEnd) : ''}
+      copyReviewFixPrompt('review-1');
+    `, context);
+    context.copied = globalThis.copied;
+    context.patch = globalThis.patch;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.notices;
+    delete globalThis.patch;
+  }
+
+  assert.match(context.copied, /请根据下面的评审结果修复当前线程中的工作/);
+  assert.match(context.copied, /这条 Prompt 会粘贴回源线程继续执行/);
+  assert.match(context.copied, /评审上下文/);
+  assert.match(context.copied, /只处理评审中明确指出的问题/);
+  assert.match(context.copied, /不要 push，不要创建 PR/);
+  assert.match(context.copied, /源线程/);
+  assert.match(context.copied, /Claude Code CLI/);
+  assert.match(context.copied, /请补测试并简化实现。/);
+  assert.doesNotMatch(context.copied, /源内容预览/);
+  assert.doesNotMatch(context.copied, /源 Agent 输出预览/);
+  assert.equal(context.patch.reviewId, 'review-1');
+  assert.equal(context.patch.patch.fixLoop.status, 'prompt-copied');
+  assert.equal(context.patch.patch.fixLoop.promptCopiedAtMs, 123);
+  assert.deepEqual(context.notices, ['已复制修复 Prompt。']);
+});
+
+test('copies a fix prompt and opens the source thread without overwriting the clipboard', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const buildStart = app.indexOf('function buildReviewFixPrompt');
+  const buildEnd = app.indexOf('\nfunction renderReviewJobDetail', buildStart);
+  const helperStart = app.indexOf('function findReviewJob');
+  const helperEnd = app.indexOf('\nasync function openThread', helperStart);
+
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(buildEnd, -1);
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+
+  const context = {
+    copied: '',
+    opened: null,
+    patch: null,
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            status: 'succeeded',
+            templateId: 'technical-review',
+            inputMode: 'latest-agent-signal',
+            inputPreview: '源 Agent 输出预览',
+            resultPreview: '请补测试。',
+            source: { threadId: 'thread-1', title: '源线程', providerLabel: 'Codex' },
+            target: { label: 'Claude Code CLI', provider: 'claude-code-cli' },
+          }],
+        ]]),
+      },
+    },
+    Date: { now: () => 456 },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
+    async openThread(threadId, sourceButton, options) {
+      globalThis.opened = { threadId, sourceButton, options };
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.opened = context.opened;
+  globalThis.patch = context.patch;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(buildStart, buildEnd)}
+      ${app.slice(helperStart, helperEnd)}
+      copyAndOpenReviewFix('review-1', 'button-ref');
+    `, context);
+    context.copied = globalThis.copied;
+    context.opened = globalThis.opened;
+    context.patch = globalThis.patch;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.opened;
+    delete globalThis.patch;
+  }
+
+  assert.match(context.copied, /请根据下面的评审结果修复当前线程中的工作/);
+  assert.equal(context.patch.patch.fixLoop.status, 'source-opened');
+  assert.equal(context.patch.patch.fixLoop.sourceOpenedAtMs, 456);
+  assert.equal(context.opened.threadId, 'thread-1');
+  assert.equal(context.opened.options.copyResume, false);
+});
+
+test('marks a review fix loop as applied or dismissed', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const helperStart = app.indexOf('function findReviewJob');
+  const helperEnd = app.indexOf('\nasync function openThread', helperStart);
+
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+
+  const context = {
+    notices: [],
+    patch: null,
+    Date: { now: () => 789 },
+    async updateReviewJobMetadata(reviewId, patch) {
+      globalThis.patch = { reviewId, patch };
+      return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+  };
+
+  globalThis.notices = context.notices;
+  globalThis.patch = context.patch;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(helperStart, helperEnd)}
+      markReviewFixLoopStatus('review-1', 'applied');
+    `, context);
+    context.patch = globalThis.patch;
+  } finally {
+    delete globalThis.notices;
+    delete globalThis.patch;
+  }
+
+  assert.equal(context.patch.reviewId, 'review-1');
+  assert.equal(context.patch.patch.fixLoop.status, 'applied');
+  assert.equal(context.patch.patch.fixLoop.resolvedAtMs, 789);
+  assert.deepEqual(context.notices, ['已标记为已处理。']);
 });
 
 test('formats token totals with compact M and B units for consistent scanning', async () => {

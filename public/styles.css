@@ -1128,6 +1128,7 @@ h3 {
 .thread-main:focus-visible,
 .notification-main:focus-visible,
 .action-button:focus-visible,
+.text-button:focus-visible,
 .icon-button:focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: -2px;
@@ -1171,6 +1172,22 @@ h3 {
 
 .action-button.secondary:hover {
   background: #f1e7d0;
+}
+
+.text-button {
+  min-height: 34px;
+  border: 0;
+  padding: 0 2px;
+  color: var(--steel);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.text-button:hover {
+  color: var(--ink);
 }
 
 .action-button.is-enabled {
@@ -1604,6 +1621,244 @@ h3 {
   font-weight: 500;
 }
 
+.review-panel {
+  gap: 14px;
+}
+
+.review-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.review-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.review-form label span,
+.review-preview span {
+  color: var(--muted);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.review-target-capability {
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.review-form select,
+.review-form input,
+.review-form textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fffaf0;
+}
+
+.review-form select,
+.review-form input {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.review-form textarea {
+  min-height: 92px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.review-custom-instruction {
+  grid-column: 1 / -1;
+}
+
+.review-preview,
+.review-results,
+.review-job-detail {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.review-preview pre,
+.review-job pre,
+.review-job-detail pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.review-preview pre {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.review-results-divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line-strong);
+}
+
+.review-results {
+  padding-top: 2px;
+}
+
+.review-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-filter-tab {
+  min-height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--steel);
+  background: #fffaf0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-filter-tab:hover,
+.review-filter-tab.is-selected {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: #fff5dd;
+}
+
+.review-results-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.45fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.review-records-column,
+.review-detail-column {
+  min-width: 0;
+}
+
+.review-records-column {
+  overflow: visible;
+}
+
+.review-job-detail pre {
+  max-height: none;
+}
+
+.review-results-heading,
+.review-job-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.review-results-heading p,
+.review-job-meta {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.review-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.review-job {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.review-job-heading span,
+.review-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-job[data-review-status="failed"] {
+  border-color: rgba(162, 78, 57, 0.52);
+}
+
+.review-job[data-review-status="succeeded"] {
+  border-color: rgba(78, 117, 89, 0.42);
+}
+
+.review-job.is-selected,
+.review-job-detail {
+  border-color: var(--ink);
+}
+
+.review-job.is-selected {
+  background: #fff5dd;
+}
+
+.review-job-detail {
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+}
+
+.review-job-detail .detail-cell {
+  border: 0;
+  background: transparent;
+}
+
+.review-job-detail .review-preview pre {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.review-job-detail .review-preview h5 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.review-job-detail h4,
+.review-job-detail p {
+  margin: 0;
+}
+
 .path-line,
 .message-line {
   overflow-wrap: anywhere;
@@ -1782,9 +2037,15 @@ h3 {
   .summary-card-grid,
   .summary-card-grid-lifetime,
   .controls,
+  .review-form,
+  .review-results-layout,
   .detail-grid,
   .detail-grid-compact {
     grid-template-columns: 1fr;
+  }
+
+  .review-records-column {
+    overflow: visible;
   }
 
   .detail-section-heading {

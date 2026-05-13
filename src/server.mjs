@@ -12,6 +12,10 @@ import { loadDashboard as loadMissionControlDashboard } from './dashboard.mjs';
 import { NotificationCenter } from './notifications.mjs';
 import { openOpenCodeSession } from './opencode-data.mjs';
 import { buildPendingSummary } from './pending-summary.mjs';
+import { getReviewContentForThread } from './review-content.mjs';
+import { createReviewJobStore } from './review-jobs.mjs';
+import { buildReviewPrompt } from './review-prompts.mjs';
+import { listReviewTargets, runReviewWithProvider } from './review-runners.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -269,6 +273,78 @@ async function serveStatic(request, response, publicDir) {
   }
 }
 
+function findDashboardThread(dashboard, threadId) {
+  return dashboard.threads?.find((candidate) => candidate.id === threadId) || null;
+}
+
+function reviewSourceForThread(thread) {
+  return {
+    threadId: thread.id,
+    provider: thread.provider || '',
+    providerLabel: thread.providerLabel || thread.provider || 'Agent',
+    title: thread.title || '',
+    cwd: thread.cwd || '',
+    projectName: thread.projectName || '',
+    model: thread.model || '',
+  };
+}
+
+function parseReviewLimit(value) {
+  const limit = Number.parseInt(value || '50', 10);
+  if (!Number.isFinite(limit) || limit < 1) return 50;
+  return Math.min(limit, 200);
+}
+
+async function executeReviewJob({
+  job,
+  prompt,
+  cwd,
+  targetModel,
+  runReview,
+  reviewStore,
+}) {
+  try {
+    const result = await runReview({
+      provider: job.target.provider,
+      prompt,
+      cwd,
+      model: targetModel,
+    });
+
+    if (result.ok) {
+      await reviewStore.updateJob(job.id, {
+        status: 'succeeded',
+        completedAtMs: Date.now(),
+        resultText: result.resultText || '',
+        resultPreview: result.resultPreview || '',
+        stderr: result.stderr || '',
+        timedOut: Boolean(result.timedOut),
+        truncatedResult: Boolean(result.truncatedResult),
+        exitCode: result.exitCode ?? 0,
+      });
+      return;
+    }
+
+    await reviewStore.updateJob(job.id, {
+      status: 'failed',
+      completedAtMs: Date.now(),
+      resultText: result.resultText || '',
+      resultPreview: result.resultPreview || '',
+      error: result.error || 'Review runner failed',
+      stderr: result.stderr || '',
+      timedOut: Boolean(result.timedOut),
+      truncatedResult: Boolean(result.truncatedResult),
+      exitCode: result.exitCode ?? null,
+    });
+  } catch (error) {
+    await reviewStore.updateJob(job.id, {
+      status: 'failed',
+      completedAtMs: Date.now(),
+      error: error instanceof Error ? error.message : 'Review runner failed',
+    });
+  }
+}
+
 export function createServer({
   loadDashboard = loadMissionControlDashboard,
   notificationCenter = null,
@@ -281,6 +357,9 @@ export function createServer({
   openInstalledApp = openInstalledPwaApp,
   minimizeInstalledApp = minimizeInstalledPwaApp,
   getInstalledAppStatus = getInstalledPwaAppStatus,
+  reviewStore = createReviewJobStore(),
+  runReview = runReviewWithProvider,
+  loadReviewTargets = listReviewTargets,
   publicDir = DEFAULT_PUBLIC_DIR,
 } = {}) {
   let dashboardLoadPromise = null;
@@ -534,6 +613,156 @@ export function createServer({
         sendJson(response, 200, updated);
       } catch (error) {
         sendError(response, error, 'Failed to update notification');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/review-targets') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        sendJson(response, 200, await loadReviewTargets());
+      } catch (error) {
+        sendError(response, error, 'Failed to load review targets');
+      }
+      return;
+    }
+
+    const reviewContentMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/review-content$/);
+    if (reviewContentMatch) {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const threadId = decodeURIComponent(reviewContentMatch[1]);
+        const dashboard = await loadDashboard();
+        const thread = findDashboardThread(dashboard, threadId);
+        const content = await getReviewContentForThread({
+          thread,
+          mode: url.searchParams.get('mode') || 'latest-agent-signal',
+        });
+        sendJson(response, 200, content);
+      } catch (error) {
+        sendError(response, error, 'Failed to load review content');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/reviews') {
+      if (request.method === 'GET') {
+        try {
+          const jobs = await reviewStore.listJobs({
+            limit: parseReviewLimit(url.searchParams.get('limit')),
+            threadId: url.searchParams.get('threadId') || undefined,
+          });
+          sendJson(response, 200, jobs);
+        } catch (error) {
+          sendError(response, error, 'Failed to list review jobs');
+        }
+        return;
+      }
+
+      if (request.method === 'POST') {
+        try {
+          const body = await readJsonBody(request);
+          const sourceThreadId = String(body.sourceThreadId || '');
+          if (!sourceThreadId) {
+            sendJson(response, 400, { error: 'sourceThreadId is required' });
+            return;
+          }
+
+          const targetProvider = String(body.targetProvider || '');
+          if (!targetProvider) {
+            sendJson(response, 400, { error: 'targetProvider is required' });
+            return;
+          }
+
+          const targets = await loadReviewTargets();
+          const target = targets.items?.find((candidate) => candidate.provider === targetProvider);
+          if (!target || !target.available) {
+            sendJson(response, 422, { error: 'Selected review target is not available' });
+            return;
+          }
+
+          const dashboard = await loadDashboard();
+          const thread = findDashboardThread(dashboard, sourceThreadId);
+          const content = await getReviewContentForThread({
+            thread,
+            mode: body.inputMode || 'latest-agent-signal',
+          });
+
+          const source = reviewSourceForThread(thread);
+          const templateId = body.templateId || 'technical-review';
+          const prompt = buildReviewPrompt({
+            templateId,
+            source,
+            content: content.content,
+            customReviewInstruction: body.customReviewInstruction,
+          });
+          const queued = await reviewStore.createJob({
+            source,
+            target: {
+              provider: target.provider,
+              label: target.label,
+              runner: target.runner,
+              model: body.targetModel || '',
+            },
+            templateId,
+            inputMode: content.mode,
+            inputPreview: content.preview,
+          });
+          const running = await reviewStore.updateJob(queued.id, {
+            status: 'running',
+            startedAtMs: Date.now(),
+          });
+
+          void executeReviewJob({
+            job: running,
+            prompt,
+            cwd: thread.cwd || process.cwd(),
+            targetModel: body.targetModel || '',
+            runReview,
+            reviewStore,
+          });
+
+          sendJson(response, 202, { job: running });
+        } catch (error) {
+          sendError(response, error, 'Failed to create review job');
+        }
+        return;
+      }
+
+      response.writeHead(405, { allow: 'GET, POST' });
+      response.end('Method not allowed');
+      return;
+    }
+
+    const reviewJobMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)$/);
+    if (reviewJobMatch) {
+      if (request.method !== 'GET' && request.method !== 'PATCH') {
+        response.writeHead(405, { allow: 'GET, PATCH' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const id = decodeURIComponent(reviewJobMatch[1]);
+        if (request.method === 'PATCH') {
+          const body = await readJsonBody(request);
+          sendJson(response, 200, { job: await reviewStore.updateJob(id, { fixLoop: body.fixLoop }) });
+          return;
+        }
+
+        sendJson(response, 200, { job: await reviewStore.getJob(id) });
+      } catch (error) {
+        sendError(response, error, 'Failed to load review job');
       }
       return;
     }
