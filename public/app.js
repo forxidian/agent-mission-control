@@ -2094,6 +2094,7 @@ async function loadDashboard({ silent = false, force = false } = {}) {
     state.lastRefreshAtMs = Date.now();
     state.refreshError = '';
     if (!silent || elements.statusBanner.dataset.tone === 'error') clearError();
+    await refreshOpenReviewContent({ silent });
     if (!deferRender) {
       if (shouldRenderDashboard) {
         renderDashboard();
@@ -2139,6 +2140,20 @@ async function loadReviewContent(threadId, mode = selectedReviewInputMode(thread
   state.review.contentByThread.set(key, content);
   state.review.contentErrorsByThread.delete(key);
   return content;
+}
+
+async function refreshOpenReviewContent({ silent = false } = {}) {
+  const threadId = state.review.openThreadId;
+  if (!threadId || !findThread(threadId)) return;
+
+  const inputMode = selectedReviewInputMode(threadId);
+  try {
+    await loadReviewContent(threadId, inputMode);
+  } catch (error) {
+    state.review.contentByThread.delete(reviewContentKey(threadId, inputMode));
+    state.review.contentErrorsByThread.set(reviewContentKey(threadId, inputMode), error.message);
+    if (!silent) showError(`无法刷新评审输入：${error.message}`);
+  }
 }
 
 async function loadReviewJobs(threadId) {

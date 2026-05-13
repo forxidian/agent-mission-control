@@ -973,6 +973,77 @@ test('keeps auto refresh from rerendering while review form is focused', async (
   assert.equal(context.renders, 0);
 });
 
+test('refreshes the open review input preview after dashboard refresh', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const loadStart = app.indexOf('async function loadDashboard');
+  const loadEnd = app.indexOf('\nasync function loadNotifications', loadStart);
+
+  assert.notEqual(loadStart, -1);
+  assert.notEqual(loadEnd, -1);
+
+  const context = {
+    refreshed: 0,
+    renders: 0,
+    state: {
+      dashboard: null,
+      isLoading: false,
+      refreshError: '',
+      lastRefreshAtMs: null,
+      review: {
+        openThreadId: 'thread-1',
+      },
+    },
+    elements: {
+      refreshButton: { disabled: false },
+      statusBanner: { dataset: { tone: '' } },
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() {
+          return {
+            threads: [{ id: 'thread-1', lastAgentMessage: '新的 Agent 输出' }],
+            notifications: [],
+          };
+        },
+      };
+    },
+    Date: { now: () => 123 },
+    setNotifications() {},
+    fallbackNotificationsFromDashboard() {
+      return [];
+    },
+    clearError() {},
+    renderMonitorStatus() {},
+    renderDashboard() {
+      globalThis.renders += 1;
+    },
+    hasActiveReviewInteraction() {
+      return false;
+    },
+    async refreshOpenReviewContent() {
+      globalThis.refreshed += 1;
+    },
+  };
+
+  globalThis.refreshed = context.refreshed;
+  globalThis.renders = context.renders;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(loadStart, loadEnd)}
+      loadDashboard();
+    `, context);
+    context.refreshed = globalThis.refreshed;
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.refreshed;
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.refreshed, 1);
+  assert.equal(context.renders, 1);
+});
+
 test('does not pause review job rerenders just because a detail is open', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const activeStart = app.indexOf('function hasActiveReviewInteraction');
