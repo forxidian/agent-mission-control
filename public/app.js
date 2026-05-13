@@ -1407,6 +1407,20 @@ function notifyCompletedReviewJobs(threadId, jobs) {
   }
 }
 
+function pendingReviewJobIds(threadId) {
+  return new Set(reviewJobsForThread(threadId)
+    .filter((job) => isReviewPendingStatus(job.status))
+    .map((job) => job.id));
+}
+
+function notifyCompletedReviewJobsById(threadId, jobIds) {
+  if (!threadId || !jobIds?.size) return;
+  for (const job of reviewJobsForThread(threadId)) {
+    if (!jobIds.has(job.id) || !isReviewTerminalStatus(job.status)) continue;
+    notifyReviewJobIfCompleted({ ...job, status: 'running' }, job);
+  }
+}
+
 function reviewStatusLabel(status) {
   if (status === 'queued') return '排队中';
   if (status === 'running') return '评审中';
@@ -2317,7 +2331,11 @@ async function requestReviewBrowserNotifications() {
     return;
   }
 
+  const openThreadId = state.review.openThreadId;
+  const pendingJobIds = pendingReviewJobIds(openThreadId);
+
   if (Notification.permission === 'granted') {
+    notifyCompletedReviewJobsById(openThreadId, pendingJobIds);
     renderSelectedDetail();
     return;
   }
@@ -2325,6 +2343,7 @@ async function requestReviewBrowserNotifications() {
   const permission = await Notification.requestPermission();
   if (permission === 'granted') {
     showNotice('评审结果通知已开启。');
+    notifyCompletedReviewJobsById(openThreadId, pendingJobIds);
   } else {
     showError('浏览器未开启评审结果通知。');
   }

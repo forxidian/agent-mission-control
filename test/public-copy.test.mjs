@@ -873,6 +873,9 @@ test('requests browser permission when review notification opt-in is clicked', a
     requested: 0,
     rendered: 0,
     notices: [],
+    state: {
+      review: { openThreadId: 'thread-1' },
+    },
     Notification: {
       permission: 'default',
       async requestPermission() {
@@ -884,6 +887,10 @@ test('requests browser permission when review notification opt-in is clicked', a
     canUseBrowserNotifications() {
       return true;
     },
+    pendingReviewJobIds() {
+      return new Set();
+    },
+    notifyCompletedReviewJobsById() {},
     renderSelectedDetail() {
       globalThis.rendered += 1;
     },
@@ -914,6 +921,71 @@ test('requests browser permission when review notification opt-in is clicked', a
   assert.equal(context.requested, 1);
   assert.equal(context.rendered, 1);
   assert.deepEqual(context.notices, ['评审结果通知已开启。']);
+});
+
+test('notifies a review job that completes while browser permission is pending', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const helperStart = app.indexOf('function canUseBrowserNotifications');
+  const helperEnd = app.indexOf('\nfunction reviewStatusLabel', helperStart);
+  const requestStart = app.indexOf('async function requestReviewBrowserNotifications');
+  const requestEnd = app.indexOf('\nfunction openReviewJobDetail', requestStart);
+
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+  assert.notEqual(requestStart, -1);
+  assert.notEqual(requestEnd, -1);
+
+  const notifications = [];
+  function FakeNotification(title, options) {
+    notifications.push({ title, options });
+  }
+  FakeNotification.permission = 'default';
+
+  const context = {
+    Notification: FakeNotification,
+    notices: [],
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        jobsByThread: new Map([[
+          'thread-1',
+          [{ id: 'review-1', status: 'running', target: { label: 'Codex CLI' } }],
+        ]]),
+        notifiedJobIds: new Set(),
+      },
+    },
+    reviewJobsForThread(threadId) {
+      return context.state.review.jobsByThread.get(threadId) || [];
+    },
+    reviewStatusLabel(status) {
+      return status === 'succeeded' ? '已完成' : status;
+    },
+    showNotice(message) {
+      context.notices.push(message);
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+    renderSelectedDetail() {},
+  };
+  FakeNotification.requestPermission = async () => {
+    context.state.review.jobsByThread.set('thread-1', [
+      { id: 'review-1', status: 'succeeded', target: { label: 'Codex CLI' } },
+    ]);
+    FakeNotification.permission = 'granted';
+    return 'granted';
+  };
+
+  await vm.runInNewContext(`
+    ${app.slice(helperStart, helperEnd)}
+    ${app.slice(requestStart, requestEnd)}
+    requestReviewBrowserNotifications();
+  `, context);
+
+  assert.deepEqual(context.notices, ['评审结果通知已开启。']);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].title, '评审已完成');
+  assert.match(notifications[0].options.body, /Codex CLI/);
 });
 
 test('sends one browser notification when a running review job completes', async () => {
