@@ -35,6 +35,7 @@ Agent Mission Control 当前有三个适合承载该需求的基础层：
 - 显式隐私边界：默认使用短内容，完整正文必须由用户确认。
 - 可审计：每次 review job 记录源线程、目标 Agent、模板、状态、时间和结果。
 - 可降级：如果目标 CLI 不存在，UI 显示不可用，不影响 dashboard 读取。
+- Workflow 优先：跨 Agent 协作应以 Review、Fix、Verify、Memory 等可收敛 workflow 组织，而不是无边界群聊。详细原则见 [Agent Loop Principles](agent-loop-principles.md)。
 
 ## 建议文件结构
 
