@@ -80,7 +80,7 @@ test('thread-summary mode builds a privacy-scoped summary from standard thread f
       providerLabel: 'Codex',
       title: '实现评审工作流',
       projectName: 'agent-mission-control',
-      cwd: '/Users/ellic/code/agent-mission-control',
+      cwd: '/Users/example/code/agent-mission-control',
       model: 'gpt-5.5',
       status: 'fresh',
       latestUserMessage: '请继续实现 P1',

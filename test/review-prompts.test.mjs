@@ -25,7 +25,7 @@ test('builds a review prompt with metadata, content, and required structure', ()
       provider: 'codex',
       providerLabel: 'Codex',
       title: '实现评审工作流',
-      cwd: '/Users/ellic/code/agent-mission-control',
+      cwd: '/Users/example/code/agent-mission-control',
       model: 'gpt-5.5',
     },
     content: '这里是需要被评审的 Agent 输出。',
@@ -34,7 +34,7 @@ test('builds a review prompt with metadata, content, and required structure', ()
   assert.match(prompt, /严格的软件工程审查者/);
   assert.match(prompt, /provider: Codex/);
   assert.match(prompt, /thread: 实现评审工作流/);
-  assert.match(prompt, /project: \/Users\/ellic\/code\/agent-mission-control/);
+  assert.match(prompt, /project: \/Users\/example\/code\/agent-mission-control/);
   assert.match(prompt, /model: gpt-5\.5/);
   assert.match(prompt, /这里是需要被评审的 Agent 输出。/);
 
