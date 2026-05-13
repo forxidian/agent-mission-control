@@ -779,8 +779,9 @@ test('keeps review history visually separated from the selected detail pane', as
   assert.match(app, /review-detail-column/);
   assert.match(app, /选择左侧记录查看详情/);
   assert.match(app, /review-job-meta/);
+  assert.match(styles, /\.review-form\s*\{[\s\S]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
   assert.match(styles, /\.review-results-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px,\s*0\.75fr\)\s*minmax\(0,\s*1\.45fr\);/);
-  assert.match(styles, /\.review-records-column\s*\{[\s\S]*overflow:\s*auto;/);
+  assert.match(styles, /\.review-records-column\s*\{[\s\S]*overflow:\s*visible;/);
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*\.review-results-layout,[\s\S]*grid-template-columns:\s*1fr;/);
 });
 

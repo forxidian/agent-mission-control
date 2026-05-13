@@ -1610,7 +1610,7 @@ h3 {
 
 .review-form {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1695,9 +1695,7 @@ h3 {
 }
 
 .review-records-column {
-  max-height: min(620px, 72vh);
-  overflow: auto;
-  padding-right: 4px;
+  overflow: visible;
 }
 
 .review-job-detail pre {
@@ -1960,8 +1958,7 @@ h3 {
   }
 
   .review-records-column {
-    max-height: none;
-    padding-right: 0;
+    overflow: visible;
   }
 
   .detail-section-heading {
