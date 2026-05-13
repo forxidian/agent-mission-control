@@ -22,6 +22,8 @@ const state = {
     inputModeByThread: new Map(),
     selectedJobIdByThread: new Map(),
     targetProviderByThread: new Map(),
+    templateByThread: new Map(),
+    customInstructionByThread: new Map(),
     isLoading: false,
     pollTimer: null,
   },
@@ -119,6 +121,7 @@ const REVIEW_TEMPLATES = [
   ['product-review', '产品/需求审查'],
   ['technical-review', '技术方案审查'],
   ['response-quality-review', '回复质量审查'],
+  ['custom-review', '自定义审查'],
 ];
 const REVIEW_INPUT_MODES = [
   ['latest-agent-signal', '最近 Agent 输出'],
@@ -1371,6 +1374,11 @@ function reviewTemplateOptions(selected = 'technical-review') {
   )).join('');
 }
 
+function selectedReviewTemplate(threadId) {
+  const selected = state.review.templateByThread.get(threadId) || 'technical-review';
+  return REVIEW_TEMPLATES.some(([id]) => id === selected) ? selected : 'technical-review';
+}
+
 function isCodexReviewThread(thread = {}) {
   const provider = String(thread.provider || thread.source || '').toLowerCase();
   return provider === 'codex' || provider === 'codex-cli' || provider === '';
@@ -1572,6 +1580,8 @@ function renderReviewPanel(thread) {
   const contentReady = Boolean(content?.preview);
   const selectedJobId = state.review.selectedJobIdByThread.get(thread.id) || '';
   const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
+  const selectedTemplate = selectedReviewTemplate(thread.id);
+  const customInstruction = state.review.customInstructionByThread.get(thread.id) || '';
 
   return `
     <section class="detail-section detail-section-wide review-panel" aria-labelledby="review-panel-heading">
@@ -1590,12 +1600,18 @@ function renderReviewPanel(thread) {
         </label>
         <label>
           <span>评审模板</span>
-          <select name="templateId">${reviewTemplateOptions()}</select>
+          <select name="templateId" data-review-template-id="${escapeHtml(thread.id)}">${reviewTemplateOptions(selectedTemplate)}</select>
         </label>
         <label>
           <span>目标模型</span>
           <input name="targetModel" type="text" autocomplete="off" placeholder="可选，例如 sonnet">
         </label>
+        ${selectedTemplate === 'custom-review' ? `
+          <label class="review-custom-instruction">
+            <span>自定义审查</span>
+            <textarea name="customReviewInstruction" rows="4" data-review-custom-instruction-id="${escapeHtml(thread.id)}" placeholder="例如：只检查是否存在跨线程串台、状态刷新覆盖、隐私泄露风险。">${escapeHtml(customInstruction)}</textarea>
+          </label>
+        ` : ''}
         <div class="review-preview">
           <span>输入预览</span>
           <pre>${escapeHtml(content?.preview || contentError || (isLoading ? '正在读取评审输入...' : '暂无可评审的 Agent 输出'))}</pre>
@@ -2232,6 +2248,19 @@ function changeReviewTargetProvider(threadId, targetProvider) {
   renderSelectedDetail();
 }
 
+function changeReviewTemplate(threadId, templateId) {
+  if (REVIEW_TEMPLATES.some(([id]) => id === templateId)) {
+    state.review.templateByThread.set(threadId, templateId);
+  } else {
+    state.review.templateByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
+function updateCustomReviewInstruction(threadId, value) {
+  state.review.customInstructionByThread.set(threadId, value || '');
+}
+
 function openReviewJobDetail(threadId, reviewId) {
   if (threadId && reviewId) {
     state.review.selectedJobIdByThread.set(threadId, reviewId);
@@ -2329,6 +2358,18 @@ async function submitReview(form) {
   }
 
   const formData = new FormData(form);
+  const templateId = formData.get('templateId') || selectedReviewTemplate(threadId);
+  const payload = {
+    sourceThreadId: threadId,
+    targetProvider: formData.get('targetProvider') || selectedReviewTargetProvider(threadId),
+    targetModel: formData.get('targetModel'),
+    templateId,
+    inputMode: formData.get('inputMode') || selectedReviewInputMode(threadId),
+  };
+  if (templateId === 'custom-review') {
+    payload.customReviewInstruction = formData.get('customReviewInstruction') || '';
+  }
+
   state.review.isLoading = true;
   renderSelectedDetail();
 
@@ -2336,13 +2377,7 @@ async function submitReview(form) {
     const body = await fetchJson('/api/reviews', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sourceThreadId: threadId,
-        targetProvider: formData.get('targetProvider') || selectedReviewTargetProvider(threadId),
-        targetModel: formData.get('targetModel'),
-        templateId: formData.get('templateId'),
-        inputMode: formData.get('inputMode') || selectedReviewInputMode(threadId),
-      }),
+      body: JSON.stringify(payload),
     });
     const jobs = reviewJobsForThread(threadId);
     state.review.jobsByThread.set(threadId, [body.job, ...jobs.filter((job) => job.id !== body.job.id)]);
@@ -2752,6 +2787,22 @@ document.addEventListener('change', (event) => {
   const reviewTarget = changed.closest('[data-review-target-provider-id]');
   if (reviewTarget) {
     changeReviewTargetProvider(reviewTarget.dataset.reviewTargetProviderId, reviewTarget.value);
+    return;
+  }
+
+  const reviewTemplate = changed.closest('[data-review-template-id]');
+  if (reviewTemplate) {
+    changeReviewTemplate(reviewTemplate.dataset.reviewTemplateId, reviewTemplate.value);
+  }
+});
+
+document.addEventListener('input', (event) => {
+  const changed = event.target instanceof Element ? event.target : null;
+  if (!changed) return;
+
+  const customInstruction = changed.closest('[data-review-custom-instruction-id]');
+  if (customInstruction) {
+    updateCustomReviewInstruction(customInstruction.dataset.reviewCustomInstructionId, customInstruction.value);
   }
 });
 

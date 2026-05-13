@@ -704,6 +704,7 @@ export function createServer({
             templateId,
             source,
             content: content.content,
+            customReviewInstruction: body.customReviewInstruction,
           });
           const queued = await reviewStore.createJob({
             source,

@@ -5,7 +5,7 @@ import {
   listReviewTemplates,
 } from '../src/review-prompts.mjs';
 
-test('lists the four MVP review templates', () => {
+test('lists the review templates including custom review', () => {
   const templates = listReviewTemplates();
 
   assert.deepEqual(templates.map((template) => template.id), [
@@ -13,6 +13,7 @@ test('lists the four MVP review templates', () => {
     'technical-review',
     'product-review',
     'response-quality-review',
+    'custom-review',
   ]);
   assert.ok(templates.every((template) => template.label));
 });
@@ -46,6 +47,23 @@ test('builds a review prompt with metadata, content, and required structure', ()
   ]) {
     assert.match(prompt, new RegExp(requiredHeading));
   }
+});
+
+test('builds a custom review prompt with user-provided requirements', () => {
+  const prompt = buildReviewPrompt({
+    templateId: 'custom-review',
+    source: {
+      providerLabel: 'Codex',
+      title: '实现本地 Agent 群聊',
+    },
+    content: '待评审内容',
+    customReviewInstruction: '请重点检查是否有串台风险，以及 UI 状态是否会被轮询覆盖。',
+  });
+
+  assert.match(prompt, /严格的 Agent 审查者/);
+  assert.match(prompt, /用户自定义审查要求/);
+  assert.match(prompt, /串台风险/);
+  assert.match(prompt, /待评审内容/);
 });
 
 test('throws a useful error for unknown review templates', () => {

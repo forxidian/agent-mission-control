@@ -1630,14 +1630,29 @@ h3 {
 }
 
 .review-form select,
-.review-form input {
+.review-form input,
+.review-form textarea {
   width: 100%;
-  min-height: 36px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  padding: 0 10px;
   color: var(--ink);
   background: #fffaf0;
+}
+
+.review-form select,
+.review-form input {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.review-form textarea {
+  min-height: 92px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.review-custom-instruction {
+  grid-column: 1 / -1;
 }
 
 .review-preview,

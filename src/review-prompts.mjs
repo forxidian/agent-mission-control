@@ -43,6 +43,17 @@ const REVIEW_TEMPLATES = [
       '是否需要补充验证或风险提示',
     ],
   },
+  {
+    id: 'custom-review',
+    label: '自定义审查',
+    role: '你是一个严格的 Agent 审查者。',
+    focus: [
+      '优先执行用户自定义审查要求',
+      '指出阻塞问题和可验证风险',
+      '区分事实、推断和建议',
+      '给出可执行的后续修改建议',
+    ],
+  },
 ];
 
 const REQUIRED_OUTPUT_STRUCTURE = [
@@ -69,12 +80,17 @@ export function buildReviewPrompt({
   templateId,
   source = {},
   content,
+  customReviewInstruction = '',
 }) {
   const template = findTemplate(templateId);
   const provider = source.providerLabel || source.provider || 'Unknown';
   const title = source.title || 'Untitled thread';
   const cwd = source.cwd || 'Unknown';
   const model = source.model || 'Unknown';
+  const customInstruction = String(customReviewInstruction || '').trim();
+  const customInstructionSection = template.id === 'custom-review'
+    ? `\n用户自定义审查要求：\n${customInstruction || '用户未提供额外审查要求，请按上面的通用审查重点执行。'}\n`
+    : '';
 
   return `${template.role}
 
@@ -82,6 +98,7 @@ export function buildReviewPrompt({
 
 请重点检查：
 ${template.focus.map((item) => `- ${item}`).join('\n')}
+${customInstructionSection}
 
 来源：
 - provider: ${provider}

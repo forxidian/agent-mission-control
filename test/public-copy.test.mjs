@@ -640,6 +640,138 @@ test('submits review jobs with the selected input mode payload', async () => {
   assert.deepEqual(context.notices, ['评审任务已启动。']);
 });
 
+test('renders and submits custom review instructions when custom template is selected', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+  const submitStart = app.indexOf('async function submitReview');
+  const submitEnd = app.indexOf('\nasync function copyReviewResult', submitStart);
+
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+  assert.notEqual(submitStart, -1);
+  assert.notEqual(submitEnd, -1);
+  assert.match(app, /custom-review/);
+  assert.match(app, /customReviewInstruction/);
+
+  class FakeFormData {
+    constructor(form) {
+      this.form = form;
+    }
+
+    get(key) {
+      return this.form.values[key] || '';
+    }
+  }
+
+  const context = {
+    html: '',
+    payload: null,
+    notices: [],
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: { items: [{ provider: 'codex-cli', available: true }] },
+        isLoading: false,
+        selectedJobIdByThread: new Map(),
+        templateByThread: new Map([['thread-1', 'custom-review']]),
+        customInstructionByThread: new Map([['thread-1', '只检查串台风险']]),
+        jobsByThread: new Map(),
+      },
+    },
+    FormData: FakeFormData,
+    JSON,
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return { preview: '输入预览' };
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    selectedReviewTargetProvider() {
+      return 'codex-cli';
+    },
+    selectedReviewTemplate() {
+      return 'custom-review';
+    },
+    reviewTargetOptions() {
+      return '<option>Codex CLI</option>';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option value="custom-review" selected>自定义审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '';
+    },
+    renderReviewJobDetail() {
+      return '';
+    },
+    findThread(threadId) {
+      return threadId === 'thread-1' ? { id: threadId } : null;
+    },
+    renderSelectedDetail() {},
+    async fetchJson(_url, options) {
+      globalThis.payload = JSON.parse(options.body);
+      return { job: { id: 'review-1', status: 'queued' } };
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      globalThis.notices.push(message);
+    },
+    async refreshReviewJobs() {},
+    syncReviewPolling() {},
+  };
+
+  globalThis.payload = context.payload;
+  globalThis.notices = context.notices;
+  try {
+    vm.runInNewContext(`
+      ${app.slice(panelStart, panelEnd)}
+      html = renderReviewPanel({ id: 'thread-1' });
+    `, context);
+
+    await vm.runInNewContext(`
+      ${app.slice(submitStart, submitEnd)}
+      submitReview({
+        dataset: { reviewFormThreadId: 'thread-1' },
+        values: {
+          targetProvider: 'codex-cli',
+          targetModel: '',
+          templateId: 'custom-review',
+          inputMode: 'latest-agent-signal',
+          customReviewInstruction: '只检查串台风险'
+        }
+      });
+    `, context);
+    context.payload = globalThis.payload;
+  } finally {
+    delete globalThis.payload;
+    delete globalThis.notices;
+  }
+
+  assert.match(context.html, /自定义审查/);
+  assert.match(context.html, /name="customReviewInstruction"/);
+  assert.match(context.html, /只检查串台风险/);
+  assert.equal(context.payload.templateId, 'custom-review');
+  assert.equal(context.payload.customReviewInstruction, '只检查串台风险');
+});
+
 test('builds and wires copyable review debug summaries', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const buildStart = app.indexOf('function buildReviewDebugSummary');
@@ -855,6 +987,7 @@ test('renders review detail empty state beside the history list when no job is s
         targets: { items: [{ provider: 'codex-cli', available: true }] },
         isLoading: false,
         selectedJobIdByThread: new Map(),
+        customInstructionByThread: new Map(),
       },
     },
     escapeHtml(value = '') {
@@ -874,6 +1007,9 @@ test('renders review detail empty state beside the history list when no job is s
     },
     selectedReviewTargetProvider() {
       return 'codex-cli';
+    },
+    selectedReviewTemplate() {
+      return 'technical-review';
     },
     reviewTargetOptions() {
       return '<option>Codex CLI</option>';

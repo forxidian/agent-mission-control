@@ -296,6 +296,69 @@ test('POST /api/reviews creates a review job and saves a succeeded result', asyn
   }
 });
 
+test('POST /api/reviews includes custom review instructions in the runner prompt', async () => {
+  const reviewStore = createFakeReviewStore();
+  const runnerCalls = [];
+  const server = createServer({
+    reviewStore,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-1',
+        provider: 'codex',
+        providerLabel: 'Codex',
+        title: 'Build review workflow',
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        lastAgentMessage: 'Agent output ready for review',
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    loadReviewTargets: async () => ({
+      items: [{ provider: 'claude-code-cli', label: 'Claude Code CLI', runner: 'claude-print', available: true }],
+    }),
+    runReview: async (payload) => {
+      runnerCalls.push(payload);
+      return {
+        ok: true,
+        resultText: 'Review succeeded',
+        resultPreview: 'Review succeeded',
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        truncatedResult: false,
+      };
+    },
+  });
+  const address = await listen(server);
+
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/reviews`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceThreadId: 'thread-1',
+        targetProvider: 'claude-code-cli',
+        templateId: 'custom-review',
+        inputMode: 'latest-agent-signal',
+        customReviewInstruction: '只检查是否存在跨线程串台和 stale preview。',
+      }),
+    });
+    const body = await response.json();
+    await nextTick();
+    const saved = await reviewStore.getJob(body.job.id);
+
+    assert.equal(response.status, 202);
+    assert.equal(saved.templateId, 'custom-review');
+    assert.match(runnerCalls[0].prompt, /用户自定义审查要求/);
+    assert.match(runnerCalls[0].prompt, /跨线程串台/);
+    assert.match(runnerCalls[0].prompt, /stale preview/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('POST /api/reviews can create a review job from latest-turn input mode', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'amc-server-review-post-turn-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
