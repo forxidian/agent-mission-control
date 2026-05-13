@@ -24,7 +24,6 @@ const state = {
     targetProviderByThread: new Map(),
     templateByThread: new Map(),
     customInstructionByThread: new Map(),
-    notifiedJobIds: new Set(),
     isLoading: false,
     pollTimer: null,
   },
@@ -1360,67 +1359,6 @@ function hasRunningReviewJob(threadId) {
   return reviewJobsForThread(threadId).some((job) => job.status === 'running' || job.status === 'queued');
 }
 
-function canUseBrowserNotifications() {
-  return typeof Notification !== 'undefined';
-}
-
-function hasReviewBrowserNotificationPermission() {
-  return canUseBrowserNotifications() && Notification.permission === 'granted';
-}
-
-function reviewNotificationOptInMarkup() {
-  if (!canUseBrowserNotifications() || hasReviewBrowserNotificationPermission()) return '';
-  return '<button class="text-button" type="button" data-review-notification-opt-in>开启评审结果通知</button>';
-}
-
-function isReviewTerminalStatus(status) {
-  return status === 'succeeded' || status === 'failed' || status === 'cancelled';
-}
-
-function isReviewPendingStatus(status) {
-  return status === 'queued' || status === 'running';
-}
-
-function notifyReviewJobIfCompleted(previousJob, job) {
-  if (!hasReviewBrowserNotificationPermission()) return;
-  if (!previousJob || !isReviewPendingStatus(previousJob.status) || !isReviewTerminalStatus(job?.status)) return;
-  if (!job?.id || state.review.notifiedJobIds.has(job.id)) return;
-
-  const status = reviewStatusLabel(job.status);
-  const target = job.target?.label || job.target?.provider || 'Agent';
-  const title = job.status === 'failed' ? '评审失败' : job.status === 'cancelled' ? '评审已取消' : '评审已完成';
-  try {
-    new Notification(title, {
-      body: `${target} · ${status}`,
-      tag: `agent-review-${job.id}`,
-    });
-    state.review.notifiedJobIds.add(job.id);
-  } catch {
-    // Notification failures should not interrupt polling or rendering.
-  }
-}
-
-function notifyCompletedReviewJobs(threadId, jobs) {
-  const previousById = new Map(reviewJobsForThread(threadId).map((job) => [job.id, job]));
-  for (const job of jobs) {
-    notifyReviewJobIfCompleted(previousById.get(job.id), job);
-  }
-}
-
-function pendingReviewJobIds(threadId) {
-  return new Set(reviewJobsForThread(threadId)
-    .filter((job) => isReviewPendingStatus(job.status))
-    .map((job) => job.id));
-}
-
-function notifyCompletedReviewJobsById(threadId, jobIds) {
-  if (!threadId || !jobIds?.size) return;
-  for (const job of reviewJobsForThread(threadId)) {
-    if (!jobIds.has(job.id) || !isReviewTerminalStatus(job.status)) continue;
-    notifyReviewJobIfCompleted({ ...job, status: 'running' }, job);
-  }
-}
-
 function reviewStatusLabel(status) {
   if (status === 'queued') return '排队中';
   if (status === 'running') return '评审中';
@@ -1679,7 +1617,6 @@ function renderReviewPanel(thread) {
         </div>
         <div class="detail-actions">
           <button class="action-button primary" type="submit"${targetReady && contentReady && !isLoading ? '' : ' disabled'}>开始评审</button>
-          ${reviewNotificationOptInMarkup()}
         </div>
       </form>
       <div class="review-results-divider" aria-hidden="true"></div>
@@ -2237,7 +2174,6 @@ async function refreshOpenReviewContent({ silent = false } = {}) {
 async function loadReviewJobs(threadId) {
   const jobs = await fetchJson(`/api/reviews?threadId=${encodeURIComponent(threadId)}`, { cache: 'no-store' });
   const items = jobs.items || [];
-  notifyCompletedReviewJobs(threadId, items);
   state.review.jobsByThread.set(threadId, items);
   return items;
 }
@@ -2323,31 +2259,6 @@ function changeReviewTemplate(threadId, templateId) {
 
 function updateCustomReviewInstruction(threadId, value) {
   state.review.customInstructionByThread.set(threadId, value || '');
-}
-
-async function requestReviewBrowserNotifications() {
-  if (!canUseBrowserNotifications()) {
-    showError('当前浏览器不支持评审结果通知。');
-    return;
-  }
-
-  const openThreadId = state.review.openThreadId;
-  const pendingJobIds = pendingReviewJobIds(openThreadId);
-
-  if (Notification.permission === 'granted') {
-    notifyCompletedReviewJobsById(openThreadId, pendingJobIds);
-    renderSelectedDetail();
-    return;
-  }
-
-  const permission = await Notification.requestPermission();
-  if (permission === 'granted') {
-    showNotice('评审结果通知已开启。');
-    notifyCompletedReviewJobsById(openThreadId, pendingJobIds);
-  } else {
-    showError('浏览器未开启评审结果通知。');
-  }
-  renderSelectedDetail();
 }
 
 function openReviewJobDetail(threadId, reviewId) {
@@ -2780,13 +2691,6 @@ document.addEventListener('click', (event) => {
   if (reviewPanelTarget) {
     event.preventDefault();
     openReviewPanel(reviewPanelTarget.dataset.openReviewPanelId);
-    return;
-  }
-
-  const reviewNotificationTarget = clicked.closest('[data-review-notification-opt-in]');
-  if (reviewNotificationTarget) {
-    event.preventDefault();
-    requestReviewBrowserNotifications();
     return;
   }
 
