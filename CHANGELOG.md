@@ -2,6 +2,60 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.3.0] - 2026-05-14
+
+### English
+
+#### Added
+
+- Added an Agent review workflow from the thread detail panel, with local Codex, Claude Code, and OpenCode CLI targets.
+- Added review input modes for latest Agent signal, privacy-scoped thread summary, and Codex latest-turn content.
+- Added review templates for code, product/requirements, technical design, reply quality, and custom review instructions.
+- Added review history, selected review details, copyable review results, and copyable debug summaries.
+- Added Fix Loop MVP actions to copy a repair prompt, copy and open the source thread, and mark a review as applied or dismissed.
+- Added target capability labels and review history filters for pending fixes, applied fixes, and dismissed reviews.
+
+#### Changed
+
+- Updated the review prompts to guide target Agents toward read-only repo inspection only when useful, while avoiding unnecessary token use.
+- Restricted review runners so Codex uses a read-only sandbox and Claude Code runs with write tools denied.
+- Documented review data flow, local storage, input boundaries, and Fix Loop metadata in the privacy notes and README.
+- Kept desktop/system review notifications hidden for the public release while preserving in-app review status visibility.
+
+#### Fixed
+
+- Hid raw runner stderr from review details and replaced it with copyable debug summaries.
+- Preserved selected review target options across detail panel rerenders and dashboard refreshes.
+- Kept review job polling visible while a detail panel is open.
+- Added borders and layout refinements for review input previews and review results.
+- Hardened Codex review runner temp output handling by cleaning files on failure and using collision-resistant temp paths.
+
+### 中文
+
+#### 新增
+
+- 新增从线程详情面板发起 Agent 评审的工作流，支持本机 Codex、Claude Code 和 OpenCode CLI 作为评审目标。
+- 新增评审输入模式：最新 Agent 输出、隐私受限的线程摘要，以及 Codex 最新回合内容。
+- 新增代码审查、产品/需求审查、技术方案审查、回复质量审查和自定义审查要求等评审模板。
+- 新增评审历史、选中评审详情、复制评审结果和复制调试摘要能力。
+- 新增 Fix Loop MVP 操作，可复制修复 Prompt、复制并打开源线程，以及把评审标记为已处理或不采纳。
+- 新增目标 Agent 能力标签，并支持按待修复、已处理、不采纳筛选评审历史。
+
+#### 调整
+
+- 优化评审 Prompt：引导目标 Agent 仅在有必要时只读查看 repo 文件，避免不必要的 token 消耗。
+- 收紧评审 runner 边界：Codex 使用只读沙盒，Claude Code 禁用写入工具。
+- 在隐私文档和 README 中补充评审数据流、本地存储、输入边界和 Fix Loop 元数据说明。
+- 发布版继续隐藏桌面/系统评审通知，只保留站内评审状态可见。
+
+#### 修复
+
+- 评审详情不再直接展示原始 runner stderr，改为提供可复制的调试摘要。
+- 修复详情面板重绘和看板刷新后评审目标选项丢失的问题。
+- 修复打开评审详情时评审任务轮询不可见的问题。
+- 为评审输入预览和评审结果增加边框，并优化详情布局。
+- 加固 Codex 评审 runner 临时输出处理：失败路径也会清理临时文件，并使用防撞临时路径。
+
 ## [0.2.3] - 2026-05-13
 
 ### English
