@@ -11,10 +11,18 @@ const DEFAULT_STATE_DB = path.join(DEFAULT_CODEX_DIR, 'state_5.sqlite');
 const DEFAULT_SESSION_INDEX = path.join(DEFAULT_CODEX_DIR, 'session_index.jsonl');
 const DEFAULT_INITIAL_ROLLOUT_BYTES = 512 * 1024;
 const DEFAULT_MAX_ROLLOUT_BYTES = 16 * 1024 * 1024;
+const DEFAULT_ROLLOUT_SIGNAL_CACHE_LIMIT = 256;
 const COMPLETION_HINT = /(\bdone\b|\bcompleted?\b|ready for review|handoff|完成|已完成|验收|交付|交接|可以看|可以试)/i;
 const VERBOSE_TITLE_LENGTH = 96;
 const DISPLAY_TITLE_LENGTH = 140;
 const LOW_SIGNAL_USER_MESSAGE = /^(继续|继续吧|你继续|你继续吧|好的|好的好的|可以|可以的|行|ok|okay|收到|嗯|嗯嗯|先这样)$/iu;
+const rolloutSignalCache = new Map();
+const codexCacheMetrics = {
+  rolloutSignalHits: 0,
+  rolloutSignalMisses: 0,
+  rolloutSignalWrites: 0,
+  rolloutSignalEvictions: 0,
+};
 
 function safeLimit(limit) {
   const number = Number.parseInt(limit, 10);
@@ -48,7 +56,7 @@ export async function loadCodexCliProvider({
     cliInstalled: Boolean(version),
     status: version ? 'ready' : 'missing',
     message: version
-      ? `已检测到 ${version}${threadCount ? `，读取 ${threadCount} 个 CLI 会话` : '；线程由 Codex 本地库统一读取'}`
+      ? `已检测到 ${version}${threadCount ? `，读取 ${threadCount} 个 CLI 任务` : '；任务由 Codex 本地库统一读取'}`
       : '未检测到 codex CLI',
     threadCount,
   };
@@ -166,12 +174,93 @@ export function deriveCodexThreadTitle(storedTitle, signals = {}) {
   const rolloutTitle = signals.latestMeaningfulUserMessage
     || signals.latestUserMessage
     || signals.firstUserMessage;
-  return truncateText(rolloutTitle || title || '未命名线程');
+  return truncateText(rolloutTitle || title || '未命名任务');
 }
 
 function eventTimestampMs(event) {
   const timestamp = Date.parse(event?.timestamp || '');
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function finiteNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeRateLimitWindow(window) {
+  if (!window || typeof window !== 'object') return null;
+
+  const usedPercent = finiteNumberOrNull(
+    window.used_percent
+    ?? window.usedPercent
+    ?? window.used_percentage,
+  );
+  if (usedPercent === null) return null;
+
+  return {
+    ...window,
+    used_percent: usedPercent,
+  };
+}
+
+function normalizeRateLimits(rateLimits) {
+  if (!rateLimits || typeof rateLimits !== 'object') return null;
+
+  const primary = normalizeRateLimitWindow(rateLimits.primary);
+  const secondary = normalizeRateLimitWindow(rateLimits.secondary);
+  if (!primary && !secondary) return null;
+
+  const normalized = { ...rateLimits };
+  if (primary) {
+    normalized.primary = primary;
+  } else {
+    delete normalized.primary;
+  }
+
+  if (secondary) {
+    normalized.secondary = secondary;
+  } else {
+    delete normalized.secondary;
+  }
+
+  return normalized;
+}
+
+function rememberBounded(cache, key, value, limit, metrics = null, writeKey = '', evictionKey = '') {
+  if (!cache || limit <= 0) return;
+  if (metrics && writeKey) metrics[writeKey] = coerceMetric(metrics[writeKey]) + 1;
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+    if (metrics && evictionKey) metrics[evictionKey] = coerceMetric(metrics[evictionKey]) + 1;
+  }
+}
+
+function statSignature(stat) {
+  return {
+    size: Number(stat?.size || 0),
+    mtimeMs: Number(stat?.mtimeMs || 0),
+  };
+}
+
+function coerceMetric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+export function getCodexCacheStats() {
+  return {
+    rolloutSignals: {
+      entries: rolloutSignalCache.size,
+      limit: DEFAULT_ROLLOUT_SIGNAL_CACHE_LIMIT,
+      hits: codexCacheMetrics.rolloutSignalHits,
+      misses: codexCacheMetrics.rolloutSignalMisses,
+      writes: codexCacheMetrics.rolloutSignalWrites,
+      evictions: codexCacheMetrics.rolloutSignalEvictions,
+    },
+  };
 }
 
 export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
@@ -183,6 +272,9 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
     modelContextWindow: null,
     rateLimits: null,
     latestRateLimitAtMs: null,
+    latestRateLimitSignalAtMs: null,
+    rateLimitStale: false,
+    rateLimitStaleAtMs: null,
     todayTokenUsage: 0,
     completionHint: false,
     latestAgentFinalAtMs: null,
@@ -219,8 +311,22 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
       signals.totalTokenUsage = payload.info?.total_token_usage || null;
       signals.lastTokenUsage = payload.info?.last_token_usage || null;
       signals.modelContextWindow = payload.info?.model_context_window || null;
-      signals.rateLimits = payload.rate_limits || null;
-      signals.latestRateLimitAtMs = timestampMs || signals.latestRateLimitAtMs;
+
+      if (Object.prototype.hasOwnProperty.call(payload, 'rate_limits')) {
+        const signalAtMs = timestampMs || signals.latestRateLimitSignalAtMs;
+        signals.latestRateLimitSignalAtMs = signalAtMs;
+
+        const rateLimits = normalizeRateLimits(payload.rate_limits);
+        if (rateLimits) {
+          signals.rateLimits = rateLimits;
+          signals.latestRateLimitAtMs = timestampMs || signals.latestRateLimitAtMs;
+          signals.rateLimitStale = false;
+          signals.rateLimitStaleAtMs = null;
+        } else {
+          signals.rateLimitStale = true;
+          signals.rateLimitStaleAtMs = signalAtMs || signals.rateLimitStaleAtMs;
+        }
+      }
 
       const todayTokens = Number(payload.info?.last_token_usage?.total_tokens || 0);
       const totalTokens = Number(payload.info?.total_token_usage?.total_tokens || 0);
@@ -267,8 +373,8 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
   return signals;
 }
 
-async function readTail(filePath, maxBytes = DEFAULT_MAX_ROLLOUT_BYTES) {
-  const stat = await fs.stat(filePath);
+async function readTail(filePath, maxBytes = DEFAULT_MAX_ROLLOUT_BYTES, fileStat = null) {
+  const stat = fileStat || await fs.stat(filePath);
   const start = Math.max(0, stat.size - maxBytes);
   const length = stat.size - start;
   const handle = await fs.open(filePath, 'r');
@@ -300,37 +406,91 @@ function coversToday(signals, tail, todayStartMs) {
   return Boolean(signals.oldestEventAtMs && signals.oldestEventAtMs <= todayStartMs);
 }
 
+function needsMoreRateLimitHistory(signals, bytesToRead, fileSize, maxBytes) {
+  return Boolean(
+    signals.rateLimitStale
+    && !signals.rateLimits
+    && bytesToRead < fileSize
+    && bytesToRead < maxBytes,
+  );
+}
+
 export async function readRolloutSignals(
   rolloutPath,
   {
     initialBytes = DEFAULT_INITIAL_ROLLOUT_BYTES,
     maxBytes = DEFAULT_MAX_ROLLOUT_BYTES,
     todayStartMs = 0,
+    signalCache = rolloutSignalCache,
+    signalCacheLimit = DEFAULT_ROLLOUT_SIGNAL_CACHE_LIMIT,
   } = {},
 ) {
   if (!rolloutPath) return parseRolloutSignals('');
 
   try {
     const stat = await fs.stat(rolloutPath);
+    const { size, mtimeMs } = statSignature(stat);
+    const cacheKey = `${rolloutPath}\0${todayStartMs}\0${initialBytes}\0${maxBytes}`;
+    const cached = signalCache?.get(cacheKey);
+    if (
+      cached
+      && cached.size === size
+      && cached.mtimeMs === mtimeMs
+    ) {
+      codexCacheMetrics.rolloutSignalHits += 1;
+      return cached.signals;
+    }
+    codexCacheMetrics.rolloutSignalMisses += 1;
+
     let bytesToRead = Math.min(Math.max(1, initialBytes), stat.size);
     let signals = parseRolloutSignals('');
 
     while (bytesToRead > 0) {
-      const tail = await readTail(rolloutPath, bytesToRead);
+      const tail = await readTail(rolloutPath, bytesToRead, stat);
       signals = parseRolloutSignals(tail.text, { todayStartMs });
+      const needsQuotaHistory = needsMoreRateLimitHistory(signals, bytesToRead, stat.size, maxBytes);
       if (
-        (hasTurnBoundary(signals) && coversToday(signals, tail, todayStartMs))
+        (hasTurnBoundary(signals) && coversToday(signals, tail, todayStartMs) && !needsQuotaHistory)
         || bytesToRead >= stat.size
         || bytesToRead >= maxBytes
       ) {
+        rememberBounded(
+          signalCache,
+          cacheKey,
+          { size, mtimeMs, signals },
+          signalCacheLimit,
+          codexCacheMetrics,
+          'rolloutSignalWrites',
+          'rolloutSignalEvictions',
+        );
         return signals;
       }
 
       const nextBytes = Math.min(bytesToRead * 2, maxBytes, stat.size);
-      if (nextBytes === bytesToRead) return signals;
+      if (nextBytes === bytesToRead) {
+        rememberBounded(
+          signalCache,
+          cacheKey,
+          { size, mtimeMs, signals },
+          signalCacheLimit,
+          codexCacheMetrics,
+          'rolloutSignalWrites',
+          'rolloutSignalEvictions',
+        );
+        return signals;
+      }
       bytesToRead = nextBytes;
     }
 
+    rememberBounded(
+      signalCache,
+      cacheKey,
+      { size, mtimeMs, signals },
+      signalCacheLimit,
+      codexCacheMetrics,
+      'rolloutSignalWrites',
+      'rolloutSignalEvictions',
+    );
     return signals;
   } catch {
     return parseRolloutSignals('');
@@ -365,6 +525,10 @@ async function attachRolloutSignals(threads, {
     thread.modelContextWindow = result.value.modelContextWindow;
     thread.rateLimits = result.value.rateLimits;
     thread.rateLimitUpdatedAtMs = result.value.latestRateLimitAtMs;
+    thread.rateLimitActivityAtMs = result.value.latestRateLimitAtMs;
+    thread.latestRateLimitSignalAtMs = result.value.latestRateLimitSignalAtMs;
+    thread.rateLimitStale = result.value.rateLimitStale;
+    thread.rateLimitStaleAtMs = result.value.rateLimitStaleAtMs;
     thread.todayTokenUsage = result.value.todayTokenUsage;
     thread.completionHint = result.value.completionHint;
     thread.latestAgentFinalAtMs = result.value.latestAgentFinalAtMs;

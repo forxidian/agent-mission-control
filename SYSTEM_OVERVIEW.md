@@ -1,6 +1,6 @@
 # Agent Mission Control 系统交接文档
 
-更新日期：2026-05-09
+更新日期：2026-05-13
 
 这个文件用于新开 Codex 线程时快速接手本项目。建议新线程先读本文件，再根据具体需求查看相关源码和测试。
 
@@ -36,7 +36,9 @@ http://127.0.0.1:4629/
 - PWA 独立窗口内提供“收起”按钮，通过本地 API 最小化 macOS app shim；原生红色关闭按钮不能被网页改写，且不使用 `beforeunload` 拦截，避免误伤 deep link 跳转。
 - 桌面提醒暂时屏蔽：当前 macOS 脚本通知投递不够可靠，发布版本只保留站内待处理提醒。
 - 支持通知中心：等待验收、等待授权、标记已处理、稍后提醒。
-- 自动刷新：前端每 10 秒刷新；后端 notification monitor 每 20 秒扫描。
+- 性能保护：前端自动刷新默认每 30 秒一次，可切到 10 秒或 60 秒；页面在后台时暂停拉取，窗口失焦时自动降频到 60 秒；dashboard 数据未变化时跳过整页重绘。后端 `/api/dashboard` 对同一进程内请求做 10 秒共享快照，通知刷新默认缓存 30 秒，Codex rollout、Claude JSONL 和 Claude Desktop usage cache 读取都有短 TTL / mtime 有界缓存。
+- 性能指标：`/api/dashboard` 返回 `performance` 字段，`/api/performance` 可单独读取当前进程 RSS/heap、dashboard 扫描耗时、通知刷新耗时、cache 命中率和缓存条目数。
+- 后端 notification monitor 默认关闭；如果启用，会复用 dashboard 共享快照，避免和前端重复全量扫描。
 
 ## 运行与验证
 
@@ -195,7 +197,9 @@ quota：
 主要接口：
 
 - `GET /api/dashboard`
-  - 返回 summary、providers、projects、threads、notifications。
+  - 返回 summary、providers、projects、threads、notifications、performance。
+- `GET /api/performance`
+  - 返回本地进程内存、dashboard/通知耗时、cache 命中率和缓存条目数，不读取 Agent 元数据。
 - `GET /api/notifications`
   - 刷新并返回通知，不触发桌面提醒。
 - `POST /api/notifications`

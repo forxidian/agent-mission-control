@@ -141,14 +141,63 @@ test('does not create review notifications for sub-agent completions', () => {
   assert.equal(candidates.length, 0);
 });
 
-test('does not infer observed completions for non-Codex providers', () => {
+test('creates soft progress notifications for Claude Desktop completions', () => {
   const candidates = createNotificationCandidates({
     threads: [
       reviewThread({
-        id: 'claude-session',
-        provider: 'claude-code-cli',
-        source: 'claude-code-cli',
+        id: 'claude-desktop-code:local_123',
+        provider: 'claude-desktop-code',
+        providerLabel: 'Claude Desktop Code',
+        source: 'claude-desktop-code',
         hasUnreadTurn: false,
+        latestUserMessageAtMs: 1777427100000,
+        latestAgentFinalAtMs: 1777427200000,
+        latestMessageKind: 'agent',
+        status: 'fresh',
+        currentTurnStartedAtMs: null,
+        appDeepLink: 'claude://resume?session=123e4567-e89b-12d3-a456-426614174000',
+        resumeCommand: "open 'claude://resume?session=123e4567-e89b-12d3-a456-426614174000'",
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].type, 'AWAITING_REVIEW');
+  assert.equal(candidates[0].source, 'observed-completion');
+  assert.equal(candidates[0].threadId, 'claude-desktop-code:local_123');
+  assert.equal(candidates[0].reason, 'Agent 已完成一轮工作');
+});
+
+test('does not infer observed completions for unsupported non-Codex providers', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        id: 'opencode-session',
+        provider: 'opencode',
+        source: 'opencode',
+        hasUnreadTurn: false,
+      }),
+    ],
+  }, 1777427300000, { includeObservedCompletions: true });
+
+  assert.equal(candidates.length, 0);
+});
+
+test('does not infer observed completions for still-running Claude Cowork sessions', () => {
+  const candidates = createNotificationCandidates({
+    threads: [
+      reviewThread({
+        id: 'claude-desktop-cowork:local_running',
+        provider: 'claude-desktop-cowork',
+        providerLabel: 'Claude Cowork',
+        source: 'claude-desktop-cowork',
+        hasUnreadTurn: false,
+        latestUserMessageAtMs: 1777427100000,
+        latestAgentFinalAtMs: 1777427200000,
+        latestMessageKind: 'agent',
+        status: 'idle',
+        currentTurnStartedAtMs: null,
+        agentRunning: true,
       }),
     ],
   }, 1777427300000, { includeObservedCompletions: true });

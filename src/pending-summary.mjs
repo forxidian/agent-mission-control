@@ -43,7 +43,7 @@ export function buildPendingSummary(notifications = {}, nowMs = Date.now(), dash
     hardPendingCount,
     progressCount,
     runningHostThreadCount,
-    label: displayCount > 0 ? `${displayCount} 待查看` : '暂无待查看',
+    label: displayCount > 0 ? `${displayCount} 待处理` : '暂无待处理',
     hostLabel: runningHostThreadCount > 0
       ? `${runningHostThreadCount} Host 工作中`
       : 'Host 空闲',

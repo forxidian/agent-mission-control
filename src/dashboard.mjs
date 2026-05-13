@@ -11,7 +11,7 @@ function codexProvider(dashboard) {
     label: 'Codex',
     installed: true,
     status: 'ready',
-    message: threadCount ? `已读取 ${threadCount} 条 Codex 线程` : '已接入，暂无线程',
+    message: threadCount ? `已读取 ${threadCount} 项 Codex 任务` : '已接入，暂无任务',
     threadCount,
   };
 }

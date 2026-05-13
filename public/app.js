@@ -7,6 +7,7 @@ const state = {
   installPromptEvent: null,
   isInstalledApp: false,
   isLoading: false,
+  dashboardSignature: '',
   nextRefreshAtMs: null,
   lastRefreshAtMs: null,
   refreshError: '',
@@ -24,10 +25,13 @@ const elements = {
   inboxHeading: document.querySelector('#inbox-heading'),
   lastUpdated: document.querySelector('#last-updated'),
   monitorStatus: document.querySelector('#monitor-status'),
+  monitorStatusLabel: document.querySelector('#monitor-status .monitor-status-label'),
+  monitorStatusTooltip: document.querySelector('#monitor-status-tooltip'),
   notificationCount: document.querySelector('#notification-count'),
   notificationToggle: document.querySelector('#notification-toggle'),
   providerFilter: document.querySelector('#provider-filter'),
   projectFilter: document.querySelector('#project-filter'),
+  refreshInterval: document.querySelector('#refresh-interval'),
   projects: document.querySelector('#projects'),
   refreshButton: document.querySelector('#refresh-button'),
   searchInput: document.querySelector('#search-input'),
@@ -39,10 +43,13 @@ const elements = {
   topbarMetrics: document.querySelector('#topbar-metrics'),
 };
 
-const REFRESH_INTERVAL_MS = 10_000;
+const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+const REFRESH_INTERVAL_OPTIONS_MS = new Set([10_000, 30_000, 60_000]);
+const UNFOCUSED_REFRESH_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
 const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
+const REFRESH_INTERVAL_STORAGE_KEY = 'codex-mission-control:refresh-interval-ms';
 const PWA_INSTALLED_STORAGE_KEY = 'codex-mission-control:pwa-installed';
 const PWA_OPEN_PROTOCOL_URL = 'web+agentmissioncontrol:open';
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
@@ -85,13 +92,11 @@ const NOTIFICATION_SOURCE_LABELS = {
 const NOTIFICATION_STATUS_LABELS = {
   unread: '未读',
   read: '已读',
-  snoozed: '稍后提醒',
 };
 
 const SOFT_PROGRESS_STATUS_LABELS = {
-  unread: '待查看',
-  read: '已查看',
-  snoozed: '稍后提醒',
+  unread: '待处理',
+  read: '已处理',
 };
 
 const ACTIVE_NOTIFICATION_STATUSES = new Set(['unread', 'read']);
@@ -133,16 +138,31 @@ function formatOptionalPercent(value) {
   return formatPercent(value);
 }
 
-function formatResetTime(timestamp) {
-  const value = Number(timestamp || 0);
-  if (!value) return '暂无刷新时间';
-  return `刷新 ${timeFormat.format(new Date(value))}`;
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (!Number.isFinite(bytes) || bytes === 0) return '0 MB';
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return `${Number(mb.toFixed(mb >= 100 ? 0 : 1))} MB`;
+  const gb = mb / 1024;
+  return `${Number(gb.toFixed(gb >= 10 ? 1 : 2))} GB`;
+}
+
+function formatMs(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return '-';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${Number((ms / 1000).toFixed(1))} s`;
 }
 
 function formatCompactResetTime(timestamp) {
   const value = Number(timestamp || 0);
   if (!value) return '暂无刷新时间';
   return `刷新 ${timeFormat.format(new Date(value))}`;
+}
+
+function formatQuotaNote(timestamp, stale = false) {
+  const resetText = formatCompactResetTime(timestamp);
+  return stale ? `沿用上次记录 · ${resetText}` : resetText;
 }
 
 function relativeTime(timestamp) {
@@ -194,6 +214,42 @@ function isSoftProgressNotification(notification) {
   return notification?.source === 'observed-completion';
 }
 
+function shouldSuppressSoftProgressNotification(notification, dashboard = state.dashboard) {
+  if (!isSoftProgressNotification(notification)) return false;
+
+  const thread = (dashboard?.threads || []).find((item) => item.id === notification.threadId);
+  if (!thread) return false;
+
+  const signalAtMs = Number(notification.signalAtMs || 0);
+  const continuedAtMs = Math.max(
+    Number(thread.latestUserMessageAtMs || 0),
+    Number(thread.currentTurnStartedAtMs || 0),
+  );
+  if (signalAtMs > 0 && continuedAtMs > signalAtMs) return true;
+
+  return thread.status === 'running' || Number(thread.currentTurnStartedAtMs || 0) > 0;
+}
+
+function reconcileNotificationsWithDashboard(notifications, dashboard = state.dashboard) {
+  if (!notifications?.items?.length) return notifications;
+
+  const items = notifications.items.filter((item) => (
+    !shouldSuppressSoftProgressNotification(item, dashboard)
+  ));
+  if (items.length === notifications.items.length) return notifications;
+
+  const summary = notifications.summary || {};
+  return {
+    ...notifications,
+    items,
+    summary: {
+      ...summary,
+      activeCount: items.length,
+      unreadCount: items.filter((item) => item.status === 'unread').length,
+    },
+  };
+}
+
 function notificationStatusLabel(notification) {
   const labels = isSoftProgressNotification(notification)
     ? SOFT_PROGRESS_STATUS_LABELS
@@ -226,13 +282,70 @@ function fallbackNotificationsFromDashboard(dashboard) {
   };
 }
 
+function localScanStatus(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return '等待首次扫描';
+  if (value <= 800) return '轻松';
+  if (value <= 2_000) return '正常';
+  if (value <= 5_000) return '偏慢';
+  return '很慢';
+}
+
+function localMemoryStatus(bytes) {
+  const mb = Number(bytes || 0) / (1024 * 1024);
+  if (!Number.isFinite(mb) || mb <= 0) return '等待数据';
+  if (mb <= 250) return '正常';
+  if (mb <= 600) return '偏高';
+  return '很高';
+}
+
+function topbarLoadLabel(performance = state.dashboard?.performance || {}) {
+  const dashboard = performance.dashboard || {};
+  const processInfo = performance.process || {};
+  const scanStatus = localScanStatus(dashboard.lastLoadMs);
+  const memoryStatus = localMemoryStatus(processInfo.rssBytes);
+  return `负载${scanStatus} · 内存${memoryStatus}`;
+}
+
+function topbarLoadTitle(performance = state.dashboard?.performance) {
+  const dashboard = performance?.dashboard || {};
+  const processInfo = performance?.process || {};
+  return `本地扫描耗时：${formatMs(dashboard.lastLoadMs)}；服务内存占用：${formatBytes(processInfo.rssBytes)}`;
+}
+
+function cacheFreshnessLabel(cache = {}) {
+  const ageMs = Number(cache.cacheAgeMs);
+  const ttlMs = Number(cache.cacheTtlMs);
+  if (!Number.isFinite(ageMs)) return '等待缓存';
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) return formatMs(ageMs);
+  const stateLabel = cache.cached ? '有效' : '已过期';
+  return `${stateLabel} ${formatMs(ageMs)} / ${formatMs(ttlMs)}`;
+}
+
+function topbarLoadTooltip(performance = state.dashboard?.performance) {
+  const dashboard = performance?.dashboard || {};
+  const notifications = performance?.notifications || {};
+  const processInfo = performance?.process || {};
+  const scanMs = dashboard.lastLoadMs;
+  const rssBytes = processInfo.rssBytes;
+  const heapUsedBytes = processInfo.heapUsedBytes;
+
+  return [
+    `本地负载：${localScanStatus(scanMs)} · 扫描 ${formatMs(scanMs)}`,
+    `服务内存：${localMemoryStatus(rssBytes)} · 占用 ${formatBytes(rssBytes)} · 堆内存 ${formatBytes(heapUsedBytes)}`,
+    `看板缓存：${cacheFreshnessLabel(dashboard)} · 复用 ${formatOptionalPercent(dashboard.hitRatePercent)}`,
+    `通知缓存：${cacheFreshnessLabel(notifications)} · 复用 ${formatOptionalPercent(notifications.hitRatePercent)}`,
+  ].join('\n');
+}
+
 function setNotifications(notifications) {
-  state.notifications = notifications;
+  const reconciled = reconcileNotificationsWithDashboard(notifications, state.dashboard);
+  state.notifications = reconciled;
   if (state.dashboard) {
-    state.dashboard.notifications = notifications;
+    state.dashboard.notifications = reconciled;
     state.dashboard.summary = {
       ...(state.dashboard.summary || {}),
-      inboxCount: notifications?.summary?.activeCount ?? notifications?.items?.length ?? 0,
+      inboxCount: reconciled?.summary?.activeCount ?? reconciled?.items?.length ?? 0,
     };
   }
 }
@@ -266,6 +379,49 @@ function secondsUntil(timestamp) {
   return Math.max(0, Math.ceil((Number(timestamp) - Date.now()) / 1000));
 }
 
+function normalizeRefreshInterval(value) {
+  const number = Number.parseInt(value, 10);
+  return REFRESH_INTERVAL_OPTIONS_MS.has(number) ? number : DEFAULT_REFRESH_INTERVAL_MS;
+}
+
+function currentRefreshIntervalMs() {
+  return normalizeRefreshInterval(elements.refreshInterval?.value);
+}
+
+function pageHasFocus() {
+  return typeof document.hasFocus !== 'function' || document.hasFocus();
+}
+
+function effectiveRefreshIntervalMs() {
+  const intervalMs = currentRefreshIntervalMs();
+  return pageHasFocus() ? intervalMs : Math.max(intervalMs, UNFOCUSED_REFRESH_INTERVAL_MS);
+}
+
+function refreshIntervalLabel(intervalMs = currentRefreshIntervalMs()) {
+  return intervalMs < 1000 ? `${intervalMs} ms` : `${Math.round(intervalMs / 1000)} 秒`;
+}
+
+function dashboardDataSignature(dashboard) {
+  if (!dashboard) return '';
+
+  const runningThreads = (dashboard.threads || []).some((thread) => thread.status === 'running');
+  const runtimeMinuteBucket = runningThreads ? Math.floor(Date.now() / 60_000) : 0;
+  const threadSignatures = (dashboard.threads || []).map((thread) => {
+    const { currentTurnElapsedMs, ...stableThread } = thread;
+    return stableThread;
+  });
+
+  return JSON.stringify({
+    summary: dashboard.summary || {},
+    providers: dashboard.providers || [],
+    projects: dashboard.projects || [],
+    threads: threadSignatures,
+    notifications: dashboard.notifications || null,
+    inbox: dashboard.inbox || [],
+    runtimeMinuteBucket,
+  });
+}
+
 function quotaGroupLabel(group = {}) {
   return group.label || group.model || group.providerLabel || 'LLM';
 }
@@ -277,7 +433,7 @@ function quotaRows(groups, windowKey) {
     return {
       label: quotaGroupLabel(group),
       value: hasWindow ? formatOptionalPercent(window?.availablePercent) : '-',
-      note: hasWindow ? formatCompactResetTime(window?.resetsAtMs) : '暂无 quota 信号',
+      note: hasWindow ? formatQuotaNote(window?.resetsAtMs, group?.stale) : '暂无 quota 信号',
     };
   });
 }
@@ -304,19 +460,19 @@ function quotaSummaryCards(quota) {
     {
       label: '实时可用 quota',
       value: formatOptionalPercent(quota?.realtime?.availablePercent),
-      note: formatResetTime(quota?.realtime?.resetsAtMs),
+      note: formatQuotaNote(quota?.realtime?.resetsAtMs, quota?.stale),
       tone: 'quota',
     },
     {
       label: '本周可用 quota',
       value: formatOptionalPercent(quota?.weekly?.availablePercent),
-      note: formatResetTime(quota?.weekly?.resetsAtMs),
+      note: formatQuotaNote(quota?.weekly?.resetsAtMs, quota?.stale),
       tone: 'quota',
     },
   ];
 }
 
-function summaryCard({ label, value, note = '', tone = '', rows = [] }) {
+function summaryCard({ label, value, note = '', tone = '', rows = [], title = '' }) {
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const classes = [
     'summary-card',
@@ -327,7 +483,7 @@ function summaryCard({ label, value, note = '', tone = '', rows = [] }) {
     ? `
       <div class="summary-card-lines">
         ${rows.map((row) => `
-          <div class="summary-card-line">
+          <div class="summary-card-line"${row.title ? ` title="${escapeHtml(row.title)}"` : ''}>
             <span class="summary-card-line-label">${escapeHtml(row.label)}</span>
             <strong>${escapeHtml(row.value)}</strong>
             ${row.note ? `<small>${escapeHtml(row.note)}</small>` : ''}
@@ -341,7 +497,7 @@ function summaryCard({ label, value, note = '', tone = '', rows = [] }) {
     `;
 
   return `
-    <article class="${classes}">
+    <article class="${classes}"${title ? ` title="${escapeHtml(title)}"` : ''}>
       <span>${escapeHtml(label)}</span>
       ${body}
     </article>
@@ -358,7 +514,7 @@ function renderTopbarMetrics(summary = {}) {
   const pendingTitle = counts.softCount
     ? `${pendingCount || 0} 项待处理，${counts.softCount} 项新进展`
     : `${pendingCount || 0} 项待处理`;
-  const hostTitle = `${runningHostThreads || 0} 个 Host 线程工作中`;
+  const hostTitle = `${runningHostThreads || 0} 个 Host 工作中`;
 
   elements.topbarMetrics.innerHTML = `
     <button
@@ -397,7 +553,7 @@ function providerStatusLabel(provider = {}) {
 
 function providerCountLabel(provider = {}) {
   const count = Number(provider.threadCount || 0);
-  if (count > 0) return `${count} 条`;
+  if (count > 0) return `${count} 项`;
   if (provider.status === 'missing') return '待接入';
   if (provider.status === 'error') return '异常';
   return '';
@@ -549,7 +705,7 @@ function arrangeThreadRows(threads) {
 }
 
 function openLabel(thread) {
-  return thread?.openLabel || '打开线程';
+  return thread?.openLabel || '打开';
 }
 
 function canOpenThread(thread) {
@@ -653,7 +809,7 @@ function renderSummary(summary) {
     {
       label: '今日 token',
       value: formatTokens(summary.todayTokensUsed),
-      note: `${summary.updatedToday || 0} 条线程今天更新`,
+      note: `${summary.updatedToday || 0} 项任务今天更新`,
     },
     {
       label: '工作中 Agent',
@@ -666,22 +822,22 @@ function renderSummary(summary) {
     {
       label: '累计 token',
       value: formatTokens(summary.totalTokensUsed ?? summary.activeTokensUsed),
-      note: '包含归档线程',
+      note: '包含归档任务',
     },
     {
-      label: '累计线程',
+      label: '累计任务',
       value: summary.totalThreads,
-      note: `${summary.activeThreads || 0} 条活跃线程`,
+      note: `${summary.activeThreads || 0} 项活跃任务`,
     },
     {
-      label: '活跃线程',
+      label: '活跃任务',
       value: summary.activeThreads,
-      note: '未归档线程',
+      note: '未归档任务',
     },
     {
       label: '已归档',
       value: summary.archivedThreads,
-      note: '已收起线程',
+      note: '已收起任务',
     },
   ];
 
@@ -699,7 +855,7 @@ function renderSummary(summary) {
       <section class="summary-section summary-section-lifetime" aria-labelledby="lifetime-summary-heading">
         <div class="summary-section-heading">
           <h2 id="lifetime-summary-heading">长期累计</h2>
-          <p>线程与 token 总账</p>
+          <p>任务与 token 总账</p>
         </div>
         <div class="summary-card-grid summary-card-grid-lifetime">
           ${lifetimeItems.map(summaryCard).join('')}
@@ -776,13 +932,13 @@ function filteredThreads() {
 
 function renderThreads() {
   const threads = filteredThreads();
-  elements.threadCount.textContent = `${threads.length} 条`;
+  elements.threadCount.textContent = `${threads.length} 项`;
 
   if (!threads.length) {
     const provider = state.dashboard?.providers?.find((item) => item.id === elements.providerFilter.value);
     elements.threads.innerHTML = provider?.status === 'missing'
       ? `<p class="empty-state">${escapeHtml(provider.message || `${provider.label} 未检测到。安装后刷新看板。`)}</p>`
-      : '<p class="empty-state">没有匹配线程。</p>';
+      : '<p class="empty-state">没有匹配任务。</p>';
     renderDetail(null);
     return;
   }
@@ -807,8 +963,8 @@ function renderThreads() {
           </div>
           ${tokenUsageMarkup(thread)}
         </button>
-        <div class="row-actions" aria-label="线程操作">
-          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
+        <div class="row-actions" aria-label="任务操作">
+          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>打开</button>
         </div>
       </article>
     `;
@@ -873,9 +1029,8 @@ function renderNotifications(notifications) {
           type="button"
           data-open-thread-id="${escapeHtml(notification.threadId)}"
           data-open-notification-id="${escapeHtml(notification.id)}"
-        >${isSoftProgress ? '打开并标记已查看' : '打开并标记已处理'}</button>
-        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">${isSoftProgress ? '标记已查看' : '标记已处理'}</button>
-        <button class="action-button secondary" type="button" data-notification-snooze-id="${escapeHtml(notification.id)}">稍后提醒</button>
+        >打开</button>
+        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">标记已处理</button>
       </div>
     </article>
   `;
@@ -901,7 +1056,7 @@ function renderProjects(projects) {
         <div>
           <div class="project-name">${escapeHtml(project.projectName)}</div>
           <div class="project-meta">
-            <span>${project.threadCount} 个线程</span>
+            <span>${project.threadCount} 项任务</span>
             <span>今日 ${escapeHtml(formatTokens(project.todayTokensUsed))}</span>
             <span>历史 ${escapeHtml(formatTokens(project.tokensUsed))}</span>
             <span>${escapeHtml(relativeTime(project.latestUpdatedAtMs))}</span>
@@ -1105,11 +1260,11 @@ function buildThreadSummary(thread) {
   if (!pendingLines.length) pendingLines.push('- 暂无明确待处理信号');
 
   return [
-    'Agent Mission Control 线程摘要',
-    '用途：粘给新的 Codex 线程接手；只含本地元数据和截断信号，不含完整线程正文。',
+    'Agent Mission Control 任务摘要',
+    '用途：粘给新的 Codex 任务接手；只含本地元数据和截断信号，不含完整内容。',
     '',
     '状态摘要:',
-    `- 线程: ${thread.title || '未命名线程'}`,
+    `- 任务: ${thread.title || '未命名任务'}`,
     `- 来源: ${providerLabel(thread)}`,
     `- 阶段: ${threadPhaseLabel(thread, pendingTools, notifications)}`,
     `- 状态: ${STATUS_LABELS[thread.status] || thread.status || '-'}`,
@@ -1138,15 +1293,15 @@ function buildThreadSummary(thread) {
     `- Agent 输出信号: ${recentAgentSignal(thread) || '-'}`,
     '',
     '接手建议:',
-    '- 先打开或恢复线程确认上下文。',
+    '- 先打开确认上下文。',
     '- 优先处理待授权、未完成 todo、等待验收或新进展。',
-    '- 不要把这份摘要当作完整线程正文。',
+    '- 不要把这份摘要当作完整内容。',
   ].join('\n');
 }
 
 function renderDetail(thread) {
   if (!thread) {
-    elements.detail.innerHTML = '<p class="empty-state">选择一个线程查看结构化审计信号。</p>';
+    elements.detail.innerHTML = '<p class="empty-state">选择一个任务查看结构化审计信号。</p>';
     return;
   }
 
@@ -1200,7 +1355,7 @@ function renderDetail(thread) {
   elements.detail.innerHTML = `
     <div class="detail-heading">
       <div>
-        <p class="eyebrow">单线程审计</p>
+        <p class="eyebrow">任务详情</p>
         <h2>${escapeHtml(thread.title)}</h2>
       </div>
     </div>
@@ -1208,12 +1363,12 @@ function renderDetail(thread) {
       <section class="detail-section detail-section-wide" aria-labelledby="detail-actions-heading">
         <div class="detail-section-heading">
           <h3 id="detail-actions-heading">下一步动作</h3>
-          <p>摘要只包含本地元数据和截断信号，不含完整线程正文。</p>
+          <p>摘要只包含本地元数据和截断信号，不含完整内容。</p>
         </div>
-        <div class="detail-actions" aria-label="当前线程操作">
-          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
+        <div class="detail-actions" aria-label="当前任务操作">
+          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>打开</button>
           <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
-          <button class="action-button secondary" type="button" data-copy-summary-id="${escapeHtml(thread.id)}">复制线程摘要</button>
+          <button class="action-button secondary" type="button" data-copy-summary-id="${escapeHtml(thread.id)}">复制摘要</button>
         </div>
       </section>
 
@@ -1319,6 +1474,7 @@ function renderDetail(thread) {
 function renderDashboard() {
   if (!state.dashboard) return;
 
+  state.dashboardSignature = dashboardDataSignature(state.dashboard);
   renderTopbarMetrics(state.dashboard.summary);
   renderSummary(state.dashboard.summary);
   renderProviderFilter(state.dashboard.providers || []);
@@ -1330,32 +1486,69 @@ function renderDashboard() {
   renderMonitorStatus();
 }
 
+function renderDashboardStatusOnly() {
+  if (!state.dashboard) return;
+
+  elements.lastUpdated.textContent = `已更新 ${timeFormat.format(new Date(state.dashboard.generatedAtMs))}`;
+  renderMonitorStatus();
+}
+
+function updatedAtLabel() {
+  const timestamp = Number(state.dashboard?.generatedAtMs || state.lastRefreshAtMs || 0);
+  return timestamp ? timeFormat.format(new Date(timestamp)) : '等待数据';
+}
+
 function renderMonitorStatus() {
   if (!elements.monitorStatus) return;
+  const intervalMs = effectiveRefreshIntervalMs();
+  const updated = updatedAtLabel();
+  const loadLabel = topbarLoadLabel();
+  const loadTitle = topbarLoadTitle();
+  const loadTooltip = topbarLoadTooltip();
+  const setMonitorText = (text) => {
+    if (elements.monitorStatusLabel) {
+      elements.monitorStatusLabel.textContent = text;
+    } else {
+      elements.monitorStatus.textContent = text;
+    }
+  };
+  elements.monitorStatus.title = loadTitle;
+  elements.monitorStatus.setAttribute('aria-label', `${updated}，${loadTitle}`);
+  if (elements.monitorStatusTooltip) {
+    elements.monitorStatusTooltip.textContent = loadTooltip;
+  }
 
   if (!elements.autoRefresh.checked) {
-    elements.monitorStatus.textContent = state.lastRefreshAtMs
-      ? `监控暂停 · 上次心跳 ${relativeTime(state.lastRefreshAtMs)}`
-      : '监控未启动';
+    setMonitorText(`${updated} · ${loadLabel} · 暂停`);
+    return;
+  }
+
+  if (document.visibilityState === 'hidden') {
+    setMonitorText(`${updated} · ${loadLabel} · 后台`);
+    return;
+  }
+
+  if (!pageHasFocus()) {
+    setMonitorText(`${updated} · ${loadLabel} · 降频 · ${secondsUntil(state.nextRefreshAtMs)}s`);
     return;
   }
 
   if (state.isLoading) {
-    elements.monitorStatus.textContent = '监控中 · 心跳同步中';
+    setMonitorText(`${updated} · ${loadLabel} · 同步`);
     return;
   }
 
   if (state.refreshError) {
-    elements.monitorStatus.textContent = `心跳异常 · ${secondsUntil(state.nextRefreshAtMs)} 秒后重试`;
+    setMonitorText(`${updated} · ${loadLabel} · 异常 · ${secondsUntil(state.nextRefreshAtMs)}s`);
     return;
   }
 
   if (!state.lastRefreshAtMs) {
-    elements.monitorStatus.textContent = '监控中 · 等待首次心跳';
+    setMonitorText(`${updated} · ${loadLabel} · ${refreshIntervalLabel(intervalMs)}`);
     return;
   }
 
-  elements.monitorStatus.textContent = `监控中 · 心跳 ${relativeTime(state.lastRefreshAtMs)} · ${secondsUntil(state.nextRefreshAtMs)} 秒后刷新`;
+  setMonitorText(`${updated} · ${loadLabel} · ${refreshIntervalLabel(intervalMs)} · ${secondsUntil(state.nextRefreshAtMs)}s`);
 }
 
 function isStandaloneApp() {
@@ -1553,7 +1746,7 @@ function clearError() {
   elements.statusBanner.dataset.tone = '';
 }
 
-async function loadDashboard({ silent = false } = {}) {
+async function loadDashboard({ silent = false, force = false } = {}) {
   if (state.isLoading) return;
 
   state.isLoading = true;
@@ -1561,14 +1754,22 @@ async function loadDashboard({ silent = false } = {}) {
   elements.refreshButton.disabled = true;
 
   try {
-    const response = await fetch('/api/dashboard', { cache: 'no-store' });
+    const endpoint = force ? '/api/dashboard?force=1' : '/api/dashboard';
+    const response = await fetch(endpoint, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.dashboard = await response.json();
     setNotifications(state.dashboard.notifications || fallbackNotificationsFromDashboard(state.dashboard));
+    const nextSignature = dashboardDataSignature(state.dashboard);
+    const shouldRenderDashboard = force || nextSignature !== state.dashboardSignature;
     state.lastRefreshAtMs = Date.now();
     state.refreshError = '';
     if (!silent || elements.statusBanner.dataset.tone === 'error') clearError();
-    renderDashboard();
+    if (shouldRenderDashboard) {
+      renderDashboard();
+    } else {
+      state.dashboardSignature = nextSignature;
+      renderDashboardStatusOnly();
+    }
   } catch (error) {
     state.refreshError = error.message;
     if (!silent) showError(`无法加载 Agent 数据：${error.message}`);
@@ -1622,7 +1823,7 @@ function focusTopbarAction(action) {
 async function copyResumeCommand(threadId) {
   const thread = findThread(threadId);
   if (!thread) {
-    showError('找不到这个线程，先刷新看板再试。');
+    showError('找不到这个任务，先刷新看板再试。');
     return;
   }
 
@@ -1637,22 +1838,22 @@ async function copyResumeCommand(threadId) {
 async function copyThreadSummary(threadId) {
   const thread = findThread(threadId);
   if (!thread) {
-    showError('找不到这个线程，先刷新看板再试。');
+    showError('找不到这个任务，先刷新看板再试。');
     return;
   }
 
   try {
     await copyText(buildThreadSummary(thread));
-    showNotice('已复制线程摘要。');
+    showNotice('已复制摘要。');
   } catch {
-    showError('无法写入剪贴板，请手动复制详情里的线程摘要。');
+    showError('无法写入剪贴板，请手动复制详情里的摘要。');
   }
 }
 
 async function openThread(threadId, sourceButton, { notificationId = '' } = {}) {
   const thread = findThread(threadId);
   if (!thread) {
-    showError('找不到这个线程，先刷新看板再试。');
+    showError('找不到这个任务，先刷新看板再试。');
     return;
   }
 
@@ -1719,15 +1920,13 @@ async function updateNotification(notificationId, patch) {
 }
 
 async function markNotificationDone(notificationId) {
-  const notification = findNotification(notificationId);
-  const isSoftProgress = isSoftProgressNotification(notification);
   const updated = markNotificationDoneLocally(notificationId);
   if (!updated) {
     showError('找不到这条待处理项，刷新看板后再试。');
     return;
   }
 
-  showNotice(isSoftProgress ? '已标记为已查看。' : '已标记为已处理。');
+  showNotice('已标记为已处理。');
   try {
     await updateNotification(notificationId, { status: 'done' });
   } catch (error) {
@@ -1735,25 +1934,32 @@ async function markNotificationDone(notificationId) {
   }
 }
 
-async function snoozeNotification(notificationId) {
-  const updated = updateNotificationLocally(notificationId, { status: 'snoozed' });
-  if (!updated) {
-    showError('找不到这条待处理项，刷新看板后再试。');
+function scheduleNextMonitorTick(delayMs = effectiveRefreshIntervalMs()) {
+  if (state.autoTimer) {
+    clearTimeout(state.autoTimer);
+    state.autoTimer = null;
+  }
+
+  if (!elements.autoRefresh.checked || document.visibilityState === 'hidden') {
+    state.nextRefreshAtMs = null;
+    renderMonitorStatus();
     return;
   }
 
-  showNotice('已稍后提醒，30 分钟后再出现。');
-  try {
-    await updateNotification(notificationId, { status: 'snoozed', snoozeMinutes: 30 });
-  } catch (error) {
-    showError(`已从当前面板移除，但无法持久化稍后提醒：${error.message}`);
-  }
+  state.nextRefreshAtMs = Date.now() + delayMs;
+  state.autoTimer = setTimeout(runMonitorTick, delayMs);
+  renderMonitorStatus();
 }
 
 function runMonitorTick() {
-  state.nextRefreshAtMs = Date.now() + REFRESH_INTERVAL_MS;
-  loadDashboard({ silent: true });
+  if (document.visibilityState === 'hidden' || !elements.autoRefresh.checked) {
+    scheduleNextMonitorTick();
+    return;
+  }
+
+  state.nextRefreshAtMs = null;
   renderMonitorStatus();
+  loadDashboard({ silent: true }).finally(() => scheduleNextMonitorTick());
 }
 
 function startHeartbeat() {
@@ -1763,27 +1969,44 @@ function startHeartbeat() {
 
 function syncMonitor() {
   if (state.autoTimer) {
-    clearInterval(state.autoTimer);
+    clearTimeout(state.autoTimer);
     state.autoTimer = null;
   }
 
   localStorage.setItem(MONITOR_STORAGE_KEY, elements.autoRefresh.checked ? '1' : '0');
+  localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, String(currentRefreshIntervalMs()));
 
   if (elements.autoRefresh.checked) {
-    state.nextRefreshAtMs = Date.now() + REFRESH_INTERVAL_MS;
-    state.autoTimer = setInterval(runMonitorTick, REFRESH_INTERVAL_MS);
+    scheduleNextMonitorTick();
   } else {
     state.nextRefreshAtMs = null;
+    renderMonitorStatus();
   }
-
-  renderMonitorStatus();
 }
 
 function initializeMonitor() {
   const stored = localStorage.getItem(MONITOR_STORAGE_KEY);
+  const storedInterval = normalizeRefreshInterval(localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY));
   elements.autoRefresh.checked = stored === null ? true : stored === '1';
+  if (elements.refreshInterval) elements.refreshInterval.value = String(storedInterval);
   startHeartbeat();
   syncMonitor();
+}
+
+function refreshWhenVisible() {
+  if (document.visibilityState === 'hidden' || !elements.autoRefresh.checked) {
+    scheduleNextMonitorTick();
+    return;
+  }
+
+  const intervalMs = effectiveRefreshIntervalMs();
+  state.nextRefreshAtMs = Date.now() + intervalMs;
+  const staleForMs = Date.now() - Number(state.lastRefreshAtMs || 0);
+  if (!state.lastRefreshAtMs || staleForMs >= intervalMs) {
+    loadDashboard({ silent: true });
+  }
+  scheduleNextMonitorTick(intervalMs);
+  renderMonitorStatus();
 }
 
 function initializeInstallPrompt() {
@@ -1813,13 +2036,23 @@ function initializeInstallPrompt() {
 
 elements.appMinimizeButton?.addEventListener('click', minimizeInstalledApp);
 elements.appInstallButton?.addEventListener('click', installOrOpenApp);
-elements.refreshButton.addEventListener('click', () => loadDashboard());
+elements.refreshButton.addEventListener('click', () => loadDashboard({ force: true }));
 elements.searchInput.addEventListener('input', renderThreads);
 elements.providerFilter.addEventListener('change', renderThreads);
 elements.statusFilter.addEventListener('change', renderThreads);
 elements.projectFilter.addEventListener('change', renderThreads);
 elements.archiveToggle.addEventListener('change', renderThreads);
 elements.autoRefresh.addEventListener('change', syncMonitor);
+elements.refreshInterval?.addEventListener('change', syncMonitor);
+document.addEventListener('visibilitychange', refreshWhenVisible);
+window.addEventListener('focus', refreshWhenVisible);
+window.addEventListener('blur', () => {
+  if (elements.autoRefresh.checked && document.visibilityState !== 'hidden') {
+    scheduleNextMonitorTick();
+  } else {
+    renderMonitorStatus();
+  }
+});
 elements.notificationToggle.addEventListener('click', () => {
   state.inboxExpanded = !state.inboxExpanded;
   renderNotifications(state.notifications || state.dashboard?.notifications);
@@ -1874,13 +2107,6 @@ document.addEventListener('click', (event) => {
     return;
   }
 
-  const snoozeTarget = clicked.closest('[data-notification-snooze-id]');
-  if (snoozeTarget) {
-    event.preventDefault();
-    snoozeNotification(snoozeTarget.dataset.notificationSnoozeId);
-    return;
-  }
-
   const notificationMain = clicked.closest('.notification-main[data-thread-id]');
   if (notificationMain) {
     event.preventDefault();
@@ -1891,7 +2117,7 @@ document.addEventListener('click', (event) => {
       const notificationId = notificationItem.dataset.notificationId;
       markNotificationDoneLocally(notificationId);
       void updateNotification(notificationId, { status: 'done' }).catch((error) => {
-        showError(`无法持久化已查看状态：${error.message}`);
+        showError(`无法持久化已处理状态：${error.message}`);
       });
     }
     return;
@@ -1906,4 +2132,4 @@ initializeInstallPrompt();
 initializeLaunchHandling();
 registerServiceWorker();
 initializeMonitor();
-loadDashboard();
+loadDashboard({ force: true });

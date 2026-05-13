@@ -13,6 +13,12 @@ const VALID_STATUSES = new Set(['unread', 'read', 'snoozed', 'done', 'dismissed'
 const ACTION_NOTIFICATION_TYPES = new Set(['AWAITING_REVIEW', 'AWAITING_PERMISSION']);
 const RECENT_OBSERVED_COMPLETION_WINDOW_MS = 2 * 60 * 60 * 1000;
 const DESKTOP_NOTIFICATIONS_DISABLED_REASON = 'disabled-until-native-notifier';
+const OBSERVED_COMPLETION_PROVIDERS = new Set([
+  'codex',
+  'codex-cli',
+  'claude-desktop-code',
+  'claude-desktop-cowork',
+]);
 
 function coerceNumber(value, fallback = 0) {
   const number = Number(value);
@@ -83,8 +89,11 @@ function hasCompletedAfterLastUserMessage(thread) {
 
 function supportsObservedCompletion(thread) {
   const provider = String(thread.provider || 'codex');
-  if (provider !== 'codex' && provider !== 'codex-cli') return false;
-  return String(thread.source || '') !== 'exec';
+  if (!OBSERVED_COMPLETION_PROVIDERS.has(provider)) return false;
+  if (provider === 'codex' || provider === 'codex-cli') {
+    return String(thread.source || '') !== 'exec';
+  }
+  return !thread.agentRunning && !thread.isAgentRunning;
 }
 
 export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
@@ -109,7 +118,7 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
         status: 'unread',
         title: `${label} 请求处理`,
         reason: `${label} 有待处理事项`,
-        threadTitle: thread.title || '未命名会话',
+        threadTitle: thread.title || '未命名任务',
         projectName: thread.projectName || '未知项目',
         appDeepLink: thread.appDeepLink || '',
         resumeCommand: thread.resumeCommand || '',
@@ -139,9 +148,9 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
       source: isUnread ? 'codex-unread' : 'observed-completion',
       priority: 'normal',
       status: 'unread',
-      title: '线程已完成，等待处理',
+      title: '任务有新进展，等待处理',
       reason: isUnread ? 'Codex 侧边栏标记为未读' : 'Agent 已完成一轮工作',
-      threadTitle: thread.title || '未命名线程',
+      threadTitle: thread.title || '未命名任务',
       projectName: thread.projectName || '未知项目',
       appDeepLink: thread.appDeepLink || '',
       resumeCommand: thread.resumeCommand || `codex resume ${thread.id}`,

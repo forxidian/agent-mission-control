@@ -50,7 +50,7 @@ test('normalizes OpenCode session rows into provider threads', () => {
   assert.equal(thread.updatedAtMs, 1778043600000);
   assert.equal(thread.resumeCommand, 'cd /Users/example/project && opencode --session ses_abc');
   assert.equal(thread.canOpen, true);
-  assert.equal(thread.openLabel, '打开会话');
+  assert.equal(thread.openLabel, '打开');
 });
 
 test('loads OpenCode sessions from CLI json output', async () => {

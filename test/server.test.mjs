@@ -284,6 +284,195 @@ test('serves actionable notifications from the notification center', async () =>
   }
 });
 
+test('coalesces concurrent dashboard loads across API routes', async () => {
+  let releaseLoad;
+  let loadCalls = 0;
+  const loadStarted = [];
+  const loadGate = new Promise((resolve) => {
+    releaseLoad = resolve;
+  });
+  const server = createServer({
+    loadDashboard: async () => {
+      loadCalls += 1;
+      loadStarted.push(loadCalls);
+      await loadGate;
+      return {
+        summary: { activeThreads: 1 },
+        threads: [{ id: 'abc' }],
+        projects: [],
+        inbox: [],
+      };
+    },
+    notificationCenter: {
+      refresh: async () => ({
+        summary: { activeCount: 0, unreadCount: 0 },
+        settings: { desktopNotificationsEnabled: false },
+        items: [],
+      }),
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const dashboardRequest = fetch(`${base}/api/dashboard`);
+    const notificationsRequest = fetch(`${base}/api/notifications`);
+
+    while (loadStarted.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(loadCalls, 1);
+
+    releaseLoad();
+    const [dashboardResponse, notificationsResponse] = await Promise.all([
+      dashboardRequest,
+      notificationsRequest,
+    ]);
+
+    assert.equal(dashboardResponse.status, 200);
+    assert.equal(notificationsResponse.status, 200);
+    assert.equal(loadCalls, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('reuses cached dashboard snapshots for repeated API reads within the TTL', async () => {
+  let nowMs = 1_000;
+  let loadCalls = 0;
+  const server = createServer({
+    dashboardCacheTtlMs: 60_000,
+    now: () => nowMs,
+    loadDashboard: async () => {
+      loadCalls += 1;
+      return {
+        summary: { loadCalls },
+        threads: [{ id: `thread-${loadCalls}` }],
+        projects: [],
+        inbox: [],
+      };
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const firstResponse = await fetch(`${base}/api/dashboard`);
+    const first = await firstResponse.json();
+    const secondResponse = await fetch(`${base}/api/pending-summary`);
+    const second = await secondResponse.json();
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(first.summary.loadCalls, 1);
+    assert.equal(second.runningHostThreadCount, 0);
+    assert.equal(loadCalls, 1);
+
+    nowMs += 60_001;
+    const thirdResponse = await fetch(`${base}/api/dashboard`);
+    const third = await thirdResponse.json();
+
+    assert.equal(thirdResponse.status, 200);
+    assert.equal(third.summary.loadCalls, 2);
+    assert.equal(loadCalls, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('reuses notification refreshes across dashboard scans by default', async () => {
+  let nowMs = 1_000;
+  let loadCalls = 0;
+  let refreshCalls = 0;
+  const server = createServer({
+    now: () => nowMs,
+    loadDashboard: async () => {
+      loadCalls += 1;
+      return {
+        summary: { loadCalls },
+        threads: [{ id: 'abc', updatedAtMs: nowMs }],
+        projects: [],
+        inbox: [],
+      };
+    },
+    notificationCenter: {
+      refresh: async () => {
+        refreshCalls += 1;
+        return {
+          summary: { activeCount: 0, unreadCount: 0 },
+          settings: { desktopNotificationsEnabled: false },
+          items: [],
+        };
+      },
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const firstResponse = await fetch(`${base}/api/dashboard`);
+    nowMs += 10_001;
+    const secondResponse = await fetch(`${base}/api/dashboard`);
+    const second = await secondResponse.json();
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(loadCalls, 2);
+    assert.equal(refreshCalls, 1);
+    assert.equal(second.performance.notifications.cacheTtlMs, 30_000);
+    assert.equal(second.performance.notifications.hits, 1);
+    assert.equal(second.performance.notifications.refreshCount, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('reports local performance metrics for scan time, memory, and cache behavior', async () => {
+  let nowMs = 1_000;
+  let loadCalls = 0;
+  const server = createServer({
+    dashboardCacheTtlMs: 10_000,
+    now: () => nowMs,
+    loadDashboard: async () => {
+      loadCalls += 1;
+      return {
+        summary: {},
+        threads: [],
+        projects: [],
+        inbox: [],
+      };
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const firstResponse = await fetch(`${base}/api/dashboard`);
+    const first = await firstResponse.json();
+    nowMs += 1_000;
+    const secondResponse = await fetch(`${base}/api/dashboard`);
+    const second = await secondResponse.json();
+    const metricsResponse = await fetch(`${base}/api/performance`);
+    const metrics = await metricsResponse.json();
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(metricsResponse.status, 200);
+    assert.equal(loadCalls, 1);
+    assert.equal(first.performance.dashboard.loadCount, 1);
+    assert.equal(second.performance.dashboard.hits, 1);
+    assert.equal(metrics.dashboard.cacheTtlMs, 10_000);
+    assert.equal(metrics.dashboard.loadCount, 1);
+    assert.equal(metrics.dashboard.hits, 1);
+    assert.equal(typeof metrics.process.rssBytes, 'number');
+    assert.ok(metrics.caches.codex.rolloutSignals);
+    assert.ok(metrics.caches.claude.jsonlSignals);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('serves a privacy-limited pending summary for the macOS menu bar', async () => {
   const server = createServer({
     loadDashboard: async () => ({
@@ -317,7 +506,7 @@ test('serves a privacy-limited pending summary for the macOS menu bar', async ()
     assert.equal(body.progressCount, 1);
     assert.equal(body.runningHostThreadCount, 2);
     assert.equal(body.hostLabel, '2 Host 工作中');
-    assert.equal(body.label, '3 待查看');
+    assert.equal(body.label, '3 待处理');
     assert.equal('items' in body, false);
     assert.equal(JSON.stringify(body).includes('private title'), false);
   } finally {

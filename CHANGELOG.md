@@ -22,6 +22,7 @@ All notable changes to Agent Mission Control are documented here.
 - Refined the macOS menu bar helper so it first asks the local server to reopen the installed PWA app before falling back to browser tabs.
 - Reworked the top-bar refresh controls and metric layout so status text and controls keep stable spacing across desktop and mobile widths.
 - Made the top-bar Host-running and pending metrics clickable shortcuts to the running-thread view and notification center.
+- Updated the README mock UI screenshot generated from synthetic dashboard data for the latest release layout.
 - Renamed soft progress notification states and actions from "read" language to "viewed" language, separating new-progress review from hard pending work.
 - Updated notification done and snooze actions to update the visible inbox optimistically before waiting for persistence.
 - Deduplicated Claude Desktop Code metadata that points to the same CLI session, keeping the freshest local session record.
@@ -53,6 +54,7 @@ All notable changes to Agent Mission Control are documented here.
 - 优化 macOS 菜单栏辅助工具：会先请求本地服务打开已安装的 PWA 应用，再回退到浏览器标签页。
 - 重做顶部刷新控制和关键指标布局，让状态文字与控件在桌面端和移动端都保持稳定间距。
 - 顶部 Host 工作中和待处理指标现在可点击，分别跳到运行中线程视图和通知中心。
+- 更新 README 中由虚构看板数据生成的脱敏 mock UI 示意图，以匹配最新发布版布局。
 - 将软性“新进展”的状态和操作文案从“已读”调整为“已查看”，和硬性的待处理事项进一步区分。
 - 通知的已处理和稍后提醒操作改为先乐观更新当前收件箱，再等待持久化结果。
 - 对指向同一 CLI session 的 Claude Desktop Code 元数据做去重，保留最新的本地会话记录。

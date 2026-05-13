@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as zlib from 'node:zlib';
@@ -105,6 +105,7 @@ test('parses Claude rate limits from status line JSONL events', () => {
   assert.equal(signals.rateLimits.secondary.used_percent, 5);
   assert.equal(signals.rateLimits.secondary.window_minutes, 10_080);
   assert.equal(signals.latestRateLimitAtMs, Date.parse('2026-05-12T08:00:00.000Z'));
+  assert.equal(signals.latestThreadRateLimitAtMs, Date.parse('2026-05-12T08:00:00.000Z'));
 });
 
 test('ignores ordinary unresolved Claude tool uses as user pending work', () => {
@@ -209,6 +210,134 @@ test('keeps ordinary Claude tool results out of user pending work', () => {
   assert.equal(resolvedByResult.pendingToolAtMs, 0);
 });
 
+test('does not treat intermediate Claude text before tool work as a completed turn', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:00:00.000Z',
+      sessionId: 'ses_cli',
+      cwd: '/Users/example/work',
+      message: { role: 'user', content: '继续实现这个模块' },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:01:00.000Z',
+      message: {
+        role: 'assistant',
+        stop_reason: 'tool_use',
+        content: [{ type: 'text', text: '我会先拆分任务，然后继续改代码。' }],
+      },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:02:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_edit',
+            name: 'Edit',
+            input: { file_path: '/Users/example/work/app.js' },
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:03:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool_edit',
+            content: 'ok',
+          },
+        ],
+      },
+    },
+  ]));
+  const thread = normalizeClaudeDesktopCodeSession({
+    sessionId: 'local_active',
+    cliSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    originCwd: '/Users/example/work',
+    lastActivityAt: Date.parse('2026-05-09T02:03:00.000Z'),
+  }, {
+    signals,
+  }, Date.parse('2026-05-09T02:04:00.000Z'));
+
+  assert.equal(signals.lastAgentMessage, '我会先拆分任务，然后继续改代码。');
+  assert.equal(signals.latestAgentFinalAtMs, null);
+  assert.equal(thread.status, 'running');
+  assert.equal(thread.currentTurnStartedAtMs, Date.parse('2026-05-09T02:00:00.000Z'));
+});
+
+test('uses Claude assistant end_turn events as completed-turn markers', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:00:00.000Z',
+      sessionId: 'ses_cli',
+      cwd: '/Users/example/work',
+      message: { role: 'user', content: '跑一次回测' },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:03:00.000Z',
+      sessionId: 'ses_cli',
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: '回测已经跑完，可以查看结果。' }],
+      },
+    },
+  ]));
+  const thread = normalizeClaudeDesktopCodeSession({
+    sessionId: 'local_done',
+    cliSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    originCwd: '/Users/example/work',
+    lastActivityAt: Date.parse('2026-05-09T02:03:00.000Z'),
+  }, {
+    signals,
+  }, Date.parse('2026-05-09T03:00:00.000Z'));
+
+  assert.equal(signals.lastAgentMessage, '回测已经跑完，可以查看结果。');
+  assert.equal(signals.latestAgentFinalAtMs, Date.parse('2026-05-09T02:03:00.000Z'));
+  assert.equal(thread.status, 'warm');
+  assert.equal(thread.currentTurnStartedAtMs, null);
+});
+
+test('uses Claude stop hook summaries as completed-turn markers', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:00:00.000Z',
+      sessionId: 'ses_cli',
+      cwd: '/Users/example/work',
+      message: { role: 'user', content: '生成报告' },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-05-09T02:02:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '报告已生成。' }],
+      },
+    },
+    {
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      timestamp: '2026-05-09T02:03:00.000Z',
+      sessionId: 'ses_cli',
+    },
+  ]));
+
+  assert.equal(signals.lastAgentMessage, '报告已生成。');
+  assert.equal(signals.latestAgentFinalAtMs, Date.parse('2026-05-09T02:03:00.000Z'));
+  assert.equal(signals.latestMessageKind, 'agent');
+});
+
 test('normalizes Claude Code CLI sessions into provider threads', () => {
   const signals = parseClaudeJsonlSignals(jsonl([
     {
@@ -248,7 +377,7 @@ test('normalizes Claude Code CLI sessions into provider threads', () => {
   assert.equal(thread.todayTokenUsage, 30);
   assert.equal(thread.status, 'warm');
   assert.equal(thread.resumeCommand, 'cd /Users/example/project && claude --resume ses_cli');
-  assert.equal(thread.openLabel, '打开会话');
+  assert.equal(thread.openLabel, '打开');
 });
 
 test('prefers Claude result usage over duplicate assistant usage', () => {
@@ -298,6 +427,35 @@ test('reads Claude Desktop usage cache as rate limits', async () => {
   assert.equal(usageCache.rateLimits.primary.resets_at, Date.parse('2026-05-12T08:30:00.000Z') / 1000);
   assert.equal(usageCache.rateLimits.secondary.used_percent, 5);
   assert.equal(usageCache.rateLimits.secondary.window_minutes, 10_080);
+});
+
+test('reuses Claude Desktop usage cache within its TTL', async () => {
+  const appDir = await mkdtemp(path.join(os.tmpdir(), 'claude-usage-cache-ttl-'));
+  const cacheDir = path.join(appDir, 'Cache', 'Cache_Data');
+  await writeClaudeUsageCache(appDir, {
+    five_hour: { utilization: 22 },
+  });
+
+  const first = await readClaudeUsageCache({
+    appDir,
+    cacheTtlMs: 60_000,
+    nowMs: 1_000,
+  });
+  await rm(cacheDir, { recursive: true, force: true });
+  const cached = await readClaudeUsageCache({
+    appDir,
+    cacheTtlMs: 60_000,
+    nowMs: 2_000,
+  });
+  const expired = await readClaudeUsageCache({
+    appDir,
+    cacheTtlMs: 60_000,
+    nowMs: 62_001,
+  });
+
+  assert.equal(first.rateLimits.primary.used_percent, 22);
+  assert.equal(cached.rateLimits.primary.used_percent, 22);
+  assert.equal(expired, null);
 });
 
 test('loads Claude Cowork desktop metadata and audit signals', async () => {
@@ -371,6 +529,7 @@ test('loads Claude Cowork desktop metadata and audit signals', async () => {
   assert.equal(result.threads[0].rateLimits.primary.used_percent, 38);
   assert.equal(result.threads[0].rateLimits.secondary.used_percent, 12);
   assert.equal(result.threads[0].rateLimitUpdatedAtMs, Date.parse('Sat, 09 May 2026 02:01:00 GMT'));
+  assert.equal(result.threads[0].rateLimitActivityAtMs, null);
 });
 
 test('deduplicates Claude Desktop Code sessions from the CLI provider', async () => {
@@ -526,6 +685,32 @@ test('normalizes Claude Desktop Code sessions with a desktop resume deep link', 
   assert.equal(thread.appDeepLink, `claude://resume?session=${cliSessionId}`);
   assert.equal(thread.resumeCommand, `open 'claude://resume?session=${cliSessionId}'`);
   assert.equal(thread.cliSessionId, cliSessionId);
+});
+
+test('uses Claude Desktop Code panel default title for untitled task-notification sessions', () => {
+  const signals = parseClaudeJsonlSignals(jsonl([
+    {
+      type: 'user',
+      timestamp: '2026-05-09T02:00:00.000Z',
+      sessionId: 'ses_cli',
+      cwd: '/Users/example/project',
+      message: {
+        role: 'user',
+        content: '<task-notification><task-id>abc</task-id><output-file>/tmp/out</output-file></task-notification>',
+      },
+    },
+  ]));
+  const thread = normalizeClaudeDesktopCodeSession({
+    sessionId: 'local_untitled',
+    cliSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    originCwd: '/Users/example/project',
+    createdAt: Date.parse('2026-05-09T01:00:00.000Z'),
+    lastActivityAt: Date.parse('2026-05-09T02:00:00.000Z'),
+  }, {
+    signals,
+  }, Date.parse('2026-05-09T03:00:00.000Z'));
+
+  assert.equal(thread.title, 'General coding session');
 });
 
 test('opens Claude CLI sessions in Terminal on macOS', async () => {

@@ -18,7 +18,7 @@ test('counts hard pending items separately from soft progress updates', () => {
     hardPendingCount: 2,
     progressCount: 1,
     runningHostThreadCount: 0,
-    label: '3 待查看',
+    label: '3 待处理',
     hostLabel: 'Host 空闲',
     generatedAtMs: 1778420000000,
   });
@@ -33,7 +33,7 @@ test('uses active notifications for display even when only soft progress remains
   assert.equal(summary.hardPendingCount, 0);
   assert.equal(summary.progressCount, 1);
   assert.equal(summary.displayCount, 1);
-  assert.equal(summary.label, '1 待查看');
+  assert.equal(summary.label, '1 待处理');
 });
 
 test('includes running host thread count without exposing thread details', () => {

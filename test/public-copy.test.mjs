@@ -15,6 +15,10 @@ test('uses Chinese copy for visible system fields', async () => {
     '本地多 Agent 控制台',
     '等待数据',
     '自动刷新',
+    '频率',
+    '10 秒',
+    '30 秒',
+    '60 秒',
     '安装应用',
     '安装为应用',
     '打开应用',
@@ -22,8 +26,6 @@ test('uses Chinese copy for visible system fields', async () => {
     '收起',
     '收起到 Dock',
     '监控未启动',
-    '监控中',
-    '心跳',
     '关键指标',
     '搜索',
     '来源',
@@ -36,13 +38,15 @@ test('uses Chinese copy for visible system fields', async () => {
     '实时可用 quota',
     '本周可用 quota',
     '今日 token',
+    '负载',
+    '内存',
     '工作中 Agent',
     'Host 工作中',
     'Sub Agent',
     'Host',
     '长期累计',
     '累计 token',
-    '累计线程',
+    '累计任务',
     '桌面端',
     '未检测到',
     '活跃',
@@ -60,25 +64,21 @@ test('uses Chinese copy for visible system fields', async () => {
     '高 token 用量',
     '等待验收',
     '等待授权',
-    '打开线程',
-    '打开并标记已处理',
+    '打开',
     '复制命令',
-    '复制线程摘要',
+    '复制摘要',
     'resume 命令',
     '本轮耗时',
-    '单线程审计',
+    '任务详情',
     '下一步动作',
     '状态摘要',
     '待处理区',
     '运行证据区',
     '最近信号',
-    '不含完整线程正文',
+    '不含完整内容',
     '待处理',
     '新进展',
     '标记已处理',
-    '标记已查看',
-    '待查看',
-    '稍后提醒',
   ]) {
     assert.match(publicCopy, new RegExp(expected));
   }
@@ -102,8 +102,20 @@ test('uses Chinese copy for visible system fields', async () => {
     '测试提醒',
     '开启桌面提醒',
     '桌面提醒已开启',
+    '打开线程',
+    '打开会话',
+    '打开并标记',
+    '标记已查看',
+    '待查看',
+    '稍后提醒',
+    '单线程',
+    '复制线程摘要',
+    '完整线程正文',
+    '命中',
+    'RSS',
+    '重复读盘',
   ]) {
-    assert.equal(publicCopy.includes(oldCopy), false, `leftover English UI copy: ${oldCopy}`);
+    assert.equal(publicCopy.includes(oldCopy), false, `leftover visible UI copy: ${oldCopy}`);
   }
 });
 
@@ -179,11 +191,44 @@ test('separates soft progress notifications from hard pending work copy', async 
 
   assert.match(app, /function notificationBreakdown\(notifications\)/);
   assert.match(app, /source === 'observed-completion'/);
+  assert.match(app, /function reconcileNotificationsWithDashboard\(notifications, dashboard = state\.dashboard\)/);
+  assert.match(app, /function shouldSuppressSoftProgressNotification\(notification, dashboard = state\.dashboard\)/);
+  assert.match(app, /thread\.status === 'running'/);
+  assert.match(app, /continuedAtMs > signalAtMs/);
   assert.match(app, new RegExp('待处理 / 新进展'));
   assert.match(app, /项需处理 · \$\{progressCount\} 项新进展/);
-  assert.match(app, /打开并标记已查看/);
-  assert.match(app, /标记已查看/);
+  assert.match(app, />打开<\/button>/);
+  assert.match(app, /标记已处理/);
+  assert.doesNotMatch(app, /标记已查看/);
   assert.match(app, /SOFT_PROGRESS_STATUS_LABELS/);
+});
+
+test('uses conservative automatic refresh behavior for local file scans', async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /const DEFAULT_REFRESH_INTERVAL_MS = 30_000;/);
+  assert.match(app, /new Set\(\[10_000, 30_000, 60_000\]\)/);
+  assert.doesNotMatch(html, /<option value="1000">1 秒<\/option>/);
+  assert.match(html, /<option value="30000" selected>30 秒<\/option>/);
+  assert.match(app, /const UNFOCUSED_REFRESH_INTERVAL_MS = 60_000;/);
+  assert.match(app, /function effectiveRefreshIntervalMs\(\)/);
+  assert.match(app, /document\.hasFocus/);
+  assert.match(app, /setTimeout\(runMonitorTick, delayMs\)/);
+  assert.match(app, /function dashboardDataSignature\(dashboard\)/);
+  assert.match(app, /renderDashboardStatusOnly\(\)/);
+  assert.match(app, /本地扫描耗时/);
+  assert.match(app, /服务内存占用/);
+  assert.match(app, /topbarLoadLabel/);
+  assert.match(app, /topbarLoadTooltip/);
+  assert.match(html, /id="monitor-status-tooltip"/);
+  assert.match(app, /复用/);
+  assert.match(app, /document\.visibilityState === 'hidden'/);
+  assert.match(app, /document\.addEventListener\('visibilitychange', refreshWhenVisible\)/);
+  assert.match(app, /loadDashboard\(\{ silent: true \}\)/);
+  assert.match(app, /\/api\/dashboard\?force=1/);
 });
 
 test('distinguishes sub-agent rows from host agent rows in the thread list', async () => {
@@ -315,7 +360,7 @@ test('opens thread deep links without waiting for the local server round trip', 
 test('marks notifications done optimistically without a full notification refresh', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const doneStart = app.indexOf('async function markNotificationDone');
-  const doneEnd = app.indexOf('async function snoozeNotification', doneStart);
+  const doneEnd = app.indexOf('function runMonitorTick', doneStart);
   const updateStart = app.indexOf('async function updateNotification');
   const updateEnd = app.indexOf('async function markNotificationDone', updateStart);
   const loadStart = app.indexOf('async function loadDashboard');
@@ -344,7 +389,7 @@ test('offers privacy-limited thread summary copy from the detail panel', async (
   assert.match(app, /function buildThreadSummary\(thread\)/);
   assert.match(app, /function copyThreadSummary\(threadId\)/);
   assert.match(app, /data-copy-summary-id/);
-  assert.match(app, /只含本地元数据和截断信号，不含完整线程正文/);
+  assert.match(app, /只含本地元数据和截断信号，不含完整内容/);
   assert.match(app, /用户输入信号/);
   assert.match(app, /Agent 输出信号/);
 });

@@ -12,6 +12,7 @@
 
 ## 最近更新
 
+- 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。
 - 支持安装为 Chrome / Edge PWA 独立窗口，并能从浏览器页或 macOS 菜单栏辅助工具优先切回已安装应用。
 - quota 总览支持按 GPT、Claude 等模型家族分组，Claude Desktop / Cowork 可从本地 Claude usage cache 读取聚合限额信号。
 - Claude Desktop Code 支持 `claude://resume` deep link 恢复会话，Claude Cowork 未完成任务会作为运行中信号展示。

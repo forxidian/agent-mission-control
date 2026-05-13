@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Agent Mission Control",
   "short_name": "Agent 控制台",
-  "description": "本地多 Agent 任务控制台，用来查看线程、token、quota 和待处理事项。",
+  "description": "本地多 Agent 任务控制台，用来查看任务、token、quota 和待处理事项。",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

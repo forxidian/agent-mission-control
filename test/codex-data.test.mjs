@@ -110,6 +110,111 @@ test('sums today token usage from token-count events without duplicate limit row
   assert.equal(signals.modelContextWindow, 258400);
 });
 
+test('keeps previous valid Codex quota when a newer rate-limit payload is incomplete', () => {
+  const jsonl = [
+    JSON.stringify({
+      timestamp: '2026-04-29T02:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { total_tokens: 1500 },
+          last_token_usage: { total_tokens: 500 },
+        },
+        rate_limits: {
+          limit_id: 'codex',
+          primary: { used_percent: 35, window_minutes: 300, resets_at: 1777460000 },
+          secondary: { used_percent: 12, window_minutes: 10080, resets_at: 1778000000 },
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-04-29T02:05:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { total_tokens: 1600 },
+          last_token_usage: { total_tokens: 100 },
+        },
+        rate_limits: {
+          limit_id: 'codex',
+          primary: { window_minutes: 300, resets_at: 1777460000 },
+          secondary: { window_minutes: 10080, resets_at: 1778000000 },
+        },
+      },
+    }),
+  ].join('\n');
+
+  const signals = parseRolloutSignals(jsonl);
+
+  assert.equal(signals.rateLimits.primary.used_percent, 35);
+  assert.equal(signals.rateLimits.secondary.used_percent, 12);
+  assert.equal(signals.latestRateLimitAtMs, 1777428000000);
+  assert.equal(signals.latestRateLimitSignalAtMs, 1777428300000);
+  assert.equal(signals.rateLimitStale, true);
+  assert.equal(signals.rateLimitStaleAtMs, 1777428300000);
+});
+
+test('expands rollout tail to recover previous valid quota after an incomplete latest signal', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-rollout-quota-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const rolloutPath = path.join(dir, 'rollout.jsonl');
+  const jsonl = [
+    JSON.stringify({
+      timestamp: '2026-04-29T02:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { total_tokens: 1500 },
+          last_token_usage: { total_tokens: 500 },
+        },
+        rate_limits: {
+          limit_id: 'codex',
+          primary: { used_percent: 32, window_minutes: 300, resets_at: 1777460000 },
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-04-29T02:03:00.000Z',
+      type: 'response_item',
+      payload: { type: 'reasoning', encrypted_content: 'x'.repeat(2048) },
+    }),
+    JSON.stringify({
+      timestamp: '2026-04-29T02:05:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { total_tokens: 1600 },
+          last_token_usage: { total_tokens: 100 },
+        },
+        rate_limits: {
+          limit_id: 'codex',
+          primary: { window_minutes: 300, resets_at: 1777460000 },
+        },
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-04-29T02:06:00.000Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: 'Done.', phase: 'final_answer' },
+    }),
+  ].join('\n');
+
+  await fs.writeFile(rolloutPath, jsonl);
+
+  const signals = await readRolloutSignals(rolloutPath, {
+    initialBytes: 512,
+    maxBytes: 8192,
+  });
+
+  assert.equal(signals.rateLimits.primary.used_percent, 32);
+  assert.equal(signals.rateLimitStale, true);
+});
+
 test('expands the rollout tail until it covers today token events', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-rollout-today-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

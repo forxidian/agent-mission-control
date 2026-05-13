@@ -38,7 +38,7 @@ test('normalizes sqlite thread rows into dashboard thread objects', () => {
   assert.equal(thread.updatedAtMs, 1777423600000);
   assert.equal(thread.appDeepLink, `codex://threads/${id}`);
   assert.equal(thread.canOpen, true);
-  assert.equal(thread.openLabel, '打开线程');
+  assert.equal(thread.openLabel, '打开');
   assert.equal(thread.resumeCommand, `codex resume ${id}`);
 });
 
@@ -351,6 +351,39 @@ test('counts explicit provider running signals as host threads', () => {
   assert.equal(dashboard.summary.runningHostThreads, 1);
 });
 
+test('does not use provider-level quota refresh as Claude turn activity', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'claude-stale-cache',
+      title: 'Claude stale loop with fresh quota',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'claude-desktop-cowork',
+      providerLabel: 'Claude Cowork',
+      model: 'claude-opus-4-6',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 17 * 24 * 60 * 60 * 1000,
+      agentRunning: true,
+      agentStartedAtMs: now - 17 * 24 * 60 * 60 * 1000,
+      agentActivityAtMs: now - 17 * 24 * 60 * 60 * 1000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimitActivityAtMs: null,
+      rateLimits: {
+        primary: { used_percent: 40, window_minutes: 300, resets_at: 1777430000 },
+      },
+    },
+  ], now);
+
+  const stale = dashboard.threads.find((thread) => thread.id === 'claude-stale-cache');
+  assert.equal(stale.status, 'idle');
+  assert.equal(stale.currentTurnStartedAtMs, null);
+  assert.equal(dashboard.summary.runningThreads, 0);
+  assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, 'claude-stale-cache');
+  assert.equal(dashboard.summary.quota.groups[0].realtime.availablePercent, 60);
+});
+
 test('builds current quota and daily token summary from latest rate-limit signal', () => {
   const now = 1777427200000;
   const dashboard = buildDashboard([
@@ -414,6 +447,55 @@ test('builds current quota and daily token summary from latest rate-limit signal
   assert.equal(dashboard.summary.quota.groups[0].key, 'gpt');
   assert.equal(dashboard.summary.quota.groups[0].label, 'GPT');
   assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, '1');
+});
+
+test('ignores incomplete quota percent signals instead of treating them as fully available', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'gpt-incomplete',
+      title: 'Incomplete quota',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.2',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 30_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { window_minutes: 300, resets_at: 1777430000 },
+        secondary: { window_minutes: 10080, resets_at: 1778000000 },
+      },
+    },
+    {
+      id: 'gpt-previous',
+      title: 'Previous valid quota',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.1',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 90_000,
+      rateLimitUpdatedAtMs: now - 60_000,
+      rateLimitStale: true,
+      rateLimitStaleAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 38, window_minutes: 300, resets_at: 1777430000 },
+        secondary: { used_percent: 49, window_minutes: 10080, resets_at: 1778000000 },
+      },
+    },
+  ], now);
+
+  assert.equal(dashboard.summary.quota.sourceThreadId, 'gpt-previous');
+  assert.equal(dashboard.summary.quota.realtime.availablePercent, 62);
+  assert.equal(dashboard.summary.quota.weekly.availablePercent, 51);
+  assert.equal(dashboard.summary.quota.stale, true);
+  assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, 'gpt-previous');
+  assert.equal(dashboard.summary.quota.groups[0].stale, true);
 });
 
 test('groups quota by LLM family and keeps the freshest signal per family', () => {

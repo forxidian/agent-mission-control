@@ -400,7 +400,7 @@ export function normalizeOpenCodeSession(session, nowMs = Date.now()) {
     session.description,
     session.firstMessage,
     session.prompt,
-    'OpenCode 会话',
+    'OpenCode 任务',
   ));
   const createdAtMs = timestampToMs(firstPresent(
     session.time?.created,
@@ -441,7 +441,7 @@ export function normalizeOpenCodeSession(session, nowMs = Date.now()) {
     gitOriginUrl: '',
     appDeepLink: '',
     canOpen: Boolean(externalId),
-    openLabel: '打开会话',
+    openLabel: '打开',
     resumeCommand: externalId ? openCommandForSession({ externalId, cwd }) : '',
   };
 
@@ -468,7 +468,7 @@ export function normalizeOpenCodeDesktopSession(session, nowMs = Date.now()) {
     externalId,
     provider: OPEN_CODE_PROVIDER.id,
     providerLabel: OPEN_CODE_PROVIDER.label,
-    title: session.title || (cwd ? path.basename(cwd) : 'OpenCode 会话'),
+    title: session.title || (cwd ? path.basename(cwd) : 'OpenCode 任务'),
     cwd,
     projectName: cwd ? path.basename(cwd) : 'OpenCode',
     source: 'opencode-desktop',
@@ -492,7 +492,7 @@ export function normalizeOpenCodeDesktopSession(session, nowMs = Date.now()) {
     gitOriginUrl: '',
     appDeepLink,
     canOpen: Boolean(appDeepLink),
-    openLabel: '打开会话',
+    openLabel: '打开',
     resumeCommand: appDeepLink ? desktopOpenCommand(cwd) : '',
     lastAgentMessage: awaitingPermission
       ? `OpenCode 请求权限：${pendingToolText || '工具调用'}`
@@ -554,8 +554,8 @@ export async function loadOpenCodeDesktopThreads({
       desktopInstalled: true,
       status: 'desktop',
       message: threads.length
-        ? `已检测到 OpenCode 桌面端，读取 ${threads.length} 个最近会话${pendingPermissionCount ? `，${pendingPermissionCount} 个等待授权` : ''}`
-        : '已检测到 OpenCode 桌面端，暂无最近会话',
+        ? `已检测到 OpenCode 桌面端，读取 ${threads.length} 个最近任务${pendingPermissionCount ? `，${pendingPermissionCount} 个等待授权` : ''}`
+        : '已检测到 OpenCode 桌面端，暂无最近任务',
       threadCount: threads.length,
     },
     threads,
@@ -585,7 +585,7 @@ export async function loadOpenCodeThreads({
         cliInstalled: true,
         desktopInstalled: false,
         status: 'ready',
-        message: threads.length ? `已读取 ${threads.length} 个 OpenCode 会话` : '已接入，暂无会话',
+        message: threads.length ? `已读取 ${threads.length} 个 OpenCode 任务` : '已接入，暂无任务',
         threadCount: threads.length,
       },
       threads,
@@ -630,7 +630,7 @@ export async function openOpenCodeSession(thread, {
 } = {}) {
   const resumeCommand = thread.resumeCommand || openCommandForSession(thread);
   if (!resumeCommand) {
-    throw new Error('OpenCode 会话缺少 session id');
+    throw new Error('OpenCode 缺少 session id');
   }
 
   if (thread.appDeepLink) {

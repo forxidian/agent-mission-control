@@ -19,13 +19,21 @@ function unixValueToMs(value) {
 }
 
 function clampPercent(value) {
-  return Math.min(Math.max(coerceNumber(value), 0), 100);
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(Math.max(number, 0), 100);
 }
 
 function quotaWindow(window) {
   if (!window || typeof window !== 'object') return null;
 
-  const usedPercent = clampPercent(window.used_percent);
+  const usedPercent = clampPercent(
+    window.used_percent
+    ?? window.usedPercent
+    ?? window.used_percentage,
+  );
+  if (usedPercent === null) return null;
+
   return {
     usedPercent,
     availablePercent: Math.max(0, 100 - usedPercent),
@@ -86,16 +94,21 @@ function quotaFamilyRank(group) {
 function quotaGroup(thread) {
   const family = quotaFamily(thread);
   const observedAtMs = coerceNumber(thread.rateLimitUpdatedAtMs || thread.updatedAtMs) || null;
+  const realtime = quotaWindow(thread.rateLimits?.primary);
+  const weekly = quotaWindow(thread.rateLimits?.secondary);
+  if (!realtime && !weekly) return null;
 
   return {
     ...family,
-    realtime: quotaWindow(thread.rateLimits.primary),
-    weekly: quotaWindow(thread.rateLimits.secondary),
+    realtime,
+    weekly,
     observedAtMs,
     sourceThreadId: thread.id || '',
     model: compactModelLabel(thread.model),
     provider: thread.provider || '',
     providerLabel: thread.providerLabel || '',
+    stale: Boolean(thread.rateLimitStale),
+    staleAtMs: coerceNumber(thread.rateLimitStaleAtMs) || null,
   };
 }
 
@@ -124,6 +137,7 @@ function quotaGroups(threads) {
 
   for (const thread of quotaThreads) {
     const group = quotaGroup(thread);
+    if (!group) continue;
     if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, group);
   }
 
@@ -143,11 +157,13 @@ function quotaGroups(threads) {
 }
 
 function quotaSummary(threads) {
+  const groups = quotaGroups(threads);
   const latest = threads
-    .filter((thread) => thread.rateLimits)
+    .map((thread) => ({ thread, group: quotaGroup(thread) }))
+    .filter(({ group }) => group)
     .sort((a, b) => (
-      coerceNumber(b.rateLimitUpdatedAtMs || b.updatedAtMs)
-      - coerceNumber(a.rateLimitUpdatedAtMs || a.updatedAtMs)
+      coerceNumber(b.thread.rateLimitUpdatedAtMs || b.thread.updatedAtMs)
+      - coerceNumber(a.thread.rateLimitUpdatedAtMs || a.thread.updatedAtMs)
     ))[0];
 
   if (!latest) {
@@ -156,16 +172,18 @@ function quotaSummary(threads) {
       weekly: null,
       observedAtMs: null,
       sourceThreadId: '',
-      groups: [],
+      groups,
     };
   }
 
   return {
-    realtime: quotaWindow(latest.rateLimits.primary),
-    weekly: quotaWindow(latest.rateLimits.secondary),
-    observedAtMs: coerceNumber(latest.rateLimitUpdatedAtMs || latest.updatedAtMs) || null,
-    sourceThreadId: latest.id || '',
-    groups: quotaGroups(threads),
+    realtime: latest.group.realtime,
+    weekly: latest.group.weekly,
+    observedAtMs: latest.group.observedAtMs,
+    sourceThreadId: latest.thread.id || '',
+    stale: latest.group.stale,
+    staleAtMs: latest.group.staleAtMs,
+    groups,
   };
 }
 
@@ -188,12 +206,15 @@ function currentTurnStartedAtMs(thread) {
 function currentTurnActivityAtMs(thread) {
   const startedAtMs = currentTurnStartedAtMs(thread);
   if (!startedAtMs) return 0;
+  const rateLimitActivityAtMs = Object.prototype.hasOwnProperty.call(thread, 'rateLimitActivityAtMs')
+    ? coerceNumber(thread.rateLimitActivityAtMs)
+    : coerceNumber(thread.rateLimitUpdatedAtMs);
 
   return Math.max(
     startedAtMs,
     coerceNumber(thread.updatedAtMs),
     coerceNumber(thread.agentActivityAtMs),
-    coerceNumber(thread.rateLimitUpdatedAtMs),
+    rateLimitActivityAtMs,
   );
 }
 
@@ -244,7 +265,7 @@ export function normalizeThread(row, nowMs = Date.now()) {
     externalId: id,
     provider: isCodexCli ? 'codex-cli' : 'codex',
     providerLabel: isCodexCli ? 'Codex CLI' : 'Codex',
-    title: row.thread_name || row.title || '未命名线程',
+    title: row.thread_name || row.title || '未命名任务',
     cwd,
     projectName,
     source,
@@ -261,7 +282,7 @@ export function normalizeThread(row, nowMs = Date.now()) {
     gitOriginUrl: row.git_origin_url || '',
     appDeepLink: UUID_RE.test(id) ? `codex://threads/${id}` : '',
     canOpen: UUID_RE.test(id),
-    openLabel: isCodexCli ? '打开会话' : '打开线程',
+    openLabel: '打开',
     resumeCommand,
     isSubagent: subagent.isSubagent,
     parentThreadId: subagent.parentThreadId,

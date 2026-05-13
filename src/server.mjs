@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_PROVIDER_IDS, openClaudeThread } from './claude-data.mjs';
+import { CLAUDE_PROVIDER_IDS, getClaudeCacheStats, openClaudeThread } from './claude-data.mjs';
+import { getCodexCacheStats } from './codex-data.mjs';
 import { loadDashboard as loadMissionControlDashboard } from './dashboard.mjs';
 import { NotificationCenter } from './notifications.mjs';
 import { openOpenCodeSession } from './opencode-data.mjs';
@@ -31,6 +32,8 @@ const PWA_APP_DIRS = [
   path.join(os.homedir(), 'Applications', 'Edge Apps.localized'),
   path.join(os.homedir(), 'Applications', 'Edge Apps'),
 ];
+const DEFAULT_DASHBOARD_CACHE_TTL_MS = 10_000;
+const DEFAULT_NOTIFICATION_CACHE_TTL_MS = 30_000;
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -44,6 +47,21 @@ const MIME_TYPES = new Map([
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : fallback;
+}
+
+function durationSince(startedAtMs) {
+  return Math.max(0, Date.now() - startedAtMs);
+}
+
+function hitRatePercent(hits, misses) {
+  const total = Number(hits || 0) + Number(misses || 0);
+  if (!total) return null;
+  return Math.round((Number(hits || 0) / total) * 100);
 }
 
 async function readJsonBody(request) {
@@ -177,7 +195,7 @@ export async function openThreadInCodexCli(thread, {
 } = {}) {
   const resumeCommand = thread.resumeCommand || `codex resume ${thread.externalId || thread.id}`;
   if (!resumeCommand) {
-    throw new Error('Codex CLI 会话缺少 resume 命令');
+    throw new Error('Codex CLI 缺少 resume 命令');
   }
 
   if (platform === 'darwin') {
@@ -256,25 +274,178 @@ export function createServer({
   notificationCenter = null,
   monitorNotifications = false,
   notificationScanIntervalMs = 20_000,
+  dashboardCacheTtlMs = positiveInteger(process.env.DASHBOARD_CACHE_TTL_MS, DEFAULT_DASHBOARD_CACHE_TTL_MS),
+  notificationCacheTtlMs = positiveInteger(process.env.NOTIFICATION_CACHE_TTL_MS, DEFAULT_NOTIFICATION_CACHE_TTL_MS),
+  now = Date.now,
   openThread = openThreadInProvider,
   openInstalledApp = openInstalledPwaApp,
   minimizeInstalledApp = minimizeInstalledPwaApp,
   getInstalledAppStatus = getInstalledPwaAppStatus,
   publicDir = DEFAULT_PUBLIC_DIR,
 } = {}) {
+  let dashboardLoadPromise = null;
+  let dashboardCache = null;
+  let notificationCache = null;
+  const serverMetrics = {
+    dashboardCacheHits: 0,
+    dashboardCacheMisses: 0,
+    dashboardCoalescedLoads: 0,
+    dashboardLoadCount: 0,
+    dashboardLoadErrors: 0,
+    dashboardLastLoadMs: null,
+    dashboardLastLoadedAtMs: null,
+    notificationCacheHits: 0,
+    notificationCacheMisses: 0,
+    notificationRefreshCount: 0,
+    notificationRefreshErrors: 0,
+    notificationLastRefreshMs: null,
+    notificationLastRefreshedAtMs: null,
+  };
+
+  const performanceSnapshot = () => {
+    const memory = process.memoryUsage();
+    const dashboardCacheAgeMs = dashboardCache?.cachedAtMs ? Math.max(0, now() - dashboardCache.cachedAtMs) : null;
+    const notificationCacheAgeMs = notificationCache?.cachedAtMs
+      ? Math.max(0, now() - notificationCache.cachedAtMs)
+      : null;
+
+    return {
+      generatedAtMs: now(),
+      process: {
+        pid: process.pid,
+        uptimeSeconds: Math.round(process.uptime()),
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+      },
+      dashboard: {
+        cacheTtlMs: dashboardCacheTtlMs,
+        cacheAgeMs: dashboardCacheAgeMs,
+        cached: dashboardCacheAgeMs !== null && dashboardCacheAgeMs < dashboardCacheTtlMs,
+        hits: serverMetrics.dashboardCacheHits,
+        misses: serverMetrics.dashboardCacheMisses,
+        hitRatePercent: hitRatePercent(
+          serverMetrics.dashboardCacheHits,
+          serverMetrics.dashboardCacheMisses,
+        ),
+        coalescedLoads: serverMetrics.dashboardCoalescedLoads,
+        loadCount: serverMetrics.dashboardLoadCount,
+        errorCount: serverMetrics.dashboardLoadErrors,
+        lastLoadMs: serverMetrics.dashboardLastLoadMs,
+        lastLoadedAtMs: serverMetrics.dashboardLastLoadedAtMs,
+      },
+      notifications: {
+        cacheTtlMs: notificationCacheTtlMs,
+        cacheAgeMs: notificationCacheAgeMs,
+        cached: notificationCacheAgeMs !== null && notificationCacheAgeMs < notificationCacheTtlMs,
+        hits: serverMetrics.notificationCacheHits,
+        misses: serverMetrics.notificationCacheMisses,
+        hitRatePercent: hitRatePercent(
+          serverMetrics.notificationCacheHits,
+          serverMetrics.notificationCacheMisses,
+        ),
+        refreshCount: serverMetrics.notificationRefreshCount,
+        errorCount: serverMetrics.notificationRefreshErrors,
+        lastRefreshMs: serverMetrics.notificationLastRefreshMs,
+        lastRefreshedAtMs: serverMetrics.notificationLastRefreshedAtMs,
+      },
+      caches: {
+        codex: getCodexCacheStats(),
+        claude: getClaudeCacheStats(),
+      },
+    };
+  };
+
+  const loadSharedDashboard = ({ force = false } = {}) => {
+    const cachedAtMs = Number(dashboardCache?.cachedAtMs || 0);
+    const cacheAgeMs = now() - cachedAtMs;
+    if (!force && dashboardCache?.dashboard && cacheAgeMs >= 0 && cacheAgeMs < dashboardCacheTtlMs) {
+      serverMetrics.dashboardCacheHits += 1;
+      return Promise.resolve(dashboardCache.dashboard);
+    }
+
+    if (!dashboardLoadPromise) {
+      serverMetrics.dashboardCacheMisses += 1;
+      const startedAtMs = Date.now();
+      dashboardLoadPromise = Promise.resolve()
+        .then(() => loadDashboard())
+        .then((dashboard) => {
+          serverMetrics.dashboardLoadCount += 1;
+          serverMetrics.dashboardLastLoadMs = durationSince(startedAtMs);
+          serverMetrics.dashboardLastLoadedAtMs = now();
+          dashboardCache = {
+            dashboard,
+            cachedAtMs: now(),
+          };
+          return dashboard;
+        })
+        .catch((error) => {
+          serverMetrics.dashboardLoadErrors += 1;
+          serverMetrics.dashboardLastLoadMs = durationSince(startedAtMs);
+          throw error;
+        })
+        .finally(() => {
+          dashboardLoadPromise = null;
+        });
+    } else {
+      serverMetrics.dashboardCoalescedLoads += 1;
+    }
+    return dashboardLoadPromise;
+  };
+
+  const dashboardForRequest = async (options = {}) => {
+    const dashboard = await loadSharedDashboard(options);
+    return {
+      ...dashboard,
+      summary: { ...(dashboard.summary || {}) },
+    };
+  };
+
+  const notificationsForDashboard = async (dashboard, { force = false } = {}) => {
+    if (!notificationCenter) return null;
+
+    const cachedAtMs = Number(notificationCache?.cachedAtMs || 0);
+    const cacheAgeMs = now() - cachedAtMs;
+    if (!force && notificationCache?.notifications && cacheAgeMs >= 0 && cacheAgeMs < notificationCacheTtlMs) {
+      serverMetrics.notificationCacheHits += 1;
+      return notificationCache.notifications;
+    }
+
+    serverMetrics.notificationCacheMisses += 1;
+    const startedAtMs = Date.now();
+    try {
+      const notifications = await notificationCenter.refresh(dashboard);
+      serverMetrics.notificationRefreshCount += 1;
+      serverMetrics.notificationLastRefreshMs = durationSince(startedAtMs);
+      serverMetrics.notificationLastRefreshedAtMs = now();
+      notificationCache = {
+        notifications,
+        cachedAtMs: now(),
+      };
+      return notifications;
+    } catch (error) {
+      serverMetrics.notificationRefreshErrors += 1;
+      serverMetrics.notificationLastRefreshMs = durationSince(startedAtMs);
+      throw error;
+    }
+  };
+
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
 
     if (url.pathname === '/api/dashboard') {
       try {
-        const dashboard = await loadDashboard();
+        const force = url.searchParams.get('force') === '1';
+        const dashboard = await dashboardForRequest({ force });
         if (notificationCenter) {
-          dashboard.notifications = await notificationCenter.refresh(dashboard);
+          dashboard.notifications = await notificationsForDashboard(dashboard, { force });
           dashboard.summary = {
             ...dashboard.summary,
             inboxCount: dashboard.notifications.summary.activeCount,
           };
         }
+        dashboard.performance = performanceSnapshot();
         sendJson(response, 200, dashboard);
       } catch (error) {
         sendJson(response, 500, {
@@ -298,8 +469,9 @@ export function createServer({
       }
 
       try {
-        const dashboard = await loadDashboard();
-        const notifications = await notificationCenter.refresh(dashboard);
+        const force = url.searchParams.get('force') === '1';
+        const dashboard = await dashboardForRequest({ force });
+        const notifications = await notificationsForDashboard(dashboard, { force });
         sendJson(response, 200, notifications);
       } catch (error) {
         sendError(response, error, 'Failed to load notifications');
@@ -315,9 +487,9 @@ export function createServer({
       }
 
       try {
-        const dashboard = await loadDashboard();
+        const dashboard = await dashboardForRequest();
         const notifications = notificationCenter
-          ? await notificationCenter.refresh(dashboard)
+          ? await notificationsForDashboard(dashboard)
           : dashboard.notifications || {
             summary: { activeCount: dashboard.summary?.inboxCount ?? dashboard.inbox?.length ?? 0 },
             items: dashboard.inbox || [],
@@ -327,6 +499,17 @@ export function createServer({
       } catch (error) {
         sendError(response, error, 'Failed to load pending summary');
       }
+      return;
+    }
+
+    if (url.pathname === '/api/performance') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      sendJson(response, 200, performanceSnapshot());
       return;
     }
 
@@ -347,6 +530,7 @@ export function createServer({
         const body = await readJsonBody(request);
         const id = decodeURIComponent(notificationMatch[1]);
         const updated = await notificationCenter.updateNotification(id, body);
+        notificationCache = null;
         sendJson(response, 200, updated);
       } catch (error) {
         sendError(response, error, 'Failed to update notification');
@@ -429,7 +613,7 @@ export function createServer({
       try {
         const body = await readJsonBody(request);
         const threadId = decodeURIComponent(openThreadMatch[1]);
-        const dashboard = await loadDashboard();
+        const dashboard = await dashboardForRequest();
         const thread = dashboard.threads?.find((candidate) => candidate.id === threadId);
 
         if (!thread) {
@@ -441,6 +625,7 @@ export function createServer({
         const notification = body.markNotificationDone && body.notificationId && notificationCenter
           ? await notificationCenter.updateNotification(String(body.notificationId), { status: 'done' })
           : null;
+        if (notification) notificationCache = null;
         sendJson(response, 200, {
           ...result,
           threadId: thread.id,
@@ -471,8 +656,8 @@ export function createServer({
     let firstScan = true;
     const scan = async () => {
       try {
-        const dashboard = await loadDashboard();
-        await notificationCenter.refresh(dashboard);
+        const dashboard = await dashboardForRequest();
+        await notificationsForDashboard(dashboard);
         firstScan = false;
       } catch (error) {
         console.warn('Notification scan failed:', error instanceof Error ? error.message : String(error));
