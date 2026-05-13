@@ -784,6 +784,128 @@ test('keeps review history visually separated from the selected detail pane', as
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*\.review-results-layout,[\s\S]*grid-template-columns:\s*1fr;/);
 });
 
+test('renders selected review history items with metadata and highlight state', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const jobsStart = app.indexOf('function renderReviewJobs');
+  const jobsEnd = app.indexOf('\nfunction renderReviewPanel', jobsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(jobsStart, -1);
+  assert.notEqual(jobsEnd, -1);
+
+  const context = {
+    html: '',
+    formatTimestamp(value) {
+      return value ? '2026-05-13 16:00' : '-';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(jobsStart, jobsEnd)}
+    html = renderReviewJobs([
+      {
+        id: 'review-1',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        completedAtMs: 1778660000000,
+        resultPreview: '完整性检查通过',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Claude Code CLI' },
+      },
+      {
+        id: 'review-2',
+        status: 'running',
+        templateId: 'response-quality-review',
+        startedAtMs: 1778660100000,
+        source: { threadId: 'thread-1' },
+        target: { label: 'Codex CLI' },
+      },
+    ], 'review-1');
+  `, context);
+
+  assert.match(context.html, /review-job is-selected/);
+  assert.match(context.html, /technical-review · 2026-05-13 16:00/);
+  assert.match(context.html, /Claude Code CLI/);
+  assert.match(context.html, /完整性检查通过/);
+});
+
+test('renders review detail empty state beside the history list when no job is selected', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+
+  const context = {
+    html: '',
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: { items: [{ provider: 'codex-cli', available: true }] },
+        isLoading: false,
+        selectedJobIdByThread: new Map(),
+      },
+    },
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return { preview: '输入预览' };
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [{ id: 'review-1', status: 'succeeded' }];
+    },
+    selectedReviewTargetProvider() {
+      return 'codex-cli';
+    },
+    reviewTargetOptions() {
+      return '<option>Codex CLI</option>';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option>技术方案审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '<div class="review-job-list">历史记录</div>';
+    },
+    renderReviewJobDetail() {
+      throw new Error('detail should not render without a selected job');
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(panelStart, panelEnd)}
+    html = renderReviewPanel({ id: 'thread-1' });
+  `, context);
+
+  assert.match(context.html, /review-results-layout/);
+  assert.match(context.html, /review-records-column/);
+  assert.match(context.html, /review-detail-column/);
+  assert.match(context.html, /历史记录/);
+  assert.match(context.html, /选择左侧记录查看详情/);
+});
+
 test('keeps auto refresh from rerendering while review form is focused', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const activeStart = app.indexOf('function hasActiveReviewInteraction');
