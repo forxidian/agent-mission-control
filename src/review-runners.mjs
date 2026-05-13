@@ -15,18 +15,30 @@ const TARGETS = [
     label: 'Codex CLI',
     runner: 'codex-exec',
     command: 'codex',
+    capabilities: {
+      repoAccess: 'readonly',
+      writeProtection: 'sandbox-readonly',
+    },
   },
   {
     provider: 'claude-code-cli',
     label: 'Claude Code CLI',
     runner: 'claude-print',
     command: 'claude',
+    capabilities: {
+      repoAccess: 'readonly',
+      writeProtection: 'write-tools-denied',
+    },
   },
   {
     provider: 'opencode-cli',
     label: 'OpenCode CLI',
     runner: 'opencode-run',
     command: 'opencode',
+    capabilities: {
+      repoAccess: 'prompt-guarded',
+      writeProtection: 'prompt-only',
+    },
   },
 ];
 
@@ -322,6 +334,7 @@ export async function listReviewTargets({
       label: target.label,
       runner: target.runner,
       available,
+      capabilities: target.capabilities,
       message: available
         ? `已检测到 ${target.command}${detail ? ` (${detail})` : ''}`
         : detail || `未检测到 ${target.command} CLI`,

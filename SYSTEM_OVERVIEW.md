@@ -129,6 +129,7 @@ Claude：
 - `~/.agent-mission-control/reviews.jsonl`
   - Agent 评审 job 的快照、评审结果、错误信息和 Fix Loop 状态。
   - `fixLoop` 记录轻量闭环状态：尚未处理、已复制 Prompt、已回源线程、已处理、不采纳；重启后不丢失。
+  - 前端评审面板按目标 Agent 能力展示 repo 读取/写入保护标识，并可按 Fix Loop 状态筛选历史评审。
 
 ## 核心概念
 

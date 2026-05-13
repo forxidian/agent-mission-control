@@ -19,6 +19,7 @@ const state = {
     contentByThread: new Map(),
     contentErrorsByThread: new Map(),
     jobsByThread: new Map(),
+    fixLoopFilterByThread: new Map(),
     inputModeByThread: new Map(),
     selectedJobIdByThread: new Map(),
     targetProviderByThread: new Map(),
@@ -1376,6 +1377,37 @@ function fixLoopStatusLabel(status) {
   return '尚未处理';
 }
 
+function fixLoopFilterLabel(filter) {
+  if (filter === 'pending') return '待修复';
+  if (filter === 'applied') return '已处理';
+  if (filter === 'dismissed') return '不采纳';
+  return '全部';
+}
+
+function selectedReviewFixLoopFilter(threadId) {
+  const selected = state.review.fixLoopFilterByThread.get(threadId) || 'all';
+  return ['all', 'pending', 'applied', 'dismissed'].includes(selected) ? selected : 'all';
+}
+
+function reviewFixLoopFilterTabs(threadId, selected = 'all') {
+  return ['all', 'pending', 'applied', 'dismissed'].map((filter) => (
+    `<button class="review-filter-tab${filter === selected ? ' is-selected' : ''}" type="button" data-review-fix-filter-thread-id="${escapeHtml(threadId)}" data-review-fix-filter="${escapeHtml(filter)}">${escapeHtml(fixLoopFilterLabel(filter))}</button>`
+  )).join('');
+}
+
+function isPendingFixLoopJob(job) {
+  if (job.status !== 'succeeded') return false;
+  const status = job.fixLoop?.status || 'not-started';
+  return status !== 'applied' && status !== 'dismissed';
+}
+
+function filterReviewJobsByFixLoop(jobs, filter = 'all') {
+  if (filter === 'pending') return jobs.filter(isPendingFixLoopJob);
+  if (filter === 'applied') return jobs.filter((job) => job.fixLoop?.status === 'applied');
+  if (filter === 'dismissed') return jobs.filter((job) => job.fixLoop?.status === 'dismissed');
+  return jobs;
+}
+
 function reviewTemplateOptions(selected = 'technical-review') {
   return REVIEW_TEMPLATES.map(([id, label]) => (
     `<option value="${escapeHtml(id)}"${id === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
@@ -1420,9 +1452,25 @@ function reviewTargetOptions(targets, selectedProvider = '') {
 
   return items.map((target) => `
     <option value="${escapeHtml(target.provider)}"${target.provider === selected ? ' selected' : ''}${target.available ? '' : ' disabled'}>
-      ${escapeHtml(target.label || target.provider)}${target.available ? '' : '（不可用）'}
+      ${escapeHtml(target.label || target.provider)} · ${escapeHtml(reviewTargetCapabilitySummary(target))}${target.available ? '' : '（不可用）'}
     </option>
   `).join('');
+}
+
+function selectedReviewTarget(threadId) {
+  const provider = selectedReviewTargetProvider(threadId);
+  return (state.review.targets?.items || []).find((target) => target.provider === provider) || null;
+}
+
+function reviewTargetCapabilitySummary(target = {}) {
+  const repoAccess = target.capabilities?.repoAccess;
+  const writeProtection = target.capabilities?.writeProtection;
+
+  if (repoAccess === 'readonly' && writeProtection === 'sandbox-readonly') return '可读 repo · 只读沙盒';
+  if (repoAccess === 'readonly' && writeProtection === 'write-tools-denied') return '可读 repo · 禁写工具';
+  if (repoAccess === 'prompt-guarded') return '可读 repo · Prompt 禁写';
+  if (repoAccess === 'text-only') return '仅文本评审';
+  return '能力未知';
 }
 
 function buildReviewDebugSummary(job) {
@@ -1555,18 +1603,21 @@ function renderReviewJobDetail(job) {
   `;
 }
 
-function renderReviewJobs(jobs, selectedJobId = '') {
-  if (!jobs.length) return '<p class="empty-state compact">暂无评审记录。</p>';
+function renderReviewJobs(jobs, selectedJobId = '', fixLoopFilter = 'all') {
+  const visibleJobs = filterReviewJobsByFixLoop(jobs, fixLoopFilter);
+  if (!visibleJobs.length) {
+    return `<p class="empty-state compact">${fixLoopFilter === 'all' ? '暂无评审记录。' : `暂无${fixLoopFilterLabel(fixLoopFilter)}记录。`}</p>`;
+  }
 
   return `
     <div class="review-job-list">
-      ${jobs.map((job) => `
-        <article class="review-job${job.id === selectedJobId ? ' is-selected' : ''}" data-review-status="${escapeHtml(job.status)}">
+      ${visibleJobs.map((job) => `
+        <article class="review-job${job.id === selectedJobId ? ' is-selected' : ''}" data-review-status="${escapeHtml(job.status)}" data-review-fix-status="${escapeHtml(job.fixLoop?.status || 'not-started')}">
           <div class="review-job-heading">
             <strong>${escapeHtml(reviewStatusLabel(job.status))}</strong>
             <span>${escapeHtml(job.target?.label || job.target?.provider || 'Agent')}</span>
           </div>
-          <p class="review-job-meta">${escapeHtml(job.templateId || '-')} · ${escapeHtml(formatTimestamp(job.completedAtMs || job.startedAtMs))}</p>
+          <p class="review-job-meta">${escapeHtml(job.templateId || '-')} · ${escapeHtml(fixLoopStatusLabel(job.fixLoop?.status))} · ${escapeHtml(formatTimestamp(job.completedAtMs || job.startedAtMs))}</p>
           ${job.error ? `<p class="review-error">${escapeHtml(job.error)}</p>` : ''}
           ${job.resultPreview ? `<pre>${escapeHtml(job.resultPreview)}</pre>` : ''}
           ${job.stderr && job.status === 'failed' ? `<p class="detail-note">stderr: ${escapeHtml(job.stderr)}</p>` : ''}
@@ -1592,11 +1643,14 @@ function renderReviewPanel(thread) {
   const jobs = reviewJobsForThread(thread.id);
   const isLoading = state.review.isLoading;
   const selectedTargetProvider = selectedReviewTargetProvider(thread.id);
+  const target = selectedReviewTarget(thread.id);
   const targetOptions = reviewTargetOptions(targets, selectedTargetProvider);
   const targetReady = Boolean(targets?.items?.some((target) => target.available));
   const contentReady = Boolean(content?.preview);
   const selectedJobId = state.review.selectedJobIdByThread.get(thread.id) || '';
-  const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
+  const fixLoopFilter = selectedReviewFixLoopFilter(thread.id);
+  const visibleJobs = filterReviewJobsByFixLoop(jobs, fixLoopFilter);
+  const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) || null;
   const selectedTemplate = selectedReviewTemplate(thread.id);
   const customInstruction = state.review.customInstructionByThread.get(thread.id) || '';
 
@@ -1614,6 +1668,7 @@ function renderReviewPanel(thread) {
         <label>
           <span>目标 Agent</span>
           <select name="targetProvider" data-review-target-provider-id="${escapeHtml(thread.id)}"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
+          <small class="review-target-capability">${escapeHtml(reviewTargetCapabilitySummary(target))}</small>
         </label>
         <label>
           <span>评审模板</span>
@@ -1646,9 +1701,12 @@ function renderReviewPanel(thread) {
           </div>
           <button class="action-button secondary" type="button" data-refresh-review-jobs-id="${escapeHtml(thread.id)}">刷新</button>
         </div>
+        <div class="review-filter-tabs" role="group" aria-label="Fix Loop 状态筛选">
+          ${reviewFixLoopFilterTabs(thread.id, fixLoopFilter)}
+        </div>
         <div class="review-results-layout">
           <aside class="review-records-column" aria-label="评审记录列表">
-            ${renderReviewJobs(jobs, selectedJobId)}
+            ${renderReviewJobs(jobs, selectedJobId, fixLoopFilter)}
           </aside>
           <div class="review-detail-column" aria-live="polite">
             ${selectedJob ? renderReviewJobDetail(selectedJob) : '<p class="empty-state compact">选择左侧记录查看详情。</p>'}
@@ -2275,6 +2333,15 @@ function changeReviewTemplate(threadId, templateId) {
   renderSelectedDetail();
 }
 
+function changeReviewFixLoopFilter(threadId, filter) {
+  if (['pending', 'applied', 'dismissed'].includes(filter)) {
+    state.review.fixLoopFilterByThread.set(threadId, filter);
+  } else {
+    state.review.fixLoopFilterByThread.delete(threadId);
+  }
+  renderSelectedDetail();
+}
+
 function updateCustomReviewInstruction(threadId, value) {
   state.review.customInstructionByThread.set(threadId, value || '');
 }
@@ -2854,6 +2921,16 @@ document.addEventListener('click', (event) => {
     markReviewFixLoopStatus(
       reviewFixStatusTarget.dataset.reviewFixStatusId,
       reviewFixStatusTarget.dataset.reviewFixStatus,
+    );
+    return;
+  }
+
+  const reviewFixFilterTarget = clicked.closest('[data-review-fix-filter-thread-id]');
+  if (reviewFixFilterTarget) {
+    event.preventDefault();
+    changeReviewFixLoopFilter(
+      reviewFixFilterTarget.dataset.reviewFixFilterThreadId,
+      reviewFixFilterTarget.dataset.reviewFixFilter,
     );
     return;
   }

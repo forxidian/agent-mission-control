@@ -102,6 +102,7 @@ Agent 评审：
 - 评审任务会调用本机已安装且可用的目标 CLI，并把生成的评审记录写入 `~/.agent-mission-control/reviews.jsonl`。
 - 评审 runner 默认以只读或禁用写入工具的方式运行，避免目标 Agent 在评审过程中改写项目文件。
 - 评审 Prompt 会要求目标 Agent 非必要不读取文件，并避免读取 `.env`、密钥、cookie、token、私有配置或本地 Agent 状态文件。
+- 评审面板会展示目标 Agent 的 repo 读取/写入保护能力，并支持按 Fix Loop 状态筛选评审记录。
 
 ## 隐私
 

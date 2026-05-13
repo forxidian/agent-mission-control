@@ -119,10 +119,32 @@ test('target discovery reports available and unavailable runners', async () => {
   assert.deepEqual(targets.items.map((target) => ({
     provider: target.provider,
     available: target.available,
+    capabilities: target.capabilities,
   })), [
-    { provider: 'codex-cli', available: true },
-    { provider: 'claude-code-cli', available: false },
-    { provider: 'opencode-cli', available: true },
+    {
+      provider: 'codex-cli',
+      available: true,
+      capabilities: {
+        repoAccess: 'readonly',
+        writeProtection: 'sandbox-readonly',
+      },
+    },
+    {
+      provider: 'claude-code-cli',
+      available: false,
+      capabilities: {
+        repoAccess: 'readonly',
+        writeProtection: 'write-tools-denied',
+      },
+    },
+    {
+      provider: 'opencode-cli',
+      available: true,
+      capabilities: {
+        repoAccess: 'prompt-guarded',
+        writeProtection: 'prompt-only',
+      },
+    },
   ]);
   assert.match(targets.items[0].message, /codex 1\.0\.0/);
   assert.match(targets.items[1].message, /not found/);

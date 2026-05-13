@@ -450,14 +450,16 @@ test('preserves selected review target options across detail rerenders', async (
     ${app.slice(optionsStart, optionsEnd)}
     options = reviewTargetOptions({
       items: [
-        { provider: 'codex-cli', label: 'Codex CLI', available: true },
-        { provider: 'claude-code-cli', label: 'Claude Code CLI', available: true },
-        { provider: 'opencode', label: 'OpenCode CLI', available: true }
+        { provider: 'codex-cli', label: 'Codex CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' } },
+        { provider: 'claude-code-cli', label: 'Claude Code CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'write-tools-denied' } },
+        { provider: 'opencode', label: 'OpenCode CLI', available: true, capabilities: { repoAccess: 'prompt-guarded', writeProtection: 'prompt-only' } }
       ]
     }, 'claude-code-cli');
   `, context);
 
   assert.match(context.options, /value="claude-code-cli" selected/);
+  assert.match(context.options, /Claude Code CLI · 可读 repo · 禁写工具/);
+  assert.match(context.options, /OpenCode CLI · 可读 repo · Prompt 禁写/);
   assert.doesNotMatch(context.options, /value="codex-cli" selected/);
 });
 
@@ -671,11 +673,19 @@ test('renders and submits custom review instructions when custom template is sel
     state: {
       review: {
         openThreadId: 'thread-1',
-        targets: { items: [{ provider: 'codex-cli', available: true }] },
+        targets: {
+          items: [{
+            provider: 'codex-cli',
+            label: 'Codex CLI',
+            available: true,
+            capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' },
+          }],
+        },
         isLoading: false,
         selectedJobIdByThread: new Map(),
         templateByThread: new Map([['thread-1', 'custom-review']]),
         customInstructionByThread: new Map([['thread-1', '只检查串台风险']]),
+        fixLoopFilterByThread: new Map(),
         jobsByThread: new Map(),
       },
     },
@@ -699,11 +709,26 @@ test('renders and submits custom review instructions when custom template is sel
     selectedReviewTargetProvider() {
       return 'codex-cli';
     },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
     selectedReviewTemplate() {
       return 'custom-review';
     },
     reviewTargetOptions() {
-      return '<option>Codex CLI</option>';
+      return '<option>Codex CLI · 可读 repo · 只读沙盒</option>';
+    },
+    selectedReviewTarget() {
+      return context.state.review.targets.items[0];
+    },
+    reviewTargetCapabilitySummary() {
+      return '可读 repo · 只读沙盒';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
     },
     reviewInputModeOptions() {
       return '<option>最近 Agent 输出</option>';
@@ -766,6 +791,7 @@ test('renders and submits custom review instructions when custom template is sel
   }
 
   assert.match(context.html, /自定义审查/);
+  assert.match(context.html, /可读 repo · 只读沙盒/);
   assert.match(context.html, /name="customReviewInstruction"/);
   assert.match(context.html, /只检查串台风险/);
   assert.equal(context.payload.templateId, 'custom-review');
@@ -984,9 +1010,73 @@ test('renders selected review history items with metadata and highlight state', 
   `, context);
 
   assert.match(context.html, /review-job is-selected/);
-  assert.match(context.html, /technical-review · 2026-05-13 16:00/);
+  assert.match(context.html, /technical-review · 尚未处理 · 2026-05-13 16:00/);
   assert.match(context.html, /Claude Code CLI/);
   assert.match(context.html, /完整性检查通过/);
+});
+
+test('filters review history by fix loop status', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const statusStart = app.indexOf('function reviewStatusLabel');
+  const statusEnd = app.indexOf('\nfunction reviewTemplateOptions', statusStart);
+  const jobsStart = app.indexOf('function renderReviewJobs');
+  const jobsEnd = app.indexOf('\nfunction renderReviewPanel', jobsStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.notEqual(jobsStart, -1);
+  assert.notEqual(jobsEnd, -1);
+
+  const context = {
+    html: '',
+    formatTimestamp() {
+      return '2026-05-13 16:00';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(statusStart, statusEnd)}
+    ${app.slice(jobsStart, jobsEnd)}
+    const jobs = [
+      {
+        id: 'review-pending',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '待修复项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Claude Code CLI' },
+        fixLoop: { status: 'source-opened' }
+      },
+      {
+        id: 'review-applied',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '已处理项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'Codex CLI' },
+        fixLoop: { status: 'applied' }
+      },
+      {
+        id: 'review-dismissed',
+        status: 'succeeded',
+        templateId: 'technical-review',
+        resultPreview: '不采纳项',
+        source: { threadId: 'thread-1' },
+        target: { label: 'OpenCode CLI' },
+        fixLoop: { status: 'dismissed' }
+      }
+    ];
+    html = renderReviewJobs(jobs, '', 'pending');
+  `, context);
+
+  assert.match(context.html, /待修复项/);
+  assert.doesNotMatch(context.html, /已处理项/);
+  assert.doesNotMatch(context.html, /不采纳项/);
 });
 
 test('renders review detail empty state beside the history list when no job is selected', async () => {
@@ -1026,6 +1116,15 @@ test('renders review detail empty state beside the history list when no job is s
     selectedReviewTargetProvider() {
       return 'codex-cli';
     },
+    selectedReviewTarget() {
+      return { provider: 'codex-cli', label: 'Codex CLI' };
+    },
+    reviewTargetCapabilitySummary() {
+      return '可读 repo · 只读沙盒';
+    },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
     selectedReviewTemplate() {
       return 'technical-review';
     },
@@ -1043,6 +1142,12 @@ test('renders review detail empty state beside the history list when no job is s
     },
     renderReviewJobs() {
       return '<div class="review-job-list">历史记录</div>';
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
     },
     renderReviewJobDetail() {
       throw new Error('detail should not render without a selected job');

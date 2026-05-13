@@ -1646,6 +1646,14 @@ h3 {
   text-transform: uppercase;
 }
 
+.review-target-capability {
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .review-form select,
 .review-form input,
 .review-form textarea {
@@ -1711,6 +1719,30 @@ h3 {
 
 .review-results {
   padding-top: 2px;
+}
+
+.review-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-filter-tab {
+  min-height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--steel);
+  background: #fffaf0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-filter-tab:hover,
+.review-filter-tab.is-selected {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: #fff5dd;
 }
 
 .review-results-layout {
