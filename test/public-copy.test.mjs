@@ -717,6 +717,7 @@ test('builds and wires copyable review debug summaries', async () => {
 
 test('renders review result details with safe fix loop actions', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
   const escapeStart = app.indexOf('function escapeHtml');
   const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
   const statusStart = app.indexOf('function reviewStatusLabel');
@@ -765,6 +766,74 @@ test('renders review result details with safe fix loop actions', async () => {
   assert.match(context.html, /评审完整结果/);
   assert.match(context.html, /data-copy-review-fix-id="review-1"/);
   assert.match(context.html, /data-open-thread-id="thread-1"/);
+  assert.match(styles, /\.review-job-detail pre\s*\{[\s\S]*max-height:\s*none;/);
+});
+
+test('keeps auto refresh from rerendering while review form is focused', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const activeStart = app.indexOf('function hasActiveReviewInteraction');
+  const loadStart = app.indexOf('async function loadDashboard');
+  const loadEnd = app.indexOf('\nasync function loadNotifications', loadStart);
+
+  assert.notEqual(activeStart, -1);
+  assert.notEqual(loadStart, -1);
+  assert.notEqual(loadEnd, -1);
+
+  const context = {
+    renders: 0,
+    state: {
+      dashboard: null,
+      isLoading: false,
+      refreshError: '',
+      lastRefreshAtMs: null,
+    },
+    elements: {
+      refreshButton: { disabled: false },
+      statusBanner: { dataset: { tone: '' } },
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() {
+          return {
+            generatedAtMs: 1778659200000,
+            notifications: { items: [], summary: { activeCount: 0 } },
+          };
+        },
+      };
+    },
+    setNotifications() {},
+    fallbackNotificationsFromDashboard() {
+      return { items: [], summary: { activeCount: 0 } };
+    },
+    renderMonitorStatus() {},
+    clearError() {},
+    showError(message) {
+      throw new Error(message);
+    },
+    renderDashboard() {
+      globalThis.renders += 1;
+    },
+    hasActiveReviewInteraction() {
+      return true;
+    },
+    Date,
+  };
+
+  globalThis.renders = context.renders;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(activeStart, loadStart)}
+      ${app.slice(loadStart, loadEnd)}
+      loadDashboard({ silent: true });
+    `, context);
+    context.renders = globalThis.renders;
+  } finally {
+    delete globalThis.renders;
+  }
+
+  assert.equal(context.state.dashboard.generatedAtMs, 1778659200000);
+  assert.equal(context.renders, 0);
 });
 
 test('copies a safe fix prompt from a completed review job', async () => {

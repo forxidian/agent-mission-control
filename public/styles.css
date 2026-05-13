@@ -1670,6 +1670,10 @@ h3 {
   background: #fffaf0;
 }
 
+.review-job-detail pre {
+  max-height: none;
+}
+
 .review-results-heading,
 .review-job-heading {
   display: flex;

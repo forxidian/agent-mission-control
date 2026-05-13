@@ -2068,6 +2068,7 @@ async function loadDashboard({ silent = false, force = false } = {}) {
   if (state.isLoading) return;
 
   state.isLoading = true;
+  const deferRender = silent && hasActiveReviewInteraction();
   renderMonitorStatus();
   elements.refreshButton.disabled = true;
 
@@ -2082,11 +2083,13 @@ async function loadDashboard({ silent = false, force = false } = {}) {
     state.lastRefreshAtMs = Date.now();
     state.refreshError = '';
     if (!silent || elements.statusBanner.dataset.tone === 'error') clearError();
-    if (shouldRenderDashboard) {
-      renderDashboard();
-    } else {
-      state.dashboardSignature = nextSignature;
-      renderDashboardStatusOnly();
+    if (!deferRender) {
+      if (shouldRenderDashboard) {
+        renderDashboard();
+      } else {
+        state.dashboardSignature = nextSignature;
+        renderDashboardStatusOnly();
+      }
     }
   } catch (error) {
     state.refreshError = error.message;
@@ -2135,6 +2138,12 @@ async function loadReviewJobs(threadId) {
 
 function renderSelectedDetail() {
   renderDetail(findThread(state.selectedThreadId));
+}
+
+function hasActiveReviewInteraction() {
+  const active = document.activeElement;
+  if (active instanceof Element && active.closest('.review-panel')) return true;
+  return Boolean(state.review.openThreadId && state.review.selectedJobIdByThread.get(state.review.openThreadId));
 }
 
 function syncReviewPolling() {
@@ -2215,7 +2224,7 @@ function closeReviewJobDetail(threadId) {
 async function refreshReviewJobs(threadId, { silent = false } = {}) {
   try {
     await loadReviewJobs(threadId);
-    renderSelectedDetail();
+    if (!silent || !hasActiveReviewInteraction()) renderSelectedDetail();
     syncReviewPolling();
   } catch (error) {
     if (!silent) showError(`无法刷新评审记录：${error.message}`);
