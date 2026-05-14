@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from '../src/server.mjs';
+import { createServer, openThreadInCodexCli } from '../src/server.mjs';
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -182,6 +182,100 @@ test('opens a known Codex thread through the injected opener', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('focuses an existing Codex CLI Terminal tab on macOS', async () => {
+  const calls = [];
+  const result = await openThreadInCodexCli({
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    provider: 'codex-cli',
+    cwd: '/Users/example/project',
+    rolloutPath: '/Users/example/.codex/sessions/rollout-123e4567-e89b-12d3-a456-426614174000.jsonl',
+    status: 'running',
+    resumeCommand: 'codex resume 123e4567-e89b-12d3-a456-426614174000',
+  }, {
+    platform: 'darwin',
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === 'ps') {
+        return {
+          stdout: [
+            '123 1 ttys071 node /Users/example/.local/bin/codex',
+            '124 123 ttys071 /Users/example/.local/lib/node_modules/@openai/codex/vendor/codex/codex',
+          ].join('\n'),
+        };
+      }
+      if (command === 'lsof') {
+        return {
+          stdout: [
+            `p${args[1]}`,
+            'fcwd',
+            'n/Users/example/project',
+            'f50',
+            'n/Users/example/.codex/sessions/rollout-123e4567-e89b-12d3-a456-426614174000.jsonl',
+          ].join('\n'),
+        };
+      }
+      return { stdout: 'focused' };
+    },
+  });
+
+  assert.equal(result.opened, true);
+  assert.equal(result.method, 'codex-terminal-existing');
+  assert.equal(calls.at(-1).command, 'osascript');
+  assert.match(calls.at(-1).args.join('\n'), /set targetTTY to "\/dev\/ttys071"/);
+  assert.match(calls.at(-1).args.join('\n'), /set selected of terminalTab to true/);
+  assert.match(calls.at(-1).args.join('\n'), /\bactivate\b/);
+  assert.doesNotMatch(calls.at(-1).args.join('\n'), /do script/);
+  assert.equal(calls.at(-1).options.timeout, 5000);
+});
+
+test('does not start a duplicate Codex CLI Terminal for running threads without a matching process', async () => {
+  const calls = [];
+  const result = await openThreadInCodexCli({
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    provider: 'codex-cli',
+    cwd: '/Users/example/project',
+    status: 'running',
+    resumeCommand: 'codex resume 123e4567-e89b-12d3-a456-426614174000',
+  }, {
+    platform: 'darwin',
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === 'ps') return { stdout: '' };
+      return { stdout: '' };
+    },
+  });
+
+  assert.equal(result.opened, false);
+  assert.equal(result.method, 'copy-command');
+  assert.deepEqual(calls.map((call) => call.command), ['ps']);
+});
+
+test('opens idle Codex CLI threads in a new Terminal resume session on macOS', async () => {
+  const calls = [];
+  const result = await openThreadInCodexCli({
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    provider: 'codex-cli',
+    cwd: '/Users/example/project',
+    status: 'idle',
+    resumeCommand: 'codex resume 123e4567-e89b-12d3-a456-426614174000',
+  }, {
+    platform: 'darwin',
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === 'ps') return { stdout: '' };
+      return { stdout: '' };
+    },
+  });
+
+  assert.equal(result.opened, true);
+  assert.equal(result.method, 'codex-terminal');
+  assert.deepEqual(calls.map((call) => call.command), ['ps', 'osascript']);
+  assert.match(calls.at(-1).args.join('\n'), /tell application "Terminal"/);
+  assert.match(calls.at(-1).args.join('\n'), /\bactivate\b/);
+  assert.match(calls.at(-1).args.join('\n'), /codex resume 123e4567-e89b-12d3-a456-426614174000/);
+  assert.equal(calls.at(-1).options.timeout, 5000);
 });
 
 test('marks the source notification done after opening from the inbox', async () => {
@@ -381,6 +475,52 @@ test('reuses cached dashboard snapshots for repeated API reads within the TTL', 
   }
 });
 
+test('pending summary reuses a recent stale dashboard snapshot instead of forcing a scan', async () => {
+  let nowMs = 1_000;
+  let loadCalls = 0;
+  const server = createServer({
+    dashboardCacheTtlMs: 10_000,
+    pendingSummaryDashboardMaxAgeMs: 120_000,
+    now: () => nowMs,
+    loadDashboard: async () => {
+      loadCalls += 1;
+      return {
+        summary: { runningHostThreads: loadCalls },
+        threads: [{ id: `thread-${loadCalls}`, status: 'running' }],
+        projects: [],
+        inbox: [],
+      };
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const firstResponse = await fetch(`${base}/api/dashboard`);
+    const first = await firstResponse.json();
+
+    nowMs += 30_000;
+    const summaryResponse = await fetch(`${base}/api/pending-summary`);
+    const summary = await summaryResponse.json();
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(summaryResponse.status, 200);
+    assert.equal(first.summary.runningHostThreads, 1);
+    assert.equal(summary.runningHostThreadCount, 1);
+    assert.equal(loadCalls, 1);
+
+    nowMs += 120_001;
+    const freshSummaryResponse = await fetch(`${base}/api/pending-summary`);
+    const freshSummary = await freshSummaryResponse.json();
+
+    assert.equal(freshSummaryResponse.status, 200);
+    assert.equal(freshSummary.runningHostThreadCount, 2);
+    assert.equal(loadCalls, 2);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('reuses notification refreshes across dashboard scans by default', async () => {
   let nowMs = 1_000;
   let loadCalls = 0;
@@ -477,7 +617,10 @@ test('serves a privacy-limited pending summary for the macOS menu bar', async ()
   const server = createServer({
     loadDashboard: async () => ({
       summary: { runningHostThreads: 2 },
-      threads: [{ id: 'abc', status: 'running' }],
+      threads: [
+        { id: 'abc', status: 'running' },
+        { id: 'done-thread', status: 'fresh' },
+      ],
       projects: [],
       inbox: [],
     }),
@@ -488,7 +631,7 @@ test('serves a privacy-limited pending summary for the macOS menu bar', async ()
         items: [
           { id: 'n1', threadId: 'abc', status: 'unread', source: 'codex-unread', threadTitle: 'private title' },
           { id: 'n2', threadId: 'abc', status: 'unread', source: 'opencode-permission', threadTitle: 'private title' },
-          { id: 'n3', threadId: 'abc', status: 'read', source: 'observed-completion', threadTitle: 'private title' },
+          { id: 'n3', threadId: 'done-thread', status: 'read', source: 'observed-completion', threadTitle: 'private title' },
         ],
       }),
     },
@@ -502,12 +645,60 @@ test('serves a privacy-limited pending summary for the macOS menu bar', async ()
     assert.equal(response.status, 200);
     assert.equal(body.activeCount, 3);
     assert.equal(body.displayCount, 3);
-    assert.equal(body.hardPendingCount, 2);
+    assert.equal(body.hardPendingCount, 3);
     assert.equal(body.progressCount, 1);
     assert.equal(body.runningHostThreadCount, 2);
     assert.equal(body.hostLabel, '2 Host 工作中');
     assert.equal(body.label, '3 待处理');
     assert.equal('items' in body, false);
+    assert.equal(JSON.stringify(body).includes('private title'), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('keeps the menu bar summary aligned with the dashboard when cached progress is stale', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: { runningHostThreads: 1 },
+      threads: [{
+        id: 'abc',
+        status: 'running',
+        currentTurnStartedAtMs: 1778420050000,
+        latestUserMessageAtMs: 1778420050000,
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    notificationCenter: {
+      refresh: async () => ({
+        summary: { activeCount: 1, unreadCount: 1 },
+        settings: { desktopNotificationsEnabled: false },
+        items: [{
+          id: 'n1',
+          threadId: 'abc',
+          status: 'unread',
+          source: 'observed-completion',
+          signalAtMs: 1778420000000,
+          threadTitle: 'private title',
+        }],
+      }),
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/pending-summary`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.activeCount, 0);
+    assert.equal(body.displayCount, 0);
+    assert.equal(body.hardPendingCount, 0);
+    assert.equal(body.progressCount, 0);
+    assert.equal(body.runningHostThreadCount, 1);
+    assert.equal(body.hostLabel, '1 Host 工作中');
+    assert.equal(body.label, '暂无待处理');
     assert.equal(JSON.stringify(body).includes('private title'), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));

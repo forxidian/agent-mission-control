@@ -91,9 +91,31 @@ function quotaFamilyRank(group) {
   return index >= 0 ? index : QUOTA_FAMILY_ORDER.length;
 }
 
+function quotaObservedAtMs(thread) {
+  return coerceNumber(thread.rateLimitUpdatedAtMs || thread.updatedAtMs);
+}
+
+function quotaSourcePriority(thread) {
+  const family = quotaFamily(thread);
+  const limitId = String(thread.rateLimits?.limit_id || '').trim().toLowerCase();
+
+  if (family.key === 'gpt' && limitId.startsWith('codex')) {
+    return limitId === 'codex' ? 3 : 1;
+  }
+
+  return 2;
+}
+
+function compareQuotaCandidates(candidate, current) {
+  const priorityDelta = quotaSourcePriority(candidate.thread) - quotaSourcePriority(current.thread);
+  if (priorityDelta) return priorityDelta;
+
+  return coerceNumber(candidate.group.observedAtMs) - coerceNumber(current.group.observedAtMs);
+}
+
 function quotaGroup(thread) {
   const family = quotaFamily(thread);
-  const observedAtMs = coerceNumber(thread.rateLimitUpdatedAtMs || thread.updatedAtMs) || null;
+  const observedAtMs = quotaObservedAtMs(thread) || null;
   const realtime = quotaWindow(thread.rateLimits?.primary);
   const weekly = quotaWindow(thread.rateLimits?.secondary);
   if (!realtime && !weekly) return null;
@@ -128,17 +150,17 @@ function activeQuotaFamily(thread) {
 
 function quotaGroups(threads) {
   const latestByFamily = new Map();
-  const quotaThreads = threads
-    .filter((thread) => thread.rateLimits)
-    .sort((a, b) => (
-      coerceNumber(b.rateLimitUpdatedAtMs || b.updatedAtMs)
-      - coerceNumber(a.rateLimitUpdatedAtMs || a.updatedAtMs)
-    ));
+  const quotaThreads = threads.filter((thread) => thread.rateLimits);
 
   for (const thread of quotaThreads) {
     const group = quotaGroup(thread);
     if (!group) continue;
-    if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, group);
+
+    const candidate = { thread, group };
+    const current = latestByFamily.get(group.key);
+    if (!current || compareQuotaCandidates(candidate, current) > 0) {
+      latestByFamily.set(group.key, candidate);
+    }
   }
 
   const runningThreads = threads
@@ -147,10 +169,10 @@ function quotaGroups(threads) {
 
   for (const thread of runningThreads) {
     const group = activeQuotaFamily(thread);
-    if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, group);
+    if (!latestByFamily.has(group.key)) latestByFamily.set(group.key, { thread, group });
   }
 
-  return [...latestByFamily.values()].sort((a, b) => (
+  return [...latestByFamily.values()].map((candidate) => candidate.group).sort((a, b) => (
     quotaFamilyRank(a) - quotaFamilyRank(b)
     || coerceNumber(b.observedAtMs) - coerceNumber(a.observedAtMs)
   ));
@@ -158,12 +180,10 @@ function quotaGroups(threads) {
 
 function quotaSummary(threads) {
   const groups = quotaGroups(threads);
-  const latest = threads
-    .map((thread) => ({ thread, group: quotaGroup(thread) }))
-    .filter(({ group }) => group)
+  const latest = groups
+    .filter((group) => group.realtime || group.weekly)
     .sort((a, b) => (
-      coerceNumber(b.thread.rateLimitUpdatedAtMs || b.thread.updatedAtMs)
-      - coerceNumber(a.thread.rateLimitUpdatedAtMs || a.thread.updatedAtMs)
+      coerceNumber(b.observedAtMs) - coerceNumber(a.observedAtMs)
     ))[0];
 
   if (!latest) {
@@ -177,12 +197,12 @@ function quotaSummary(threads) {
   }
 
   return {
-    realtime: latest.group.realtime,
-    weekly: latest.group.weekly,
-    observedAtMs: latest.group.observedAtMs,
-    sourceThreadId: latest.thread.id || '',
-    stale: latest.group.stale,
-    staleAtMs: latest.group.staleAtMs,
+    realtime: latest.realtime,
+    weekly: latest.weekly,
+    observedAtMs: latest.observedAtMs,
+    sourceThreadId: latest.sourceThreadId || '',
+    stale: latest.stale,
+    staleAtMs: latest.staleAtMs,
     groups,
   };
 }
@@ -260,6 +280,10 @@ export function normalizeThread(row, nowMs = Date.now()) {
   const isCodexCli = ['cli', 'terminal', 'tui'].includes(source.toLowerCase());
   const resumeCommand = `codex resume ${id}`;
   const subagent = subagentInfo(row);
+  const goalStatus = String(row.goal_status || '').toLowerCase();
+  const goalCreatedAtMs = unixValueToMs(row.goal_created_at_ms);
+  const goalUpdatedAtMs = unixValueToMs(row.goal_updated_at_ms);
+  const hasActiveGoal = goalStatus === 'active';
   const thread = {
     id,
     externalId: id,
@@ -289,6 +313,17 @@ export function normalizeThread(row, nowMs = Date.now()) {
     subagentDepth: subagent.depth,
     agentNickname: row.agent_nickname || subagent.agentNickname || '',
     agentRole: row.agent_role || subagent.agentRole || '',
+    goalId: row.goal_id || '',
+    goalStatus,
+    goalTokenBudget: row.goal_token_budget == null ? null : coerceNumber(row.goal_token_budget),
+    goalTokensUsed: coerceNumber(row.goal_tokens_used),
+    goalTimeUsedSeconds: coerceNumber(row.goal_time_used_seconds),
+    goalCreatedAtMs: goalCreatedAtMs || null,
+    goalUpdatedAtMs: goalUpdatedAtMs || null,
+    activeGoal: hasActiveGoal,
+    agentRunning: hasActiveGoal,
+    agentStartedAtMs: hasActiveGoal ? goalCreatedAtMs : null,
+    agentActivityAtMs: hasActiveGoal ? (goalUpdatedAtMs || updatedAtMs) : null,
   };
 
   return {

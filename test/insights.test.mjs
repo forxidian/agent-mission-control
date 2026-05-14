@@ -95,6 +95,43 @@ test('infers running, fresh, warm, idle, and archived thread statuses', () => {
   assert.equal(inferThreadStatus({ archived: true, updatedAtMs: now }, now), 'archived');
 });
 
+test('uses active Codex goals as an explicit running signal', () => {
+  const now = 1777427200000;
+  const thread = normalizeThread({
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    title: 'Goal loop',
+    cwd: '/Users/example/Documents/work',
+    source: 'cli',
+    archived: 0,
+    created_at_ms: now - 4 * 60 * 60 * 1000,
+    updated_at_ms: now - 60_000,
+    goal_id: 'goal-1',
+    goal_status: 'active',
+    goal_created_at_ms: now - 2 * 60 * 60 * 1000,
+    goal_updated_at_ms: now - 30_000,
+    goal_tokens_used: 1000,
+    goal_time_used_seconds: 7200,
+  }, now);
+
+  assert.equal(thread.provider, 'codex-cli');
+  assert.equal(thread.activeGoal, true);
+  assert.equal(thread.status, 'running');
+  assert.equal(thread.currentTurnStartedAtMs, now - 2 * 60 * 60 * 1000);
+  assert.equal(thread.currentTurnElapsedMs, 2 * 60 * 60 * 1000);
+
+  const dashboard = buildDashboard([
+    {
+      ...thread,
+      latestUserMessageAtMs: now - 90 * 60 * 1000,
+      latestAgentFinalAtMs: now - 60_000,
+      latestMessageKind: 'agent',
+    },
+  ], now);
+
+  assert.equal(dashboard.threads[0].status, 'running');
+  assert.equal(dashboard.summary.runningHostThreads, 1);
+});
+
 test('aggregates active token usage by project', () => {
   const projects = aggregateProjects([
     { cwd: '/a/one', projectName: 'one', tokensUsed: 10, todayTokenUsage: 3, archived: false, updatedAtMs: 2000 },
@@ -562,6 +599,55 @@ test('groups quota by LLM family and keeps the freshest signal per family', () =
   assert.equal(dashboard.summary.quota.groups[0].realtime.availablePercent, 86);
   assert.equal(dashboard.summary.quota.groups[1].label, 'Claude');
   assert.equal(dashboard.summary.quota.groups[1].realtime.availablePercent, 56);
+});
+
+test('prefers Codex account quota over model-specific Codex GPT limits', () => {
+  const now = 1778773400000;
+  const dashboard = buildDashboard([
+    {
+      id: 'codex-main-quota',
+      title: 'Codex main quota',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60 * 60_000,
+      rateLimitUpdatedAtMs: now - 60 * 60_000,
+      rateLimits: {
+        limit_id: 'codex',
+        primary: { used_percent: 54, window_minutes: 300, resets_at: 1778774541 },
+        secondary: { used_percent: 40, window_minutes: 10080, resets_at: 1779158013 },
+        plan_type: 'pro',
+      },
+    },
+    {
+      id: 'codex-model-quota',
+      title: 'Codex model quota',
+      cwd: '/b',
+      projectName: 'b',
+      provider: 'codex-cli',
+      providerLabel: 'Codex CLI',
+      model: 'gpt-5.3-codex-spark',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 1_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        limit_id: 'codex_bengalfox',
+        limit_name: 'GPT-5.3-Codex-Spark',
+        primary: { used_percent: 0, window_minutes: 300, resets_at: 1778791396 },
+        secondary: { used_percent: 0, window_minutes: 10080, resets_at: 1779378196 },
+      },
+    },
+  ], now);
+
+  assert.equal(dashboard.summary.quota.sourceThreadId, 'codex-main-quota');
+  assert.equal(dashboard.summary.quota.realtime.availablePercent, 46);
+  assert.equal(dashboard.summary.quota.weekly.availablePercent, 60);
+  assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, 'codex-main-quota');
 });
 
 test('includes running LLM families even when they have no quota signal', () => {

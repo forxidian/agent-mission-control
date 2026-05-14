@@ -56,6 +56,7 @@ test('creates actionable notification candidates for unread Codex threads', () =
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].type, 'AWAITING_REVIEW');
   assert.equal(candidates[0].status, 'unread');
+  assert.equal(candidates[0].title, '任务等待验收');
   assert.equal(candidates[0].threadTitle, 'Ship dashboard');
   assert.equal(candidates[0].id, '123e4567-e89b-12d3-a456-426614174000:AWAITING_REVIEW:1777427200000');
 });
@@ -164,6 +165,7 @@ test('creates soft progress notifications for Claude Desktop completions', () =>
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].type, 'AWAITING_REVIEW');
   assert.equal(candidates[0].source, 'observed-completion');
+  assert.equal(candidates[0].title, '任务有新进展');
   assert.equal(candidates[0].threadId, 'claude-desktop-code:local_123');
   assert.equal(candidates[0].reason, 'Agent 已完成一轮工作');
 });
@@ -313,6 +315,47 @@ test('notifies recent observed completion signals during initialization', async 
     assert.equal(next.summary.activeCount, 2);
     assert.equal(next.items[0].threadId, 'new-thread');
     assert.equal(next.items[0].source, 'observed-completion');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('refreshes legacy observed completion titles to soft progress copy', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cmc-notifications-'));
+  const storePath = path.join(dir, 'notifications.json');
+  const now = 1777427300000;
+  const center = new NotificationCenter({
+    storePath,
+    now: () => now,
+  });
+
+  try {
+    const completion = reviewThread({ hasUnreadTurn: false });
+    const candidateId = `${completion.id}:AWAITING_REVIEW:${completion.latestAgentFinalAtMs}`;
+    await writeFile(storePath, `${JSON.stringify({
+      version: 2,
+      settings: { desktopNotificationsEnabled: false, privacyMode: true },
+      notifications: {
+        [candidateId]: {
+          id: candidateId,
+          threadId: completion.id,
+          type: 'AWAITING_REVIEW',
+          source: 'observed-completion',
+          status: 'unread',
+          title: '任务有新进展，等待处理',
+          reason: 'Agent 已完成一轮工作',
+          threadTitle: completion.title,
+          projectName: completion.projectName,
+          signalAtMs: completion.latestAgentFinalAtMs,
+          createdAtMs: completion.latestAgentFinalAtMs,
+        },
+      },
+      observedReviewSignals: { [candidateId]: completion.latestAgentFinalAtMs },
+      reviewSignalsInitializedAtMs: now - 60_000,
+    }, null, 2)}\n`);
+
+    const result = await center.refresh({ threads: [completion] });
+    assert.equal(result.items[0].title, '任务有新进展');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

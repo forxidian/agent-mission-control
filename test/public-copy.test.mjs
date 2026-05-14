@@ -195,7 +195,7 @@ test('uses topbar metrics as panel shortcuts', async () => {
   assert.match(styles, /\.topbar-metric-button:focus-visible\s*\{/);
 });
 
-test('separates soft progress notifications from hard pending work copy', async () => {
+test('counts soft progress notifications in the same pending work copy', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 
   assert.match(app, /function notificationBreakdown\(notifications\)/);
@@ -204,11 +204,15 @@ test('separates soft progress notifications from hard pending work copy', async 
   assert.match(app, /function shouldSuppressSoftProgressNotification\(notification, dashboard = state\.dashboard\)/);
   assert.match(app, /thread\.status === 'running'/);
   assert.match(app, /continuedAtMs > signalAtMs/);
-  assert.match(app, new RegExp('待处理 / 新进展'));
-  assert.match(app, /项需处理 · \$\{progressCount\} 项新进展/);
+  assert.match(app, /elements\.inboxHeading\.textContent = '待处理'/);
+  assert.match(app, /note: `\$\{pendingCount \|\| 0\} 项需要处理`/);
+  assert.match(app, /const pendingCount = counts\.totalCount/);
   assert.match(app, />打开<\/button>/);
   assert.match(app, /标记已处理/);
   assert.doesNotMatch(app, /标记已查看/);
+  assert.doesNotMatch(app, /待处理 \/ 新进展/);
+  assert.doesNotMatch(app, /项新进展/);
+  assert.doesNotMatch(app, /unread: '待查看'/);
   assert.match(app, /SOFT_PROGRESS_STATUS_LABELS/);
 });
 
@@ -228,6 +232,11 @@ test('uses conservative automatic refresh behavior for local file scans', async 
   assert.match(app, /setTimeout\(runMonitorTick, delayMs\)/);
   assert.match(app, /function dashboardDataSignature\(dashboard\)/);
   assert.match(app, /renderDashboardStatusOnly\(\)/);
+  assert.match(app, /const PENDING_SUMMARY_POLL_INTERVAL_MS = 10_000;/);
+  assert.match(app, /\/api\/pending-summary/);
+  assert.match(app, /function pendingSummaryDiffers\(summary\)/);
+  assert.match(app, /loadDashboard\(\{ silent: true, force: true \}\)/);
+  assert.match(app, /startPendingSummarySync\(\)/);
   assert.match(app, /本地扫描耗时/);
   assert.match(app, /服务内存占用/);
   assert.match(app, /topbarLoadLabel/);
@@ -359,11 +368,28 @@ test('opens thread deep links without waiting for the local server round trip', 
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
+  assert.match(app, /function shouldOpenDeepLinkInBrowser\(thread\)/);
+  assert.match(app, /thread\?\.provider === 'codex'/);
+  assert.match(app, /startsWith\('codex:\/\/'\)/);
+  assert.match(openThreadSource, /if \(shouldOpenDeepLinkInBrowser\(thread\)\)/);
   assert.match(openThreadSource, /window\.location\.href = thread\.appDeepLink/);
   assert.ok(
     openThreadSource.indexOf('window.location.href = thread.appDeepLink') < openThreadSource.indexOf('fetch(`/api/threads/'),
     'Codex deep link path should run before the server opener fallback',
   );
+});
+
+test('opens notification cards through the same source task opener', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf("const notificationMain = clicked.closest('.notification-main[data-thread-id]')");
+  const end = app.indexOf("\n  const target = clicked.closest('[data-thread-id]')", start);
+  const notificationMainSource = app.slice(start, end);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(notificationMainSource, /openThread\(notificationMain\.dataset\.threadId, notificationMain/);
+  assert.match(notificationMainSource, /notificationId: notificationItem\?\.dataset\.notificationId \|\| ''/);
+  assert.doesNotMatch(notificationMainSource, /selectThread\(notificationMain\.dataset\.threadId\)/);
 });
 
 test('marks notifications done optimistically without a full notification refresh', async () => {

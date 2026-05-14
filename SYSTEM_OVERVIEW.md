@@ -1,6 +1,6 @@
 # Agent Mission Control 系统交接文档
 
-更新日期：2026-05-13
+更新日期：2026-05-14
 
 这个文件用于新开 Codex 线程时快速接手本项目。建议新线程先读本文件，再根据具体需求查看相关源码和测试。
 
@@ -36,7 +36,7 @@ http://127.0.0.1:4629/
 - PWA 独立窗口内提供“收起”按钮，通过本地 API 最小化 macOS app shim；原生红色关闭按钮不能被网页改写，且不使用 `beforeunload` 拦截，避免误伤 deep link 跳转。
 - 桌面提醒暂时屏蔽：当前 macOS 脚本通知投递不够可靠，发布版本只保留站内待处理提醒。
 - 支持通知中心：等待验收、等待授权、标记已处理、稍后提醒。
-- 性能保护：前端自动刷新默认每 30 秒一次，可切到 10 秒或 60 秒；页面在后台时暂停拉取，窗口失焦时自动降频到 60 秒；dashboard 数据未变化时跳过整页重绘。后端 `/api/dashboard` 对同一进程内请求做 10 秒共享快照，通知刷新默认缓存 30 秒，Codex rollout、Claude JSONL 和 Claude Desktop usage cache 读取都有短 TTL / mtime 有界缓存。
+- 性能保护：前端自动刷新默认每 30 秒一次，可切到 10 秒或 60 秒；页面在后台时暂停拉取，窗口失焦时自动降频到 60 秒；dashboard 数据未变化时跳过整页重绘。后端 `/api/dashboard` 对同一进程内请求做 10 秒共享快照，`/api/pending-summary` 复用最近 dashboard 快照避免菜单栏/轻量轮询触发全量扫描，通知刷新默认缓存 30 秒，Codex rollout、Claude JSONL 和 Claude Desktop usage cache 读取都有短 TTL / mtime 有界缓存。
 - 性能指标：`/api/dashboard` 返回 `performance` 字段，`/api/performance` 可单独读取当前进程 RSS/heap、dashboard 扫描耗时、通知刷新耗时、cache 命中率和缓存条目数。
 - 后端 notification monitor 默认关闭；如果启用，会复用 dashboard 共享快照，避免和前端重复全量扫描。
 
@@ -157,14 +157,15 @@ quota：
 
 通知：
 
-- 硬待处理：
+- 通知来源：
   - Codex unread/blue dot：`source = codex-unread`
   - OpenCode pending permission：`source = opencode-permission`
   - Claude explicit user/permission request：`source = <provider>-permission`（普通未完成 tool_use 不算硬待处理）
-  - 这些会保留，直到信号消失、打开并标记处理、或手动处理。
-- 软提醒：
   - 从“Agent final answer after latest user message”推断的新进展：`source = observed-completion`
-  - 当前作为站内短暂软提醒展示，不触发 macOS 桌面通知；没有可靠已读回执时，不能把它当成硬待处理。
+- UI 口径：
+  - 顶部待处理、摘要卡、通知中心和菜单栏统一使用同一套活跃通知计数；新进展也算待处理池里的待处理项。
+  - 列表里仍用“新进展”作为来源标签，方便判断信号来源；操作和状态统一为待处理/已处理。
+  - 通知保留到信号消失、打开并标记处理、或手动处理；不触发 macOS 桌面通知。
 
 ## 重要 UX 决策
 
@@ -183,7 +184,7 @@ quota：
 
 - 旧问题：很多线程被误判为“等待验收”。
   - 原因：rollout final answer 被当成硬待处理。
-  - 现在：只有 Codex unread / OpenCode permission / Claude permission 是硬待处理；observed completion 是短暂软提醒。
+  - 现在：Codex unread / OpenCode permission / Claude permission / observed completion 都进入同一个站内待处理池；observed completion 只作为“新进展”来源标签展示。
 - 旧问题：桌面提醒通过 `osascript` 投递后，macOS 可能静默接收但不显示。
   - 现在：发布版本已屏蔽桌面提醒入口和投递逻辑，只保留站内待处理。
 - 旧问题：同一线程标题显示成不对应的文字。
@@ -248,9 +249,9 @@ npm test
 
 如果新功能涉及通知：
 
-- 先区分“硬待处理”和“软提醒”。
-- 硬待处理必须有可靠外部信号能清除。
-- 软提醒不能长期挂在待处理里。
+- 先明确通知来源和清除条件。
+- 顶部、摘要、通知中心和菜单栏必须使用同一套活跃通知计数。
+- 推断的新进展不能无限期堆积；用户继续线程、信号过期或手动处理时要能清除。
 - 重新启用桌面提醒前，先换成可靠的原生通知 helper；不要回退到裸 `osascript`。
 
 如果新功能涉及 token/quota：

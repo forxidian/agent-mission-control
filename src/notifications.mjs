@@ -148,7 +148,7 @@ export function createNotificationCandidates(dashboard, nowMs = Date.now(), {
       source: isUnread ? 'codex-unread' : 'observed-completion',
       priority: 'normal',
       status: 'unread',
-      title: '任务有新进展，等待处理',
+      title: isUnread ? '任务等待验收' : '任务有新进展',
       reason: isUnread ? 'Codex 侧边栏标记为未读' : 'Agent 已完成一轮工作',
       threadTitle: thread.title || '未命名任务',
       projectName: thread.projectName || '未知项目',
@@ -343,6 +343,7 @@ export class NotificationCenter {
       const reopenObservedCompletion = isLegacyAutoDismissedObservedCompletion(existing, candidate, nowMs);
       records[candidate.id] = {
         ...existing,
+        title: candidate.title,
         threadTitle: candidate.threadTitle,
         projectName: candidate.projectName,
         appDeepLink: candidate.appDeepLink,

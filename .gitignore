@@ -24,6 +24,11 @@ pnpm-debug.log*
 *.db-*
 *.jsonl
 
+# Local-only investigation notes and generated research reports.
+docs/local-*.md
+docs/*-diagnosis-*.md
+docs/*-research.html
+
 # Certificates and keys.
 *.pem
 *.key

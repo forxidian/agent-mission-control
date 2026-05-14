@@ -4,9 +4,11 @@ const state = {
   selectedThreadId: null,
   autoTimer: null,
   heartbeatTimer: null,
+  pendingSummaryTimer: null,
   installPromptEvent: null,
   isInstalledApp: false,
   isLoading: false,
+  isPendingSummarySyncing: false,
   dashboardSignature: '',
   nextRefreshAtMs: null,
   lastRefreshAtMs: null,
@@ -62,6 +64,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
 const REFRESH_INTERVAL_OPTIONS_MS = new Set([10_000, 30_000, 60_000]);
 const UNFOCUSED_REFRESH_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
+const PENDING_SUMMARY_POLL_INTERVAL_MS = 10_000;
 const REVIEW_POLL_INTERVAL_MS = 5_000;
 const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
@@ -106,8 +109,8 @@ const NOTIFICATION_SOURCE_LABELS = {
 };
 
 const NOTIFICATION_STATUS_LABELS = {
-  unread: '未读',
-  read: '已读',
+  unread: '待处理',
+  read: '已处理',
 };
 
 const SOFT_PROGRESS_STATUS_LABELS = {
@@ -285,12 +288,29 @@ function notificationStatusLabel(notification) {
   return labels[notification?.status] || notification?.status || '未知状态';
 }
 
+function notificationDoneLabel(notification) {
+  return '标记已处理';
+}
+
+function notificationActionLabel(notification) {
+  return '待处理操作';
+}
+
+function notificationOutcomeLabel(notification) {
+  return '已处理';
+}
+
+function notificationMarkedPhrase(notification) {
+  return `已标记为${notificationOutcomeLabel(notification)}`;
+}
+
 function notificationBreakdown(notifications) {
   const items = notifications?.items || [];
   const softCount = items.filter(isSoftProgressNotification).length;
+  const activeCount = items.length;
   return {
-    totalCount: notifications?.summary?.activeCount ?? items.length,
-    hardCount: Math.max(0, items.length - softCount),
+    totalCount: activeCount,
+    hardCount: activeCount,
     softCount,
   };
 }
@@ -537,11 +557,9 @@ function renderTopbarMetrics(summary = {}) {
 
   const notifications = state.notifications || state.dashboard?.notifications;
   const counts = notificationBreakdown(notifications);
-  const pendingCount = counts.hardCount;
+  const pendingCount = counts.totalCount;
   const runningHostThreads = countRunningHostThreads(state.dashboard || { summary });
-  const pendingTitle = counts.softCount
-    ? `${pendingCount || 0} 项待处理，${counts.softCount} 项新进展`
-    : `${pendingCount || 0} 项待处理`;
+  const pendingTitle = `${pendingCount || 0} 项待处理`;
   const hostTitle = `${runningHostThreads || 0} 个 Host 工作中`;
 
   elements.topbarMetrics.innerHTML = `
@@ -740,6 +758,10 @@ function canOpenThread(thread) {
   return Boolean(thread?.appDeepLink || thread?.canOpen);
 }
 
+function shouldOpenDeepLinkInBrowser(thread) {
+  return thread?.provider === 'codex' && String(thread?.appDeepLink || '').startsWith('codex://');
+}
+
 function disableButtonBriefly(button, durationMs = 1200) {
   if (!button) return;
   button.disabled = true;
@@ -821,17 +843,14 @@ function statusMarkup(status) {
 function renderSummary(summary) {
   const notifications = state.notifications || state.dashboard?.notifications;
   const notificationCounts = notificationBreakdown(notifications);
-  const pendingCount = notificationCounts.hardCount;
-  const progressCount = notificationCounts.softCount;
+  const pendingCount = notificationCounts.totalCount;
   const providers = state.dashboard?.providers || summary.providers || [];
   const currentItems = [
     ...quotaSummaryCards(summary.quota),
     {
       label: '待处理',
       value: pendingCount,
-      note: progressCount
-        ? `${pendingCount || 0} 项需处理 · ${progressCount} 项新进展`
-        : `${pendingCount || 0} 项需要处理`,
+      note: `${pendingCount || 0} 项需要处理`,
       tone: pendingCount > 0 ? 'attention' : '',
     },
     {
@@ -1007,22 +1026,12 @@ function renderNotifications(notifications) {
   const activeCount = counts.totalCount || items.length;
   const hiddenCount = Math.max(0, items.length - INBOX_PREVIEW_LIMIT);
   const visibleItems = state.inboxExpanded ? items : items.slice(0, INBOX_PREVIEW_LIMIT);
-  const hasHardItems = counts.hardCount > 0;
-  const hasSoftItems = counts.softCount > 0;
 
   if (elements.inboxHeading) {
-    elements.inboxHeading.textContent = hasHardItems && hasSoftItems
-      ? '待处理 / 新进展'
-      : hasSoftItems
-        ? '新进展'
-        : '待处理';
+    elements.inboxHeading.textContent = '待处理';
   }
 
-  elements.notificationCount.textContent = hasHardItems && hasSoftItems
-    ? `${counts.hardCount} 待处理 · ${counts.softCount} 新进展`
-    : hasSoftItems
-      ? `${counts.softCount} 项新进展`
-      : `${activeCount} 项`;
+  elements.notificationCount.textContent = `${activeCount} 项`;
   elements.notificationToggle.hidden = hiddenCount === 0;
   elements.notificationToggle.textContent = state.inboxExpanded
     ? '收起'
@@ -1030,12 +1039,13 @@ function renderNotifications(notifications) {
   elements.notificationToggle.setAttribute('aria-expanded', String(state.inboxExpanded));
 
   if (!items.length) {
-    elements.inbox.innerHTML = '<p class="empty-state">暂无待处理或新进展。</p>';
+    elements.inbox.innerHTML = '<p class="empty-state">暂无待处理。</p>';
     return;
   }
 
   elements.inbox.innerHTML = visibleItems.map((notification) => {
     const isSoftProgress = isSoftProgressNotification(notification);
+    const actionLabel = notificationDoneLabel(notification);
     return `
     <article
       class="notification-item ${notification.status === 'unread' ? 'is-unread' : ''}"
@@ -1051,14 +1061,14 @@ function renderNotifications(notifications) {
           <span>${escapeHtml(relativeTime(notification.signalAtMs))}</span>
         </span>
       </button>
-      <div class="notification-actions" aria-label="待处理操作">
+      <div class="notification-actions" aria-label="${escapeHtml(notificationActionLabel(notification))}">
         <button
           class="action-button primary"
           type="button"
           data-open-thread-id="${escapeHtml(notification.threadId)}"
           data-open-notification-id="${escapeHtml(notification.id)}"
         >打开</button>
-        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">标记已处理</button>
+        <button class="action-button secondary" type="button" data-notification-done-id="${escapeHtml(notification.id)}">${escapeHtml(actionLabel)}</button>
       </div>
     </article>
   `;
@@ -2219,6 +2229,62 @@ async function loadNotifications() {
   setNotifications(await response.json());
 }
 
+function currentPendingSummaryCounts() {
+  const notifications = state.notifications || state.dashboard?.notifications;
+  const counts = notificationBreakdown(notifications);
+  return {
+    displayCount: counts.totalCount,
+    runningHostThreadCount: countRunningHostThreads(state.dashboard || {}),
+  };
+}
+
+function pendingSummaryDiffers(summary) {
+  if (!state.dashboard || !summary) return false;
+
+  const current = currentPendingSummaryCounts();
+  const summaryDisplayCount = Number(summary.displayCount ?? summary.activeCount ?? 0);
+  const summaryHostCount = Number(summary.runningHostThreadCount ?? 0);
+
+  return Number.isFinite(summaryDisplayCount)
+    && Number.isFinite(summaryHostCount)
+    && (
+      current.displayCount !== Math.max(0, summaryDisplayCount)
+      || current.runningHostThreadCount !== Math.max(0, summaryHostCount)
+    );
+}
+
+function shouldPollPendingSummary() {
+  return Boolean(
+    state.dashboard
+    && elements.autoRefresh.checked
+    && document.visibilityState !== 'hidden'
+    && effectiveRefreshIntervalMs() > PENDING_SUMMARY_POLL_INTERVAL_MS
+  );
+}
+
+async function syncPendingSummaryWithDashboard() {
+  if (state.isLoading || state.isPendingSummarySyncing || !shouldPollPendingSummary()) return;
+
+  state.isPendingSummarySyncing = true;
+  try {
+    const response = await fetch('/api/pending-summary', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const summary = await response.json();
+    if (pendingSummaryDiffers(summary)) {
+      await loadDashboard({ silent: true, force: true });
+    }
+  } catch {
+    // Full dashboard refresh owns visible error state; this tiny sync should stay quiet.
+  } finally {
+    state.isPendingSummarySyncing = false;
+  }
+}
+
+function startPendingSummarySync() {
+  if (state.pendingSummaryTimer) return;
+  state.pendingSummaryTimer = setInterval(syncPendingSummaryWithDashboard, PENDING_SUMMARY_POLL_INTERVAL_MS);
+}
+
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const body = await response.json().catch(() => ({}));
@@ -2396,7 +2462,7 @@ function focusTopbarAction(action) {
     scrollPanelIntoView(elements.inbox?.closest('.priority-inbox-panel'));
 
     const counts = notificationBreakdown(state.notifications || state.dashboard?.notifications);
-    if (!counts.totalCount) showNotice('当前暂无待处理或新进展。');
+    if (!counts.totalCount) showNotice('当前暂无待处理。');
     return;
   }
 
@@ -2628,19 +2694,20 @@ async function openThread(threadId, sourceButton, { notificationId = '', copyRes
   const resumeCommand = resumeCommandForThread(thread);
   disableButtonBriefly(sourceButton);
 
-  if (thread.appDeepLink) {
+  if (shouldOpenDeepLinkInBrowser(thread)) {
     if (copyResume) void copyText(resumeCommand).catch(() => {});
 
+    let updatedNotification = null;
     if (notificationId) {
-      markNotificationDoneLocally(notificationId);
+      updatedNotification = markNotificationDoneLocally(notificationId);
       void updateNotification(notificationId, { status: 'done' }).catch((error) => {
-        showError(`无法持久化已处理状态：${error.message}`);
+        showError(`无法持久化${notificationOutcomeLabel(updatedNotification)}状态：${error.message}`);
       });
     }
 
     const label = providerLabel(thread);
     showNotice(noticeMessage || (notificationId
-      ? `正在切换到 ${label}，并已标记为已处理。`
+      ? `正在切换到 ${label}，并${notificationMarkedPhrase(updatedNotification)}。`
       : `正在切换到 ${label}。`));
     window.location.href = thread.appDeepLink;
     return;
@@ -2659,12 +2726,17 @@ async function openThread(threadId, sourceButton, { notificationId = '', copyRes
     if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
 
     if (copyResume) await copyText(body.resumeCommand || resumeCommand).catch(() => {});
-    if (notificationId) markNotificationDoneLocally(notificationId);
+    const updatedNotification = notificationId
+      ? markNotificationDoneLocally(notificationId)
+      : null;
+    const notificationPhrase = notificationId
+      ? `，并${notificationMarkedPhrase(updatedNotification)}`
+      : '';
 
     const label = providerLabel(thread);
     showNotice(noticeMessage || (body.opened
-      ? `正在打开 ${label}，并已复制命令。`
-      : `已复制 ${label} 命令，请在终端继续。`));
+      ? `正在打开 ${label}${notificationPhrase}，并已复制命令。`
+      : `已复制 ${label} 命令${notificationPhrase}，请在终端继续。`));
     loadDashboard({ silent: true });
   } catch (error) {
     if (!copyResume) {
@@ -2694,11 +2766,11 @@ async function updateNotification(notificationId, patch) {
 async function markNotificationDone(notificationId) {
   const updated = markNotificationDoneLocally(notificationId);
   if (!updated) {
-    showError('找不到这条待处理项，刷新看板后再试。');
+    showError('找不到这条通知，刷新看板后再试。');
     return;
   }
 
-  showNotice('已标记为已处理。');
+  showNotice(`${notificationMarkedPhrase(updated)}。`);
   try {
     await updateNotification(notificationId, { status: 'done' });
   } catch (error) {
@@ -2961,16 +3033,10 @@ document.addEventListener('click', (event) => {
   const notificationMain = clicked.closest('.notification-main[data-thread-id]');
   if (notificationMain) {
     event.preventDefault();
-    selectThread(notificationMain.dataset.threadId);
-
     const notificationItem = notificationMain.closest('[data-notification-id]');
-    if (notificationItem?.dataset.notificationKind === 'progress') {
-      const notificationId = notificationItem.dataset.notificationId;
-      markNotificationDoneLocally(notificationId);
-      void updateNotification(notificationId, { status: 'done' }).catch((error) => {
-        showError(`无法持久化已处理状态：${error.message}`);
-      });
-    }
+    openThread(notificationMain.dataset.threadId, notificationMain, {
+      notificationId: notificationItem?.dataset.notificationId || '',
+    });
     return;
   }
 
@@ -3022,4 +3088,5 @@ initializeInstallPrompt();
 initializeLaunchHandling();
 registerServiceWorker();
 initializeMonitor();
+startPendingSummarySync();
 loadDashboard({ force: true });

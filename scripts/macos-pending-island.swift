@@ -20,8 +20,8 @@ private let islandBlueColor = NSColor(calibratedRed: 0.173, green: 0.435, blue: 
 private let islandMutedRedColor = NSColor(calibratedRed: 0.580, green: 0.294, blue: 0.255, alpha: 1.0)
 
 private final class PendingPopoverViewController: NSViewController {
-  private let titleLabel = NSTextField(labelWithString: "0 项待查看")
-  private let detailLabel = NSTextField(labelWithString: "0 项需处理 · 0 项新进展")
+  private let titleLabel = NSTextField(labelWithString: "0 项待处理")
+  private let detailLabel = NSTextField(labelWithString: "0 项待处理")
   private let hintLabel = NSTextField(labelWithString: "点击徽章打开任务控制台")
 
   override func loadView() {
@@ -58,10 +58,10 @@ private final class PendingPopoverViewController: NSViewController {
 
   func update(displayCount: Int, hardPendingCount: Int, progressCount: Int, runningHostThreadCount: Int, connected: Bool) {
     titleLabel.stringValue = connected
-      ? "\(runningHostThreadCount) Host 工作中 · \(displayCount) 待查看"
+      ? "\(runningHostThreadCount) Host 工作中 · \(displayCount) 待处理"
       : "未连接任务控制台"
     detailLabel.stringValue = connected
-      ? "\(hardPendingCount) 项需处理 · \(progressCount) 项新进展"
+      ? "\(displayCount) 项待处理"
       : "请确认本地服务已启动"
     hintLabel.stringValue = connected
       ? "点击徽章切回任务控制台"
@@ -155,7 +155,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
       }
 
       DispatchQueue.main.async {
-        let badgeCount = summary.displayCount ?? summary.activeCount ?? (summary.hardPendingCount + summary.progressCount)
+        let badgeCount = summary.displayCount ?? summary.hardPendingCount
         let hostCount = summary.runningHostThreadCount ?? 0
         self.updateBadge(
           count: badgeCount,
@@ -317,7 +317,7 @@ private final class PendingIslandApp: NSObject, NSApplicationDelegate {
     statusItem?.button?.title = ""
     statusItem?.button?.image = image
     statusItem?.button?.toolTip = connected
-      ? "\(count) 项待查看，\(runningHostThreadCount) 个 Host 工作中：\(hardPendingCount) 项需处理，\(progressCount) 项新进展"
+      ? "\(count) 项待处理，\(runningHostThreadCount) 个 Host 工作中"
       : "Agent Mission Control 未连接"
     popoverController.update(
       displayCount: count,

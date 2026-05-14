@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import os from 'node:os';
@@ -38,6 +38,7 @@ const PWA_APP_DIRS = [
 ];
 const DEFAULT_DASHBOARD_CACHE_TTL_MS = 10_000;
 const DEFAULT_NOTIFICATION_CACHE_TTL_MS = 30_000;
+const DEFAULT_PENDING_SUMMARY_DASHBOARD_MAX_AGE_MS = 120_000;
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -98,6 +99,178 @@ function openCommandForUrl(url) {
 
 function appleScriptString(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+function terminalResumeScriptArgs(resumeCommand) {
+  return [
+    '-e',
+    'tell application "Terminal"',
+    '-e',
+    'activate',
+    '-e',
+    `do script "${appleScriptString(resumeCommand)}"`,
+    '-e',
+    'end tell',
+  ];
+}
+
+function terminalFocusScriptArgs(tty) {
+  return [
+    '-e',
+    `set targetTTY to "${appleScriptString(tty)}"`,
+    '-e',
+    'tell application "Terminal"',
+    '-e',
+    'repeat with terminalWindow in windows',
+    '-e',
+    'repeat with terminalTab in tabs of terminalWindow',
+    '-e',
+    'if tty of terminalTab is targetTTY then',
+    '-e',
+    'try',
+    '-e',
+    'set miniaturized of terminalWindow to false',
+    '-e',
+    'end try',
+    '-e',
+    'set selected of terminalTab to true',
+    '-e',
+    'set index of terminalWindow to 1',
+    '-e',
+    'activate',
+    '-e',
+    'return "focused"',
+    '-e',
+    'end if',
+    '-e',
+    'end repeat',
+    '-e',
+    'end repeat',
+    '-e',
+    'end tell',
+    '-e',
+    'error "Terminal tab not found for " & targetTTY',
+  ];
+}
+
+function looksLikeCodexCliProcess(command = '') {
+  const text = String(command);
+  return /(^|[\s/])codex(\s|$)/.test(text)
+    || text.includes('/.local/bin/codex')
+    || text.includes('@openai/codex')
+    || text.includes('/codex-darwin-');
+}
+
+function parsePsProcessRows(stdout = '') {
+  return String(stdout)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
+      if (!match) return null;
+      const [, pid, ppid, tty, command] = match;
+      return { pid, ppid, tty, command };
+    })
+    .filter(Boolean);
+}
+
+function normalizeTerminalTty(tty = '') {
+  const text = String(tty).trim();
+  if (!text || text === '??' || text === '?') return '';
+  if (text.startsWith('/dev/')) return text;
+  if (text.startsWith('tty')) return `/dev/${text}`;
+  return `/dev/tty${text}`;
+}
+
+function lsofNameLines(stdout = '') {
+  return String(stdout)
+    .split('\n')
+    .filter((line) => line.startsWith('n'))
+    .map((line) => line.slice(1));
+}
+
+function lsofCwd(stdout = '') {
+  const lines = String(stdout).split('\n');
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (lines[index] === 'fcwd' && lines[index + 1]?.startsWith('n')) {
+      return lines[index + 1].slice(1);
+    }
+  }
+  return '';
+}
+
+async function realpathOrSelf(value = '') {
+  if (!value) return '';
+  try {
+    return await realpath(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function lsofMatchesThread(stdout, thread, normalizedThreadCwd = '') {
+  const id = String(thread.id || thread.externalId || '');
+  const rolloutPath = String(thread.rolloutPath || '');
+  const resolvedThreadCwd = thread.cwd ? path.resolve(thread.cwd) : '';
+  const names = lsofNameLines(stdout);
+  const exactNeedles = [rolloutPath, id].filter(Boolean);
+
+  if (exactNeedles.some((needle) => names.some((name) => name.includes(needle)))) {
+    return 'exact';
+  }
+
+  const cwd = lsofCwd(stdout);
+  if (cwd && (path.resolve(cwd) === normalizedThreadCwd || path.resolve(cwd) === resolvedThreadCwd)) {
+    return 'cwd';
+  }
+
+  return '';
+}
+
+function isRunningCodexCliThread(thread) {
+  return thread?.status === 'running'
+    || Number(thread?.currentTurnStartedAtMs || 0) > 0
+    || Number(thread?.currentTurnElapsedMs || 0) > 0;
+}
+
+async function findRunningCodexTerminalTty(thread, {
+  platform = process.platform,
+  runCommand = execFileAsync,
+} = {}) {
+  if (platform !== 'darwin') return '';
+
+  const { stdout } = await runCommand('ps', ['-axo', 'pid=,ppid=,tty=,command='], { timeout: 3000 });
+  const candidates = parsePsProcessRows(stdout)
+    .map((processRow) => ({
+      ...processRow,
+      tty: normalizeTerminalTty(processRow.tty),
+    }))
+    .filter((processRow) => processRow.tty && looksLikeCodexCliProcess(processRow.command));
+
+  if (!candidates.length) return '';
+
+  const normalizedThreadCwd = await realpathOrSelf(thread.cwd || '');
+  const cwdMatches = new Set();
+
+  for (const processRow of candidates) {
+    let lsofOutput = '';
+    try {
+      const lsofResult = await runCommand('lsof', ['-p', processRow.pid, '-Fn'], {
+        timeout: 3000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      lsofOutput = lsofResult.stdout || '';
+    } catch {
+      continue;
+    }
+
+    const match = lsofMatchesThread(lsofOutput, thread, normalizedThreadCwd);
+    if (match === 'exact') return processRow.tty;
+    if (match === 'cwd') cwdMatches.add(processRow.tty);
+  }
+
+  return cwdMatches.size === 1 ? [...cwdMatches][0] : '';
 }
 
 async function firstExistingPath(paths) {
@@ -203,10 +376,25 @@ export async function openThreadInCodexCli(thread, {
   }
 
   if (platform === 'darwin') {
-    await runCommand('osascript', [
-      '-e',
-      `tell application "Terminal" to do script "${appleScriptString(resumeCommand)}"`,
-    ]);
+    const existingTerminalTty = await findRunningCodexTerminalTty(thread, { platform, runCommand }).catch(() => '');
+    if (existingTerminalTty) {
+      await runCommand('osascript', terminalFocusScriptArgs(existingTerminalTty), { timeout: 5000 });
+      return {
+        opened: true,
+        method: 'codex-terminal-existing',
+        resumeCommand,
+      };
+    }
+
+    if (isRunningCodexCliThread(thread)) {
+      return {
+        opened: false,
+        method: 'copy-command',
+        resumeCommand,
+      };
+    }
+
+    await runCommand('osascript', terminalResumeScriptArgs(resumeCommand), { timeout: 5000 });
     return {
       opened: true,
       method: 'codex-terminal',
@@ -352,6 +540,10 @@ export function createServer({
   notificationScanIntervalMs = 20_000,
   dashboardCacheTtlMs = positiveInteger(process.env.DASHBOARD_CACHE_TTL_MS, DEFAULT_DASHBOARD_CACHE_TTL_MS),
   notificationCacheTtlMs = positiveInteger(process.env.NOTIFICATION_CACHE_TTL_MS, DEFAULT_NOTIFICATION_CACHE_TTL_MS),
+  pendingSummaryDashboardMaxAgeMs = positiveInteger(
+    process.env.PENDING_SUMMARY_DASHBOARD_MAX_AGE_MS,
+    DEFAULT_PENDING_SUMMARY_DASHBOARD_MAX_AGE_MS,
+  ),
   now = Date.now,
   openThread = openThreadInProvider,
   openInstalledApp = openInstalledPwaApp,
@@ -481,6 +673,21 @@ export function createServer({
     };
   };
 
+  const dashboardForPendingSummary = () => {
+    const cachedAtMs = Number(dashboardCache?.cachedAtMs || 0);
+    const cacheAgeMs = now() - cachedAtMs;
+    if (
+      dashboardCache?.dashboard
+      && cacheAgeMs >= 0
+      && cacheAgeMs <= pendingSummaryDashboardMaxAgeMs
+    ) {
+      serverMetrics.dashboardCacheHits += 1;
+      return Promise.resolve(dashboardCache.dashboard);
+    }
+
+    return loadSharedDashboard();
+  };
+
   const notificationsForDashboard = async (dashboard, { force = false } = {}) => {
     if (!notificationCenter) return null;
 
@@ -566,7 +773,7 @@ export function createServer({
       }
 
       try {
-        const dashboard = await dashboardForRequest();
+        const dashboard = await dashboardForPendingSummary();
         const notifications = notificationCenter
           ? await notificationsForDashboard(dashboard)
           : dashboard.notifications || {

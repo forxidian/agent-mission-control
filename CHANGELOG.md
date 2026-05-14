@@ -2,6 +2,50 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.3.1] - 2026-05-14
+
+### English
+
+#### Added
+
+- Added active Codex goal detection from local `thread_goals`, so long-running goal loops stay in the running Host count instead of falling into pending work.
+- Added smarter Codex CLI opening on macOS: running CLI threads focus an existing Terminal tab when it can be matched, and avoid spawning duplicate resume sessions when it cannot.
+- Added lightweight pending-summary polling so the dashboard can refresh stale pending and Host counts without forcing full scans on every interval.
+
+#### Changed
+
+- Unified in-app pending copy so hard pending work and soft progress use the same visible pending bucket, while preserving the underlying notification source labels.
+- Let `/api/pending-summary` reuse a recent dashboard snapshot to reduce repeated local filesystem scans from menu-bar and lightweight polling clients.
+- Added ignore coverage for local-only diagnostics and generated research reports to keep public GitHub syncs sanitized.
+
+#### Fixed
+
+- Fixed GPT quota aggregation by preferring the account-level Codex quota (`limit_id: codex`) over newer model-specific `codex_*` limits.
+- Suppressed stale soft-progress menu badges when the source thread has already continued or is running again.
+- Opened notification cards through the same source-task opener used by explicit open actions, marking the notification handled consistently.
+- Refreshed legacy soft-progress notification titles to the shorter release copy.
+
+### 中文
+
+#### 新增
+
+- 新增从本地 `thread_goals` 识别 Codex active goal 的能力，让长期运行的 goal 任务继续计入工作中的 Host，而不是落到待处理里。
+- 优化 macOS 上 Codex CLI 任务打开逻辑：能匹配到运行中的 Terminal 标签页时直接聚焦，匹配不到时避免重复新开 resume 终端。
+- 新增轻量 pending-summary 轮询，让看板可及时同步待处理和 Host 数量，而不必每次都触发全量扫描。
+
+#### 调整
+
+- 统一站内待处理口径：硬待处理和软性新进展都进入同一个可见待处理池，同时保留底层通知来源标签。
+- `/api/pending-summary` 可复用近期 dashboard 快照，减少菜单栏和轻量轮询客户端造成的本地文件扫描。
+- 增加本地诊断和生成型调研报告的忽略规则，降低公开同步到 GitHub 时误提交私密材料的风险。
+
+#### 修复
+
+- 修复 GPT quota 汇总选择错误：优先使用账户级 Codex quota（`limit_id: codex`），不再被更新的模型专用 `codex_*` 限额覆盖。
+- 当源线程已继续或重新运行时，菜单栏摘要会隐藏过期的软性新进展，避免出现幽灵角标。
+- 通知卡片现在走和显式打开按钮相同的源任务打开逻辑，并一致地标记通知已处理。
+- 旧版软性新进展通知标题会刷新为更短的发布版文案。
+
 ## [0.3.0] - 2026-05-14
 
 ### English

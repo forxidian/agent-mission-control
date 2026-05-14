@@ -13,7 +13,7 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /AGENT_MISSION_CONTROL_URL/);
   assert.match(script, /displayCount/);
   assert.match(script, /runningHostThreadCount/);
-  assert.match(script, /badgeCount/);
+  assert.match(script, /let badgeCount = summary\.displayCount \?\? summary\.hardPendingCount/);
   assert.match(script, /NSPopover/);
   assert.match(script, /PendingPopoverViewController/);
   assert.match(script, /mouseEntered\(with event: NSEvent\)/);
@@ -31,6 +31,8 @@ test('provides a native macOS menu bar pending-count helper', async () => {
   assert.match(script, /drawBadgeImage\(pendingCount: Int, hostCount: Int, connected: Bool\)/);
   assert.match(script, /drawSegmentCount\(_ count: Int/);
   assert.match(script, /drawDisconnectedBadgeImage\(\)/);
+  assert.doesNotMatch(script, /项新进展/);
+  assert.doesNotMatch(script, /项需处理/);
   assert.match(script, /button\?\.image = image/);
   assert.match(script, /compactCountTitle\(_ count: Int\)/);
   assert.match(script, /"9\\u\{0307\}"/);

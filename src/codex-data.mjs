@@ -97,40 +97,75 @@ function applySessionIndexTitles(rows, titleByThreadId) {
   }));
 }
 
-export async function readThreads({ databasePath = DEFAULT_STATE_DB, limit = 180 } = {}) {
-  const cappedLimit = safeLimit(limit);
-  const sql = `
+function readThreadsSql(cappedLimit, { includeGoals = true } = {}) {
+  const goalColumns = includeGoals ? `
+      tg.goal_id as goal_id,
+      tg.status as goal_status,
+      tg.token_budget as goal_token_budget,
+      tg.tokens_used as goal_tokens_used,
+      tg.time_used_seconds as goal_time_used_seconds,
+      tg.created_at_ms as goal_created_at_ms,
+      tg.updated_at_ms as goal_updated_at_ms` : `
+      null as goal_id,
+      null as goal_status,
+      null as goal_token_budget,
+      null as goal_tokens_used,
+      null as goal_time_used_seconds,
+      null as goal_created_at_ms,
+      null as goal_updated_at_ms`;
+  const goalJoin = includeGoals ? 'left join thread_goals tg on tg.thread_id = threads.id' : '';
+
+  return `
     select
-      id,
-      rollout_path,
-      created_at,
-      updated_at,
-      created_at_ms,
-      updated_at_ms,
-      source,
-      model_provider,
-      cwd,
-      title,
-      sandbox_policy,
-      approval_mode,
-      tokens_used,
-      archived,
-      git_sha,
-      git_branch,
-      git_origin_url,
-      cli_version,
-      first_user_message,
-      agent_nickname,
-      agent_role,
-      memory_mode,
-      model,
-      reasoning_effort
+      threads.id as id,
+      threads.rollout_path as rollout_path,
+      threads.created_at as created_at,
+      threads.updated_at as updated_at,
+      threads.created_at_ms as created_at_ms,
+      threads.updated_at_ms as updated_at_ms,
+      threads.source as source,
+      threads.model_provider as model_provider,
+      threads.cwd as cwd,
+      threads.title as title,
+      threads.sandbox_policy as sandbox_policy,
+      threads.approval_mode as approval_mode,
+      threads.tokens_used as tokens_used,
+      threads.archived as archived,
+      threads.git_sha as git_sha,
+      threads.git_branch as git_branch,
+      threads.git_origin_url as git_origin_url,
+      threads.cli_version as cli_version,
+      threads.first_user_message as first_user_message,
+      threads.agent_nickname as agent_nickname,
+      threads.agent_role as agent_role,
+      threads.memory_mode as memory_mode,
+      threads.model as model,
+      threads.reasoning_effort as reasoning_effort,
+      ${goalColumns}
     from threads
-    order by updated_at_ms desc, updated_at desc
+    ${goalJoin}
+    order by threads.updated_at_ms desc, threads.updated_at desc
     limit ${cappedLimit};
   `;
+}
 
-  return querySqliteJson(databasePath, sql);
+function isMissingThreadGoalsTable(error) {
+  const text = `${error?.stderr || ''}\n${error?.message || ''}`;
+  return text.includes('no such table: thread_goals');
+}
+
+export async function readThreads({ databasePath = DEFAULT_STATE_DB, limit = 180 } = {}) {
+  const cappedLimit = safeLimit(limit);
+  const sql = readThreadsSql(cappedLimit, { includeGoals: true });
+
+  try {
+    return await querySqliteJson(databasePath, sql);
+  } catch (error) {
+    if (isMissingThreadGoalsTable(error)) {
+      return querySqliteJson(databasePath, readThreadsSql(cappedLimit, { includeGoals: false }));
+    }
+    throw error;
+  }
 }
 
 function payloadText(payload) {
