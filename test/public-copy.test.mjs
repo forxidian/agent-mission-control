@@ -68,7 +68,7 @@ test('uses Chinese copy for visible system fields', async () => {
     '复制命令',
     '复制摘要',
     '交给另一个 Agent 评审',
-    '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。',
+    '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容，也不会直接修改源代码，请放心评审。',
     '评审输入',
     '最近一轮对话',
     '线程摘要和最近输出',
@@ -458,8 +458,10 @@ test('preserves selected review target options across detail rerenders', async (
   `, context);
 
   assert.match(context.options, /value="claude-code-cli" selected/);
-  assert.match(context.options, /Claude Code CLI · 可读 repo · 禁写工具/);
-  assert.match(context.options, /OpenCode CLI · 可读 repo · Prompt 禁写/);
+  assert.match(context.options, />\s*Claude Code CLI\s*</);
+  assert.match(context.options, />\s*OpenCode CLI\s*</);
+  assert.doesNotMatch(context.options, /可读 repo/);
+  assert.doesNotMatch(context.options, /只读沙盒|禁写工具|Prompt 禁写/);
   assert.doesNotMatch(context.options, /value="codex-cli" selected/);
 });
 
@@ -956,6 +958,8 @@ test('keeps review history visually separated from the selected detail pane', as
   assert.match(app, /选择左侧记录查看详情/);
   assert.match(app, /review-job-meta/);
   assert.match(styles, /\.review-form\s*\{[\s\S]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(styles, /\.review-field\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(36px,\s*auto\) 16px;/);
+  assert.match(styles, /\.review-field-helper\s*\{[\s\S]*min-height:\s*16px;/);
   assert.match(styles, /\.review-results-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px,\s*0\.75fr\)\s*minmax\(0,\s*1\.45fr\);/);
   assert.match(styles, /\.review-records-column\s*\{[\s\S]*overflow:\s*visible;/);
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*\.review-results-layout,[\s\S]*grid-template-columns:\s*1fr;/);
@@ -1164,6 +1168,192 @@ test('renders review detail empty state beside the history list when no job is s
   assert.match(context.html, /review-detail-column/);
   assert.match(context.html, /历史记录/);
   assert.match(context.html, /选择左侧记录查看详情/);
+});
+
+test('renders review panel loading state before target agents are loaded', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const capabilityStart = app.indexOf('function reviewTargetCapabilitySummary');
+  const capabilityEnd = app.indexOf('\nfunction buildReviewDebugSummary', capabilityStart);
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+
+  assert.notEqual(capabilityStart, -1);
+  assert.notEqual(capabilityEnd, -1);
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+
+  const context = {
+    html: '',
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: null,
+        isLoading: true,
+        selectedJobIdByThread: new Map(),
+        customInstructionByThread: new Map(),
+      },
+    },
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return null;
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    selectedReviewTargetProvider() {
+      return '';
+    },
+    selectedReviewTarget() {
+      return null;
+    },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
+    selectedReviewTemplate() {
+      return 'technical-review';
+    },
+    reviewTargetOptions() {
+      return '<option value="">正在检测目标 Agent</option>';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option>技术方案审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '<p class="empty-state compact">暂无评审记录。</p>';
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
+    },
+    renderReviewJobDetail() {
+      throw new Error('detail should not render without a selected job');
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(capabilityStart, capabilityEnd)}
+    ${app.slice(panelStart, panelEnd)}
+    html = renderReviewPanel({ id: 'thread-1' });
+  `, context);
+
+  assert.match(context.html, /正在读取评审输入/);
+  assert.match(context.html, /正在检测目标 Agent/);
+  assert.doesNotMatch(context.html, /能力未知/);
+});
+
+test('renders review target capability below the target select only', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTimestamp', escapeStart);
+  const optionsStart = app.indexOf('function reviewTargetOptions');
+  const capabilityStart = app.indexOf('function reviewTargetCapabilitySummary');
+  const capabilityEnd = app.indexOf('\nfunction buildReviewDebugSummary', capabilityStart);
+  const panelStart = app.indexOf('function renderReviewPanel');
+  const panelEnd = app.indexOf('\nfunction renderDetail', panelStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(escapeEnd, -1);
+  assert.notEqual(optionsStart, -1);
+  assert.notEqual(capabilityStart, -1);
+  assert.notEqual(capabilityEnd, -1);
+  assert.notEqual(panelStart, -1);
+  assert.notEqual(panelEnd, -1);
+
+  const context = {
+    html: '',
+    state: {
+      review: {
+        openThreadId: 'thread-1',
+        targets: {
+          items: [
+            { provider: 'codex-cli', label: 'Codex CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' } },
+            { provider: 'claude-code-cli', label: 'Claude Code CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'write-tools-denied' } },
+          ],
+        },
+        isLoading: false,
+        selectedJobIdByThread: new Map(),
+        targetProviderByThread: new Map([['thread-1', 'codex-cli']]),
+        customInstructionByThread: new Map(),
+      },
+    },
+    escapeHtml(value = '') {
+      return String(value);
+    },
+    selectedReviewInputMode() {
+      return 'latest-agent-signal';
+    },
+    reviewContentForThread() {
+      return { preview: '输入预览' };
+    },
+    reviewContentErrorForThread() {
+      return '';
+    },
+    reviewJobsForThread() {
+      return [];
+    },
+    selectedReviewTargetProvider() {
+      return 'codex-cli';
+    },
+    selectedReviewTarget() {
+      return { provider: 'codex-cli', label: 'Codex CLI', available: true, capabilities: { repoAccess: 'readonly', writeProtection: 'sandbox-readonly' } };
+    },
+    selectedReviewFixLoopFilter() {
+      return 'all';
+    },
+    selectedReviewTemplate() {
+      return 'technical-review';
+    },
+    reviewInputModeOptions() {
+      return '<option>最近 Agent 输出</option>';
+    },
+    reviewTemplateOptions() {
+      return '<option>技术方案审查</option>';
+    },
+    reviewInputPrivacyHint() {
+      return '隐私提示';
+    },
+    renderReviewJobs() {
+      return '<p class="empty-state compact">暂无评审记录。</p>';
+    },
+    reviewFixLoopFilterTabs() {
+      return '<button>全部</button>';
+    },
+    filterReviewJobsByFixLoop(jobs) {
+      return jobs;
+    },
+    renderReviewJobDetail() {
+      throw new Error('detail should not render without a selected job');
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(optionsStart, capabilityStart)}
+    ${app.slice(capabilityStart, capabilityEnd)}
+    ${app.slice(panelStart, panelEnd)}
+    html = renderReviewPanel({ id: 'thread-1' });
+  `, context);
+
+  assert.match(context.html, /<option value="codex-cli" selected>\s*Codex CLI\s*<\/option>/);
+  assert.match(context.html, /<small class="review-field-helper review-target-capability">可读 repo · 只读沙盒<\/small>/);
+  assert.equal(context.html.match(/<label class="review-field">/g)?.length, 4);
+  assert.equal(context.html.match(/class="review-field-helper/g)?.length, 4);
 });
 
 test('keeps auto refresh from rerendering while review form is focused', async () => {

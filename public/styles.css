@@ -1637,6 +1637,20 @@ h3 {
   min-width: 0;
 }
 
+.review-field {
+  grid-template-rows: auto minmax(36px, auto) 16px;
+  align-content: start;
+}
+
+.review-field-helper {
+  min-height: 16px;
+  color: var(--steel);
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .review-form label span,
 .review-preview span {
   color: var(--muted);
@@ -1644,14 +1658,6 @@ h3 {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-}
-
-.review-target-capability {
-  color: var(--steel);
-  font-family: Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
 }
 
 .review-form select,

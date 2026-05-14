@@ -1442,7 +1442,7 @@ function reviewInputPrivacyHint(mode) {
   if (mode === 'thread-summary') {
     return '线程摘要会发送标准线程字段和最近输出信号给目标 CLI Agent。';
   }
-  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容。';
+  return '评审只会发送当前预览里的最近 Agent 输出，不会读取完整内容，也不会直接修改源代码，请放心评审。';
 }
 
 function reviewTargetOptions(targets, selectedProvider = '') {
@@ -1452,7 +1452,7 @@ function reviewTargetOptions(targets, selectedProvider = '') {
 
   return items.map((target) => `
     <option value="${escapeHtml(target.provider)}"${target.provider === selected ? ' selected' : ''}${target.available ? '' : ' disabled'}>
-      ${escapeHtml(target.label || target.provider)} · ${escapeHtml(reviewTargetCapabilitySummary(target))}${target.available ? '' : '（不可用）'}
+      ${escapeHtml(target.label || target.provider)}${target.available ? '' : '（不可用）'}
     </option>
   `).join('');
 }
@@ -1463,14 +1463,15 @@ function selectedReviewTarget(threadId) {
 }
 
 function reviewTargetCapabilitySummary(target = {}) {
-  const repoAccess = target.capabilities?.repoAccess;
-  const writeProtection = target.capabilities?.writeProtection;
+  const capabilities = target?.capabilities || {};
+  const repoAccess = capabilities.repoAccess;
+  const writeProtection = capabilities.writeProtection;
 
   if (repoAccess === 'readonly' && writeProtection === 'sandbox-readonly') return '可读 repo · 只读沙盒';
   if (repoAccess === 'readonly' && writeProtection === 'write-tools-denied') return '可读 repo · 禁写工具';
   if (repoAccess === 'prompt-guarded') return '可读 repo · Prompt 禁写';
   if (repoAccess === 'text-only') return '仅文本评审';
-  return '能力未知';
+  return '';
 }
 
 function buildReviewDebugSummary(job) {
@@ -1653,6 +1654,11 @@ function renderReviewPanel(thread) {
   const selectedJob = visibleJobs.find((job) => job.id === selectedJobId) || null;
   const selectedTemplate = selectedReviewTemplate(thread.id);
   const customInstruction = state.review.customInstructionByThread.get(thread.id) || '';
+  const targetCapability = reviewTargetCapabilitySummary(target);
+  const emptyFieldHelper = '<small class="review-field-helper" aria-hidden="true">&nbsp;</small>';
+  const targetCapabilityHelper = targetCapability
+    ? `<small class="review-field-helper review-target-capability">${escapeHtml(targetCapability)}</small>`
+    : emptyFieldHelper;
 
   return `
     <section class="detail-section detail-section-wide review-panel" aria-labelledby="review-panel-heading">
@@ -1661,22 +1667,25 @@ function renderReviewPanel(thread) {
         <p>${escapeHtml(reviewInputPrivacyHint(inputMode))}</p>
       </div>
       <form class="review-form" data-review-form-thread-id="${escapeHtml(thread.id)}">
-        <label>
+        <label class="review-field">
           <span>评审输入</span>
           <select name="inputMode" data-review-input-mode-id="${escapeHtml(thread.id)}">${reviewInputModeOptions(inputMode, thread)}</select>
+          ${emptyFieldHelper}
         </label>
-        <label>
+        <label class="review-field">
           <span>目标 Agent</span>
           <select name="targetProvider" data-review-target-provider-id="${escapeHtml(thread.id)}"${targetReady ? '' : ' disabled'}>${targetOptions}</select>
-          <small class="review-target-capability">${escapeHtml(reviewTargetCapabilitySummary(target))}</small>
+          ${targetCapabilityHelper}
         </label>
-        <label>
+        <label class="review-field">
           <span>评审模板</span>
           <select name="templateId" data-review-template-id="${escapeHtml(thread.id)}">${reviewTemplateOptions(selectedTemplate)}</select>
+          ${emptyFieldHelper}
         </label>
-        <label>
+        <label class="review-field">
           <span>目标模型</span>
           <input name="targetModel" type="text" autocomplete="off" placeholder="可选，例如 sonnet">
+          ${emptyFieldHelper}
         </label>
         ${selectedTemplate === 'custom-review' ? `
           <label class="review-custom-instruction">
