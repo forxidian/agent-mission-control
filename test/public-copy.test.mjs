@@ -128,6 +128,66 @@ test('uses Chinese copy for visible system fields', async () => {
   }
 });
 
+test('renders success notices in a fixed toast region', async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+  const showStart = app.indexOf('function showStatus');
+  const showEnd = app.indexOf('\nasync function loadDashboard', showStart);
+
+  assert.notEqual(showStart, -1);
+  assert.notEqual(showEnd, -1);
+  assert.match(html, /id="status-toast"/);
+  assert.match(html, /class="status-toast"/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /aria-live="polite"/);
+  assert.match(styles, /\.status-toast\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.status-toast\s*\{[\s\S]*z-index:\s*80;/);
+
+  const context = {
+    timerCallback: null,
+    state: {
+      noticeTimer: null,
+    },
+    elements: {
+      statusBanner: {
+        hidden: true,
+        dataset: {},
+        textContent: '',
+      },
+      statusToast: {
+        hidden: true,
+        dataset: {},
+        textContent: '',
+      },
+    },
+    clearTimeout() {},
+    setTimeout(callback) {
+      globalThis.timerCallback = callback;
+      return 1;
+    },
+  };
+
+  globalThis.timerCallback = null;
+  try {
+    vm.runInNewContext(`
+      ${app.slice(showStart, showEnd)}
+      showNotice('已复制评审结果。下一步：粘贴到源线程或记录里继续处理。');
+    `, context);
+  } finally {
+    context.timerCallback = globalThis.timerCallback;
+    delete globalThis.timerCallback;
+  }
+
+  assert.equal(context.elements.statusToast.hidden, false);
+  assert.equal(context.elements.statusToast.dataset.tone, 'notice');
+  assert.equal(context.elements.statusToast.textContent, '已复制评审结果。下一步：粘贴到源线程或记录里继续处理。');
+  assert.equal(context.elements.statusBanner.hidden, false);
+  assert.equal(typeof context.timerCallback, 'function');
+});
+
 test('declares an installable PWA shell without caching local API payloads', async () => {
   const [html, app, styles, manifest, serviceWorker] = await Promise.all([
     readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
@@ -907,7 +967,57 @@ test('builds and wires copyable review debug summaries', async () => {
   assert.match(context.copied, /- 输入模式: latest-turn/);
   assert.match(context.copied, /- 目标: Claude Code CLI/);
   assert.match(context.copied, /- stderr: permission denied/);
-  assert.deepEqual(context.notices, ['已复制评审调试摘要。']);
+  assert.deepEqual(context.notices, ['已复制评审调试摘要。下一步：把它粘贴给当前线程，用来排查评审任务。']);
+});
+
+test('shows guided success notices for copied review results', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const helperStart = app.indexOf('function findReviewJob');
+  const helperEnd = app.indexOf('\nasync function openThread', helperStart);
+
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+
+  const context = {
+    copied: '',
+    notices: [],
+    state: {
+      review: {
+        jobsByThread: new Map([[
+          'thread-1',
+          [{
+            id: 'review-1',
+            resultText: '评审结果正文',
+          }],
+        ]]),
+      },
+    },
+    async copyText(value) {
+      globalThis.copied = value;
+    },
+    showNotice(message) {
+      globalThis.notices.push(message);
+    },
+    showError(message) {
+      throw new Error(message);
+    },
+  };
+
+  globalThis.copied = context.copied;
+  globalThis.notices = context.notices;
+  try {
+    await vm.runInNewContext(`
+      ${app.slice(helperStart, helperEnd)}
+      copyReviewResult('review-1');
+    `, context);
+    context.copied = globalThis.copied;
+  } finally {
+    delete globalThis.copied;
+    delete globalThis.notices;
+  }
+
+  assert.equal(context.copied, '评审结果正文');
+  assert.deepEqual(context.notices, ['已复制评审结果。下一步：粘贴到源线程或记录里继续处理。']);
 });
 
 test('renders review result details with safe fix loop actions', async () => {
@@ -966,6 +1076,7 @@ test('renders review result details with safe fix loop actions', async () => {
   assert.match(context.html, /修复状态/);
   assert.match(context.html, /已回源线程/);
   assert.match(context.html, /data-open-thread-id="thread-1"/);
+  assert.match(context.html, /data-open-thread-notice="[^"]*下一步：回到源线程继续处理评审意见。"/);
   assert.doesNotMatch(context.html, /stderr:/);
   assert.doesNotMatch(context.html, /OpenAI Codex/);
   assert.doesNotMatch(context.html, /private prompt text/);
@@ -1640,7 +1751,7 @@ test('copies a safe fix prompt from a completed review job', async () => {
   assert.equal(context.patch.reviewId, 'review-1');
   assert.equal(context.patch.patch.fixLoop.status, 'prompt-copied');
   assert.equal(context.patch.patch.fixLoop.promptCopiedAtMs, 123);
-  assert.deepEqual(context.notices, ['已复制修复 Prompt。']);
+  assert.deepEqual(context.notices, ['已复制修复 Prompt。下一步：打开源线程并粘贴执行。']);
 });
 
 test('copies a fix prompt and opens the source thread without overwriting the clipboard', async () => {
@@ -1715,6 +1826,7 @@ test('copies a fix prompt and opens the source thread without overwriting the cl
   assert.equal(context.patch.patch.fixLoop.sourceOpenedAtMs, 456);
   assert.equal(context.opened.threadId, 'thread-1');
   assert.equal(context.opened.options.copyResume, false);
+  assert.equal(context.opened.options.noticeMessage, '已复制修复 Prompt，正在打开源线程。下一步：粘贴 Prompt 开始修复。');
 });
 
 test('marks a review fix loop as applied or dismissed', async () => {
@@ -1727,10 +1839,10 @@ test('marks a review fix loop as applied or dismissed', async () => {
 
   const context = {
     notices: [],
-    patch: null,
+    patches: [],
     Date: { now: () => 789 },
     async updateReviewJobMetadata(reviewId, patch) {
-      globalThis.patch = { reviewId, patch };
+      globalThis.patches.push({ reviewId, patch });
       return { id: reviewId, source: { threadId: 'thread-1' }, fixLoop: patch.fixLoop };
     },
     showNotice(message) {
@@ -1742,22 +1854,29 @@ test('marks a review fix loop as applied or dismissed', async () => {
   };
 
   globalThis.notices = context.notices;
-  globalThis.patch = context.patch;
+  globalThis.patches = context.patches;
   try {
     await vm.runInNewContext(`
       ${app.slice(helperStart, helperEnd)}
       markReviewFixLoopStatus('review-1', 'applied');
+      markReviewFixLoopStatus('review-2', 'dismissed');
     `, context);
-    context.patch = globalThis.patch;
+    context.patches = globalThis.patches;
   } finally {
     delete globalThis.notices;
-    delete globalThis.patch;
+    delete globalThis.patches;
   }
 
-  assert.equal(context.patch.reviewId, 'review-1');
-  assert.equal(context.patch.patch.fixLoop.status, 'applied');
-  assert.equal(context.patch.patch.fixLoop.resolvedAtMs, 789);
-  assert.deepEqual(context.notices, ['已标记为已处理。']);
+  assert.equal(context.patches[0].reviewId, 'review-1');
+  assert.equal(context.patches[0].patch.fixLoop.status, 'applied');
+  assert.equal(context.patches[0].patch.fixLoop.resolvedAtMs, 789);
+  assert.equal(context.patches[1].reviewId, 'review-2');
+  assert.equal(context.patches[1].patch.fixLoop.status, 'dismissed');
+  assert.equal(context.patches[1].patch.fixLoop.resolvedAtMs, 789);
+  assert.deepEqual(context.notices, [
+    '已标记为已处理。下一步：继续处理其他待修复评审。',
+    '已标记为不采纳。下一步：继续查看其他评审记录。',
+  ]);
 });
 
 test('formats token totals with compact M and B units for consistent scanning', async () => {
