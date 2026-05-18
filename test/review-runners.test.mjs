@@ -31,6 +31,7 @@ test('codex runner calls codex exec with stdin prompt and read-only sandbox', as
     'read-only',
     '-c',
     'approval_policy="never"',
+    '--skip-git-repo-check',
     '-m',
     'gpt-5.5',
     '--output-last-message',
