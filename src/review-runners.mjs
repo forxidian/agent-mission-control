@@ -147,6 +147,7 @@ function codexArgs({ cwd, model, outputPath }) {
     'read-only',
     '-c',
     'approval_policy="never"',
+    '--skip-git-repo-check',
   ];
   if (model) args.push('-m', model);
   args.push('--output-last-message', outputPath, '-');

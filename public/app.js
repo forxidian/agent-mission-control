@@ -53,6 +53,7 @@ const elements = {
   refreshButton: document.querySelector('#refresh-button'),
   searchInput: document.querySelector('#search-input'),
   statusBanner: document.querySelector('#status-banner'),
+  statusToast: document.querySelector('#status-toast'),
   statusFilter: document.querySelector('#status-filter'),
   summary: document.querySelector('#summary'),
   threadCount: document.querySelector('#thread-count'),
@@ -1608,7 +1609,7 @@ function renderReviewJobDetail(job) {
         <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="applied"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记已处理</button>
         <button class="action-button secondary" type="button" data-review-fix-status-id="${escapeHtml(job.id)}" data-review-fix-status="dismissed"${job.resultText || job.resultPreview ? '' : ' disabled'}>标记不采纳</button>
         <button class="action-button secondary" type="button" data-copy-review-debug-id="${escapeHtml(job.id)}">复制调试摘要</button>
-        <button class="action-button secondary" type="button" data-open-thread-id="${escapeHtml(job.source?.threadId || '')}"${job.source?.threadId ? '' : ' disabled'}>打开源线程</button>
+        <button class="action-button secondary" type="button" data-open-thread-id="${escapeHtml(job.source?.threadId || '')}" data-open-thread-notice="正在打开源线程。下一步：回到源线程继续处理评审意见。"${job.source?.threadId ? '' : ' disabled'}>打开源线程</button>
       </div>
     </article>
   `;
@@ -2161,6 +2162,11 @@ function showStatus(message, tone) {
   elements.statusBanner.hidden = false;
   elements.statusBanner.dataset.tone = tone;
   elements.statusBanner.textContent = message;
+  if (elements.statusToast) {
+    elements.statusToast.hidden = false;
+    elements.statusToast.dataset.tone = tone;
+    elements.statusToast.textContent = message;
+  }
 }
 
 function showError(message) {
@@ -2183,6 +2189,11 @@ function clearError() {
   elements.statusBanner.hidden = true;
   elements.statusBanner.textContent = '';
   elements.statusBanner.dataset.tone = '';
+  if (elements.statusToast) {
+    elements.statusToast.hidden = true;
+    elements.statusToast.textContent = '';
+    elements.statusToast.dataset.tone = '';
+  }
 }
 
 async function loadDashboard({ silent = false, force = false } = {}) {
@@ -2587,7 +2598,7 @@ async function copyReviewResult(reviewId) {
 
   try {
     await copyText(job.resultText);
-    showNotice('已复制评审结果。');
+    showNotice('已复制评审结果。下一步：粘贴到源线程或记录里继续处理。');
   } catch {
     showError('无法写入剪贴板，请手动复制评审结果。');
   }
@@ -2602,7 +2613,7 @@ async function copyReviewDebugInfo(reviewId) {
 
   try {
     await copyText(buildReviewDebugSummary(job));
-    showNotice('已复制评审调试摘要。');
+    showNotice('已复制评审调试摘要。下一步：把它粘贴给当前线程，用来排查评审任务。');
   } catch {
     showError('无法写入剪贴板，请手动复制评审调试摘要。');
   }
@@ -2629,7 +2640,7 @@ async function copyReviewFixPrompt(reviewId) {
         promptCopiedAtMs: Date.now(),
       },
     });
-    showNotice('已复制修复 Prompt。');
+    showNotice('已复制修复 Prompt。下一步：打开源线程并粘贴执行。');
   } catch (error) {
     showError(`已复制修复 Prompt，但无法记录状态：${error.message}`);
   }
@@ -2658,7 +2669,7 @@ async function copyAndOpenReviewFix(reviewId, sourceButton) {
     });
     await openThread(job.source.threadId, sourceButton, {
       copyResume: false,
-      noticeMessage: '已复制修复 Prompt，正在打开源线程。',
+      noticeMessage: '已复制修复 Prompt，正在打开源线程。下一步：粘贴 Prompt 开始修复。',
     });
   } catch (error) {
     showError(`无法启动回源修复：${error.message}`);
@@ -2678,7 +2689,9 @@ async function markReviewFixLoopStatus(reviewId, status) {
         resolvedAtMs: Date.now(),
       },
     });
-    showNotice(status === 'applied' ? '已标记为已处理。' : '已标记为不采纳。');
+    showNotice(status === 'applied'
+      ? '已标记为已处理。下一步：继续处理其他待修复评审。'
+      : '已标记为不采纳。下一步：继续查看其他评审记录。');
   } catch (error) {
     showError(`无法更新修复状态：${error.message}`);
   }
@@ -2919,6 +2932,7 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     openThread(openTarget.dataset.openThreadId, openTarget, {
       notificationId: openTarget.dataset.openNotificationId || '',
+      noticeMessage: openTarget.dataset.openThreadNotice || '',
     });
     return;
   }
