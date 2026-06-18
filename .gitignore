@@ -28,6 +28,11 @@ pnpm-debug.log*
 docs/local-*.md
 docs/*-diagnosis-*.md
 docs/*-research.html
+docs/*-research-report.html
+docs/*-analysis-report.html
+docs/task-brief-*.md
+docs/superpowers/
+public/*-layout-lab.html
 
 # Certificates and keys.
 *.pem

@@ -2,6 +2,50 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.4.0] - 2026-06-18
+
+### English
+
+#### Added
+
+- Added a dedicated full-history search mode backed by a local SQLite FTS index, with ranked thread results, filters, paging, and project history.
+- Added Codex rollout-only history discovery so recent CLI or sidebar-missing Codex sessions can appear in search and open through `codex resume`.
+- Added Codex artifact extraction from rollout messages, including local file / URL summaries, image previews, artifact timelines, and local file opening.
+
+#### Changed
+
+- Raised the default Codex thread window to 5000 and kept search indexing off the normal dashboard refresh path.
+- Reworked the thread and search result rows around denser project, status, token, match, and artifact modules.
+- Changed the installed PWA window action from Dock minimization to app hiding, avoiding minimized thumbnail clutter.
+
+#### Fixed
+
+- Preserved stored / sidebar Codex titles unless the title is missing or still the placeholder.
+- Kept hidden Codex history threads openable through CLI resume when a browser deep link is not the right path.
+- Marked Codex automation threads even when the sidebar title hides the automation prefix.
+- Blocked cross-origin browser requests from using local artifact preview / open endpoints.
+
+### 中文
+
+#### 新增
+
+- 新增独立全历史搜索模式，使用本地 SQLite FTS 索引，支持相关性排序、筛选、分页和项目历史。
+- 新增 Codex rollout-only 历史发现，让近期 CLI 或未出现在侧边栏的 Codex 会话也能被搜索，并通过 `codex resume` 打开。
+- 新增 Codex artifact 抽取能力，可从 rollout 消息中展示本地文件 / URL 摘要、图片预览、artifact 时间线和本地文件打开入口。
+
+#### 调整
+
+- Codex 默认线程窗口提升到 5000，并让搜索索引构建独立于常规 dashboard 刷新路径。
+- 重做线程行和搜索结果行的信息结构，压缩展示项目、状态、token、匹配原因和 artifact 模块。
+- 已安装 PWA 的窗口操作从最小化改为隐藏，避免在 Dock 右侧留下最小化缩略图。
+
+#### 修复
+
+- 保留 Codex 已存储 / 侧边栏标题，只有标题缺失或仍为占位文案时才回退到 rollout 推断。
+- 对隐藏的 Codex 历史线程使用 CLI resume 打开，避免错误依赖浏览器 deep link。
+- 即使侧边栏标题隐藏了 automation 前缀，也能识别 Codex 自动化线程。
+- 阻止跨站浏览器请求调用本地 artifact 预览 / 打开接口。
+
 ## [0.3.1] - 2026-05-14
 
 ### English
@@ -108,7 +152,7 @@ All notable changes to Agent Mission Control are documented here.
 
 - Added running Host task group counts to the dashboard summary, top bar, and privacy-limited pending summary API.
 - Added a lightweight top-bar metric cluster for running Host tasks and hard pending work.
-- Added an installable Chrome / Edge PWA shell with manifest, icons, a service worker that avoids `/api/*` payloads, and local controls to open or minimize the installed dashboard app on macOS.
+- Added an installable Chrome / Edge PWA shell with manifest, icons, a service worker that avoids `/api/*` payloads, and local controls to open or hide the installed dashboard app on macOS without leaving a minimized Dock thumbnail.
 - Added grouped quota cards by LLM family, so GPT and Claude quota signals can be shown side by side without adding more summary cards.
 - Added Claude Desktop / Cowork quota extraction from the local Claude usage cache, mapped to the same realtime and weekly quota summary shape.
 - Added `claude://resume` deep links for Claude Desktop Code sessions when a valid CLI session id is available.
@@ -140,7 +184,7 @@ All notable changes to Agent Mission Control are documented here.
 
 - 在看板摘要、顶部栏和隐私受限的 pending summary API 中加入工作中的 Host 任务组数量。
 - 新增顶部关键指标区，用于快速查看工作中的 Host 任务和硬待处理数量。
-- 新增可安装的 Chrome / Edge PWA 壳子，包含 manifest、图标、不缓存 `/api/*` 的 service worker，以及 macOS 上打开或收起已安装控制台应用的本地接口。
+- 新增可安装的 Chrome / Edge PWA 壳子，包含 manifest、图标、不缓存 `/api/*` 的 service worker，以及 macOS 上打开或隐藏已安装控制台应用的本地接口，隐藏后不在 Dock 右侧留下最小化缩略图。
 - 新增按 LLM 家族分组的 quota 卡片，可在同一组摘要卡里并列展示 GPT、Claude 等 quota 信号。
 - 新增从本地 Claude usage cache 读取 Claude Desktop / Cowork 聚合 quota 的能力，并映射到统一的实时 / 本周 quota 结构。
 - 新增 Claude Desktop Code 的 `claude://resume` deep link 支持，可在存在有效 CLI session id 时直接恢复桌面会话。

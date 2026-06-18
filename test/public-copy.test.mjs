@@ -23,8 +23,9 @@ test('uses Chinese copy for visible system fields', async () => {
     '安装为应用',
     '打开应用',
     '打开桌面应用',
+    '隐藏',
+    '隐藏面板',
     '收起',
-    '收起到 Dock',
     '监控未启动',
     '关键指标',
     '搜索',
@@ -33,6 +34,7 @@ test('uses Chinese copy for visible system fields', async () => {
     '状态',
     '项目',
     '全部',
+    '显示 Sub Agent',
     '当前重点',
     '历史',
     '实时可用 quota',
@@ -54,9 +56,18 @@ test('uses Chinese copy for visible system fields', async () => {
     '温热',
     '空闲',
     '已归档',
-    '近期工作',
+    '最近线程',
+    '搜索历史',
+    '搜索线程',
+    '全量历史',
+    '打开搜索',
+    '返回看板',
+    '线程详情',
+    '关闭',
+    '继续向下滚动加载更多',
+    '已加载全部匹配线程',
     '用量',
-    '项目排行',
+    '项目历史',
     'token',
     'tokens',
     '最近活动',
@@ -93,6 +104,10 @@ test('uses Chinese copy for visible system fields', async () => {
   }
 
   assert.match(html, /id="auto-refresh" type="checkbox" checked/);
+  assert.match(html, /id="subagent-toggle" type="checkbox"/);
+  assert.doesNotMatch(html, /id="subagent-toggle" type="checkbox" checked/);
+  assert.match(html, /id="automation-toggle" type="checkbox"/);
+  assert.doesNotMatch(html, /id="automation-toggle" type="checkbox" checked/);
 
   assert.equal(publicCopy.includes('令牌'), false, 'token should not be translated as 令牌');
 
@@ -140,7 +155,7 @@ test('declares an installable PWA shell without caching local API payloads', asy
 
   assert.match(html, /rel="manifest" href="\/manifest\.webmanifest"/);
   assert.match(html, /id="app-install-button"/);
-  assert.match(html, /id="app-minimize-button"/);
+  assert.match(html, /id="app-hide-button"/);
   assert.match(app, /beforeinstallprompt/);
   assert.doesNotMatch(app, /beforeunload/);
   assert.match(app, /navigator\.serviceWorker\.register\('\/service-worker\.js'/);
@@ -148,13 +163,13 @@ test('declares an installable PWA shell without caching local API payloads', asy
   assert.match(app, /web\+agentmissioncontrol:open/);
   assert.match(app, /fetch\('\/api\/app\/installed'/);
   assert.match(app, /fetch\('\/api\/app\/open-installed', \{ method: 'POST' \}/);
-  assert.match(app, /fetch\('\/api\/app\/minimize-installed', \{ method: 'POST' \}/);
+  assert.match(app, /fetch\('\/api\/app\/hide-installed', \{ method: 'POST' \}/);
   assert.match(app, /window\.launchQueue\?\.setConsumer/);
   assert.match(styles, /\.pwa-install-button\s*\{/);
   assert.match(styles, /\.pwa-window-button\s*\{/);
-  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*position:\s*fixed;/);
-  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*left:\s*calc\(env\(titlebar-area-x,\s*0px\) \+ 74px\);/);
-  assert.match(styles, /\.pwa-minimize-button:not\(\[hidden\]\)\s*\{[\s\S]*backdrop-filter:\s*blur\(12px\);/);
+  assert.match(styles, /\.pwa-window-control-stack\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.pwa-window-control-stack\s*\{[\s\S]*left:\s*calc\(env\(titlebar-area-x,\s*0px\) \+ 74px\);/);
+  assert.match(styles, /\.pwa-floating-button:not\(\[hidden\]\)\s*\{[\s\S]*backdrop-filter:\s*blur\(12px\);/);
   assert.equal(manifestJson.name, 'Agent Mission Control');
   assert.equal(manifestJson.start_url, '/');
   assert.equal(manifestJson.scope, '/');
@@ -259,7 +274,7 @@ test('distinguishes sub-agent rows from host agent rows in the thread list', asy
   assert.match(app, /thread-kind-badge/);
   assert.match(app, /Host: \$\{host\}/);
   assert.match(app, /Host Agent · \$\{count\} 个 Sub Agent/);
-  assert.match(styles, /\.thread-row\.is-subagent\s*\{/);
+  assert.match(styles, /\.thread-row\.is-subagent,\s*\.search-result-row\.is-subagent\s*\{/);
   assert.match(styles, /\.thread-row\.is-subagent \.thread-main::before\s*\{/);
   assert.match(styles, /\.thread-kind-badge\s*\{/);
 });
@@ -293,6 +308,25 @@ test('renders grouped quota rows for multiple LLM families without adding extra 
   assert.match(styles, /\.summary-card-line-label\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
 });
 
+test('keeps the dashboard summary compact above the first-screen search entry', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function summaryStripItem/);
+  assert.match(app, /summary-section-compact/);
+  assert.match(app, /summary-meta-row/);
+  assert.match(app, /summary-lifetime-strip/);
+  assert.match(app, /summary-strip-items/);
+  assert.doesNotMatch(app, /summary-card-grid-lifetime/);
+  assert.match(styles, /\.summary-section-compact\s*\{[\s\S]*padding:\s*10px 12px 12px;/);
+  assert.match(styles, /\.summary-card\s*\{[\s\S]*min-height:\s*78px;/);
+  assert.match(styles, /\.summary-lifetime-strip,[\s\S]*\.provider-strip\s*\{[\s\S]*min-height:\s*58px;/);
+  assert.match(styles, /\.provider-list\s*\{[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(styles, /\.search-launcher\s*\{[\s\S]*min-height:\s*58px;/);
+});
+
 test('clamps long thread and notification titles in list views', async () => {
   const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
 
@@ -318,24 +352,75 @@ test('lets the desktop thread list fill the stretched left panel', async () => {
 
   assert.match(styles, /--work-panel-height:\s*min\(960px,\s*max\(640px,\s*calc\(100vh - 180px\)\)\);/);
   assert.doesNotMatch(styles, /\.layout\s*\{[^}]*align-items:\s*start;/);
+  assert.match(styles, /\.layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
   assert.match(styles, /\.thread-panel\s*\{[\s\S]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/);
   assert.match(styles, /\.thread-panel\s*\{[\s\S]*height:\s*var\(--work-panel-height\);/);
   assert.match(styles, /\.thread-list\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*auto;/);
-  assert.match(styles, /\.side-rail > \.panel\s*\{[\s\S]*max-height:\s*var\(--work-panel-height\);/);
+  assert.match(styles, /\.project-history-panel\s*\{[\s\S]*grid-template-rows:\s*auto auto;/);
   assert.match(styles, /\.project-list\s*\{[\s\S]*overflow:\s*auto;/);
 });
 
-test('prioritizes today token usage while retaining historical usage in thread rows', async () => {
+test('renders today and history token usage together in thread rows', async () => {
   const [app, styles] = await Promise.all([
     readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
   ]);
 
   assert.match(app, /function tokenUsageMarkup\(thread\)/);
-  assert.match(app, /<span class="token-label">今日<\/span>/);
-  assert.match(app, /<strong>\$\{escapeHtml\(formatTokens\(thread\.todayTokenUsage\)\)\}<\/strong>/);
-  assert.match(app, /历史 \$\{escapeHtml\(formatTokens\(thread\.tokensUsed\)\)\}/);
+  assert.match(app, /const todayTokens = Number\(thread\?\.todayTokenUsage \|\| 0\);/);
+  assert.match(app, /const historyTokens = Number\(thread\?\.tokensUsed \|\| 0\);/);
+  assert.match(app, /今日 \$\{escapeHtml\(formatTokens\(todayTokens\)\)\}/);
+  assert.match(app, /历史 \$\{escapeHtml\(formatTokens\(historyTokens\)\)\}/);
   assert.match(styles, /\.token-history/);
+});
+
+test('search controls only request hidden thread classes when their toggles are checked', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function searchParamsFromControls');
+  const end = app.indexOf('\nfunction mergeSearchResults', start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const context = {
+    result: '',
+    SEARCH_RESULT_LIMIT: 80,
+    URLSearchParams,
+    elements: {
+      providerFilter: { value: 'all' },
+      statusFilter: { value: 'all' },
+      projectFilter: { value: 'all' },
+      archiveToggle: { checked: false },
+      subagentToggle: { checked: false },
+      automationToggle: { checked: false },
+    },
+    currentSearchQuery() {
+      return '用户';
+    },
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    result = searchParamsFromControls().toString();
+  `, context);
+  assert.equal(context.result.includes('subagents=1'), false);
+  assert.equal(context.result.includes('automations=1'), false);
+
+  context.elements.subagentToggle.checked = true;
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    result = searchParamsFromControls().toString();
+  `, context);
+  assert.equal(context.result.includes('subagents=1'), true);
+  assert.equal(context.result.includes('automations=1'), false);
+
+  context.elements.automationToggle.checked = true;
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    result = searchParamsFromControls().toString();
+  `, context);
+  assert.equal(context.result.includes('subagents=1'), true);
+  assert.equal(context.result.includes('automations=1'), true);
 });
 
 test('keeps thread list row actions compact on smaller screens', async () => {
@@ -346,8 +431,8 @@ test('keeps thread list row actions compact on smaller screens', async () => {
   const listStart = app.indexOf('function renderThreads()');
   const listEnd = app.indexOf('function renderNotifications', listStart);
   const listSource = app.slice(listStart, listEnd);
-  const detailStart = app.indexOf('function renderDetail(');
-  const detailEnd = app.indexOf('function renderDashboard', detailStart);
+  const detailStart = app.indexOf('function threadDetailMarkup(');
+  const detailEnd = app.indexOf('function renderDetail(', detailStart);
   const detailSource = app.slice(detailStart, detailEnd);
 
   assert.notEqual(listStart, -1);
@@ -355,9 +440,738 @@ test('keeps thread list row actions compact on smaller screens', async () => {
   assert.doesNotMatch(listSource, /data-copy-command-id/);
   assert.match(detailSource, /data-copy-command-id/);
   assert.match(styles, /\.row-actions,[\s\S]*\.detail-actions\s*\{[\s\S]*flex-wrap:\s*wrap;/);
-  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.thread-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
-  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.controls > \.toggle\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.thread-row,[\s\S]*\.search-result-row\s*\{[\s\S]*grid-template-columns:\s*1fr;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.controls:not\(\.search-controls\) > \.toggle\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
+  assert.doesNotMatch(styles, /@media \(max-width: 1180px\)[\s\S]*\.search-controls > \.toggle\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.summary-section-heading\s*\{[\s\S]*flex-direction:\s*column;/);
+});
+
+test('places project history below the recent thread list before thread detail', async () => {
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+
+  const threadsIndex = html.indexOf('<section class="panel thread-panel"');
+  const projectsIndex = html.indexOf('<section class="panel project-history-panel"');
+  const detailIndex = html.indexOf('<section id="detail"');
+
+  assert.notEqual(threadsIndex, -1);
+  assert.notEqual(projectsIndex, -1);
+  assert.notEqual(detailIndex, -1);
+  assert.ok(threadsIndex < projectsIndex);
+  assert.ok(projectsIndex < detailIndex);
+  assert.doesNotMatch(html, /<aside class="side-rail">/);
+});
+
+test('renders recent thread rows with the same detail style as search results', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function threadMention\(thread/);
+  assert.match(app, /function threadProjectRailMarkup\(thread\)/);
+  assert.match(app, /function threadPrimaryModuleMarkup\(thread/);
+  assert.match(app, /function threadResultDetailMarkup\(thread/);
+  assert.match(app, /function threadSideMarkup\(thread/);
+  assert.match(app, /class="thread-mention"/);
+  assert.doesNotMatch(app, /class="thread-content-type"/);
+  assert.doesNotMatch(app, /class="thread-ide-name"/);
+  assert.match(app, /class="thread-side-provider"/);
+  assert.match(app, /class="thread-support-meta"/);
+  assert.match(app, /class="thread-result-stack"/);
+  assert.match(app, /class="thread-detail-button"/);
+  assert.match(app, /class="thread-result-detail"/);
+  assert.match(app, /class="thread-project-rail"/);
+  assert.match(app, /class="thread-status-inline"/);
+  const projectRailStart = app.indexOf('function threadProjectRailMarkup');
+  const projectRailEnd = app.indexOf('\nfunction threadMentionCandidates', projectRailStart);
+  const resultDetailStart = app.indexOf('function threadResultDetailMarkup');
+  const resultDetailEnd = app.indexOf('\nfunction threadPrimaryModuleMarkup', resultDetailStart);
+  assert.notEqual(projectRailStart, -1);
+  assert.notEqual(projectRailEnd, -1);
+  assert.notEqual(resultDetailStart, -1);
+  assert.notEqual(resultDetailEnd, -1);
+  const projectRailSource = app.slice(projectRailStart, projectRailEnd);
+  const resultDetailSource = app.slice(resultDetailStart, resultDetailEnd);
+  assert.match(projectRailSource, /class="thread-status-inline"/);
+  assert.match(projectRailSource, /statusMarkup\(thread\.status\)/);
+  assert.match(projectRailSource, /class="thread-project-label"/);
+  assert.doesNotMatch(resultDetailSource, /class="thread-status-inline"/);
+  assert.match(app, /class="thread-side"/);
+  assert.match(app, /class="thread-side-metrics"/);
+  assert.match(app, /class="thread-token-inline"/);
+  assert.match(app, /className: 'thread-main'[\s\S]*showMeta: false/);
+  assert.match(app, /\$\{threadResultDetailMarkup\(thread, \{ query, showMeta \}\)\}/);
+  assert.match(styles, /\.thread-row,\s*\.search-result-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(96px,\s*124px\) minmax\(0,\s*1fr\) minmax\(132px,\s*168px\) minmax\(236px,\s*300px\);/);
+  assert.match(styles, /\.thread-main,\s*\.search-result-main\s*\{[\s\S]*grid-template-columns:\s*minmax\(96px,\s*124px\) minmax\(0,\s*1fr\);/);
+  assert.match(styles, /\.thread-main,\s*\.search-result-main\s*\{[\s\S]*grid-column:\s*1 \/ span 3;/);
+  assert.match(styles, /\.thread-row\.has-artifacts \.thread-main,\s*\.search-result-row\.has-artifacts \.search-result-main\s*\{[\s\S]*grid-column:\s*1 \/ span 2;/);
+  assert.match(styles, /\.thread-result-detail\s*\{/);
+  assert.match(styles, /\.search-hit-line\s*\{/);
+  assert.match(styles, /\.thread-project-rail\s*\{[\s\S]*align-content:\s*start;/);
+  assert.match(styles, /\.thread-project-label\s*\{/);
+  assert.match(styles, /\.thread-side\s*\{[\s\S]*border-left:\s*1px solid var\(--line\);/);
+  assert.match(styles, /\.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
+  assert.match(styles, /\.thread-side-provider\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
+  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-width:\s*86px;[\s\S]*min-height:\s*54px;/);
+  assert.match(styles, /\.thread-mention\s*\{[\s\S]*-webkit-line-clamp:\s*2;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.thread-row\.has-artifacts \.thread-main,[\s\S]*\.search-result-row\.has-artifacts \.search-result-main[\s\S]*grid-column:\s*auto;/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.thread-side \.row-actions\s*\{[\s\S]*justify-content:\s*stretch;[\s\S]*width:\s*100%;/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.thread-side \.action-button\.primary\s*\{[\s\S]*width:\s*100%;[\s\S]*min-width:\s*0;/);
+});
+
+test('summarizes local file mentions by file name and type in previews', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const searchHelperStart = app.indexOf('function escapeRegExp');
+  const searchHelperEnd = app.indexOf('\nfunction hasActiveSearchQuery', searchHelperStart);
+  const mentionStart = app.indexOf('function threadMentionCandidates');
+  const mentionEnd = app.indexOf('\nfunction threadSupportMetaItems', mentionStart);
+  const searchPreviewStart = app.indexOf('function searchConversationPreview');
+  const searchPreviewEnd = app.indexOf('\nfunction searchResultExcerptMarkup', searchPreviewStart);
+  const compactStart = app.indexOf('function compactSignal');
+  const compactEnd = app.indexOf('\nfunction formatTimestamp', compactStart);
+  const recentStart = app.indexOf('function recentUserSignal');
+  const recentEnd = app.indexOf('\nfunction recentAgentSignal', recentStart);
+  const titleStart = app.indexOf('function displayThreadTitle');
+  const titleEnd = app.indexOf('\nfunction threadTitleMarkup', titleStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(searchHelperStart, -1);
+  assert.notEqual(mentionStart, -1);
+  assert.notEqual(searchPreviewStart, -1);
+  assert.notEqual(compactStart, -1);
+  assert.notEqual(recentStart, -1);
+  assert.notEqual(titleStart, -1);
+
+  const filePrompt = [
+    '# Files mentioned by the user:',
+    '',
+    '## codex-clipboard-2ae89a44-0864-46ad-af2d-7821167414ee.png: /var/folders/dc/14t88w9x19z0bq8hvb35slmr0000gq/T/codex-clipboard-2ae89a44-0864-46ad-af2d-7821167414ee.png',
+    '',
+    '## My request for Codex:',
+    '',
+    '这种输入是本地文件，或者图片的，你直接呈现一下名称+文件类型呀',
+  ].join('\n');
+  const thread = {
+    title: filePrompt,
+    latestUserMessage: filePrompt,
+    firstUserMessage: filePrompt,
+    lastAgentMessage: '已收到图片。',
+  };
+  const context = {
+    html: '',
+    title: '',
+    recent: '',
+    searchPreview: '',
+  };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(compactStart, compactEnd)}
+    ${app.slice(searchHelperStart, searchHelperEnd)}
+    ${app.slice(mentionStart, mentionEnd)}
+    ${app.slice(searchPreviewStart, searchPreviewEnd)}
+    ${app.slice(recentStart, recentEnd)}
+    ${app.slice(titleStart, titleEnd)}
+    const thread = ${JSON.stringify(thread)};
+    html = threadMentionMarkup(thread, '');
+    title = displayThreadTitle(thread);
+    recent = recentUserSignal(thread);
+    searchPreview = searchConversationPreview(thread, '');
+  `, context);
+
+  for (const rendered of [context.html, context.title, context.recent, context.searchPreview]) {
+    assert.match(rendered, /codex-clipboard-2ae89a44-0864-46ad-af2d-7821167414ee\.png/);
+    assert.match(rendered, /图片/);
+    assert.doesNotMatch(rendered, /Files mentioned by the user/);
+    assert.doesNotMatch(rendered, /\/var\/folders/);
+    assert.doesNotMatch(rendered, /My request for Codex/);
+  }
+});
+
+test('shows first user input before non-initial recalled chat in search previews', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const compactStart = app.indexOf('function compactSignal');
+  const compactEnd = app.indexOf('\nfunction formatTimestamp', compactStart);
+  const searchHelperStart = app.indexOf('function escapeRegExp');
+  const searchHelperEnd = app.indexOf('\nfunction hasActiveSearchQuery', searchHelperStart);
+  const previewStart = app.indexOf('function searchSpeakerForField');
+  const previewEnd = app.indexOf('\nfunction threadAttachmentSource', previewStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(compactStart, -1);
+  assert.notEqual(searchHelperStart, -1);
+  assert.notEqual(previewStart, -1);
+
+  const context = {
+    html: '',
+    segments: [],
+  };
+  const thread = {
+    firstUserMessage: '这是这个线程最开始的用户输入，用来理解业务背景。',
+    latestMeaningfulUserMessage: '后续聊天里提到了 TOY 战略框架，需要被搜索词召回。',
+    match: {
+      field: 'recent user',
+      label: '最近输入',
+      snippet: '后续聊天里提到了 TOY 战略框架，需要被搜索词召回。',
+    },
+  };
+
+  vm.runInNewContext(`
+    const state = { search: {} };
+    const elements = { searchInput: { value: '' } };
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(compactStart, compactEnd)}
+    ${app.slice(searchHelperStart, searchHelperEnd)}
+    ${app.slice(previewStart, previewEnd)}
+    const thread = ${JSON.stringify(thread)};
+    segments = searchConversationPreviewSegments(thread, 'TOY');
+    html = searchResultExcerptMarkup(thread, 'TOY');
+  `, context);
+
+  assert.equal(Array.from(context.segments, (segment) => segment.type).join('|'), 'text|separator|text');
+  assert.equal(Array.from(context.segments, (segment) => segment.speaker || '').join('|'), 'user||user');
+  assert.match(context.html, /这是这个线程最开始的用户输入/);
+  assert.match(context.html, /search-result-excerpt-separator/);
+  assert.match(context.html, />……<\/span>/);
+  assert.match(context.html, /search-result-speaker search-result-speaker-user/);
+  assert.match(context.html, /用户：/);
+  assert.match(context.html, /后续聊天里提到了 <mark>TOY<\/mark> 战略框架/);
+  assert.ok(
+    context.html.indexOf('这是这个线程最开始的用户输入')
+      < context.html.indexOf('search-result-excerpt-separator'),
+  );
+  assert.ok(
+    context.html.indexOf('search-result-excerpt-separator')
+      < context.html.indexOf('后续聊天里提到了'),
+  );
+});
+
+test('labels recalled user and agent chat with distinct speakers in search previews', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const compactStart = app.indexOf('function compactSignal');
+  const compactEnd = app.indexOf('\nfunction formatTimestamp', compactStart);
+  const searchHelperStart = app.indexOf('function escapeRegExp');
+  const searchHelperEnd = app.indexOf('\nfunction hasActiveSearchQuery', searchHelperStart);
+  const previewStart = app.indexOf('function searchSpeakerForField');
+  const previewEnd = app.indexOf('\nfunction threadAttachmentSource', previewStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(compactStart, -1);
+  assert.notEqual(searchHelperStart, -1);
+  assert.notEqual(previewStart, -1);
+
+  const context = {
+    html: '',
+    speakers: [],
+  };
+  const thread = {
+    firstUserMessage: '用户先描述了任务背景。',
+    lastAgentMessage: 'Agent 后来给出了 TOY 战略框架的整理结果。',
+    match: {
+      field: 'agent output',
+      label: 'Agent 输出',
+      snippet: 'Agent 后来给出了 TOY 战略框架的整理结果。',
+    },
+  };
+
+  vm.runInNewContext(`
+    const state = { search: {} };
+    const elements = { searchInput: { value: '' } };
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(compactStart, compactEnd)}
+    ${app.slice(searchHelperStart, searchHelperEnd)}
+    ${app.slice(previewStart, previewEnd)}
+    const thread = ${JSON.stringify(thread)};
+    speakers = searchConversationPreviewSegments(thread, 'TOY').map((segment) => segment.speaker || '');
+    html = searchResultExcerptMarkup(thread, 'TOY');
+  `, context);
+
+  assert.equal(Array.from(context.speakers).join('|'), 'user||agent');
+  assert.match(context.html, /用户：/);
+  assert.match(context.html, /Agent：/);
+  assert.match(context.html, />……<\/span>/);
+  assert.match(context.html, /search-result-speaker search-result-speaker-user/);
+  assert.match(context.html, /search-result-speaker search-result-speaker-agent/);
+  assert.ok(context.html.indexOf('用户：') < context.html.indexOf('Agent：'));
+  assert.match(styles, /\.search-result-speaker-user\s*\{[\s\S]*color:\s*var\(--blue\);/);
+  assert.match(styles, /\.search-result-speaker-agent\s*\{[\s\S]*color:\s*var\(--red\);/);
+});
+
+test('renders clickable image attachment thumbnails with an enlarge modal', async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const searchHelperStart = app.indexOf('function escapeRegExp');
+  const searchHelperEnd = app.indexOf('\nfunction hasActiveSearchQuery', searchHelperStart);
+  const attachmentStart = app.indexOf('function attachmentPreviewStripMarkup');
+  const attachmentEnd = app.indexOf('\nfunction formatTimestamp', attachmentStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(searchHelperStart, -1);
+  assert.notEqual(attachmentStart, -1);
+  assert.match(html, /id="image-preview-modal"/);
+  assert.match(html, /id="image-preview-image"/);
+  assert.match(html, /data-close-image-preview/);
+  assert.match(styles, /\.attachment-preview-strip\s*\{/);
+  assert.match(styles, /\.attachment-thumb-button\s*\{/);
+  assert.match(styles, /\.attachment-thumb-button img\s*\{/);
+  assert.match(styles, /\.attachment-thumb-button\.is-unavailable\s*\{/);
+  assert.match(styles, /\.image-preview-modal\s*\{/);
+  assert.match(styles, /\.image-preview-image\s*\{/);
+  assert.match(app, /function openImagePreview/);
+  assert.match(app, /function closeImagePreview/);
+  assert.match(app, /function markAttachmentPreviewUnavailable/);
+  assert.match(app, /data-preview-image-src/);
+  assert.match(app, /data-preview-image-thumb/);
+
+  const filePrompt = [
+    '# Files mentioned by the user:',
+    '',
+    '## codex-clipboard-8feab611-d697-434a-8126-3c6dc953052c.png: /var/folders/dc/14t88w9x19z0bq8hvb35slmr0000gq/T/codex-clipboard-8feab611-d697-434a-8126-3c6dc953052c.png',
+    '',
+    '## My request for Codex:',
+    '',
+    '你这里应该有缩略图，点击缩略图可以放大看原图',
+  ].join('\n');
+  const context = { rendered: '' };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(searchHelperStart, searchHelperEnd)}
+    ${app.slice(attachmentStart, attachmentEnd)}
+    rendered = attachmentPreviewStripMarkup(${JSON.stringify(filePrompt)});
+  `, context);
+
+  assert.match(context.rendered, /class="attachment-preview-strip"/);
+  assert.match(context.rendered, /class="attachment-thumb-button"/);
+  assert.match(context.rendered, /data-preview-image-src="\/api\/local-file-preview\?path=/);
+  assert.match(context.rendered, /data-preview-image-thumb/);
+  assert.match(context.rendered, /<img /);
+  assert.match(context.rendered, /codex-clipboard-8feab611-d697-434a-8126-3c6dc953052c\.png/);
+  assert.match(context.rendered, /查看原图/);
+  assert.doesNotMatch(context.rendered, /\/var\/folders/);
+});
+
+test('keeps search result image attachments compact', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  assert.match(styles, /\.thread-row,\s*\.search-result-row\s*\{[\s\S]*min-height:\s*var\(--thread-row-height\);/);
+  assert.match(styles, /\.thread-main,\s*\.search-result-main\s*\{[\s\S]*min-height:\s*var\(--thread-row-height\);/);
+  assert.match(styles, /\.thread-list\s*\{[\s\S]*grid-auto-rows:\s*max-content;/);
+  assert.match(styles, /\.search-result-row \.thread-side\s*\{[\s\S]*grid-column:\s*3;/);
+  assert.doesNotMatch(styles, /\.search-result-row\s*\{[\s\S]*?min-height:\s*182px;/);
+  assert.doesNotMatch(styles, /\.search-result-main\s*\{[\s\S]*?min-height:\s*182px;/);
+  assert.doesNotMatch(styles, /\.search-result-side\s*\{[\s\S]*?min-height:\s*182px;/);
+  assert.match(styles, /\.thread-result-stack\s*\{[\s\S]*align-content:\s*start;[\s\S]*align-self:\s*center;[\s\S]*gap:\s*9px;/);
+  assert.match(styles, /\.search-result-attachments\s*\{[\s\S]*padding:\s*0;/);
+  assert.match(styles, /\.search-result-title\s*\{[\s\S]*font-size:\s*20px;/);
+  assert.match(styles, /\.attachment-thumb-button\s*\{[\s\S]*min-height:\s*44px;/);
+  assert.match(styles, /\.attachment-thumb-button img\s*\{[\s\S]*width:\s*42px;/);
+  assert.match(styles, /\.attachment-thumb-button img\s*\{[\s\S]*height:\s*42px;/);
+  assert.match(styles, /\.thread-side\s*\{[\s\S]*gap:\s*18px;[\s\S]*padding:\s*14px 18px;/);
+  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-height:\s*54px;/);
+  assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.search-result-row\.has-artifacts \.thread-side[\s\S]*grid-column:\s*auto;/);
+});
+
+test('renders thread artifact posters without exposing raw local paths', async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const artifactStart = app.indexOf('function localFilePreviewUrl');
+  const artifactEnd = app.indexOf('\nfunction artifactOpenLabel', artifactStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(artifactStart, -1);
+  assert.match(html, /id="artifact-timeline-modal"/);
+  assert.match(html, /id="artifact-detail-modal"/);
+  assert.match(styles, /\.thread-artifact-module\s*\{/);
+  assert.match(styles, /\.artifact-poster-stack\s*\{/);
+  assert.match(styles, /\.artifact-timeline-modal\s*\{/);
+  assert.match(styles, /\.artifact-detail-modal\s*\{/);
+  assert.match(app, /function threadArtifactModuleMarkup\(thread/);
+  assert.match(app, /data-open-artifact-timeline-id/);
+  assert.match(app, /data-open-artifact-detail-id/);
+
+  const thread = {
+    id: 'thread-1',
+    artifacts: {
+      total: 2,
+      items: [
+        {
+          id: 'artifact-2',
+          type: 'html',
+          title: 'report.html',
+          path: '/Users/example/private/report.html',
+          atMs: 1777444508583,
+          source: 'agent',
+          turn: 1,
+        },
+        {
+          id: 'artifact-1',
+          type: 'image',
+          title: 'codex-clipboard-demo.png',
+          path: '/var/folders/private/codex-clipboard-demo.png',
+          atMs: 1777444408583,
+          source: 'user',
+          turn: 1,
+        },
+      ],
+    },
+  };
+  const context = { rendered: '' };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(artifactStart, artifactEnd)}
+    const thread = ${JSON.stringify(thread)};
+    rendered = threadArtifactModuleMarkup(thread);
+  `, context);
+
+  assert.match(context.rendered, /class="thread-artifact-module"/);
+  assert.match(context.rendered, /class="artifact-poster-stack"/);
+  assert.match(context.rendered, /data-open-artifact-timeline-id="thread-1"/);
+  assert.match(context.rendered, /artifact-type-icon is-html/);
+  assert.match(context.rendered, /artifact-type-icon is-image/);
+  assert.match(context.rendered, /report\.html/);
+  assert.match(context.rendered, /codex-clipboard-demo\.png/);
+  assert.doesNotMatch(context.rendered, /\/Users\/example\/private/);
+  assert.doesNotMatch(context.rendered, /\/var\/folders\/private/);
+});
+
+test('artifact timeline renders type-specific icons for media entries', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const artifactStart = app.indexOf('function localFilePreviewUrl');
+  const artifactEnd = app.indexOf('\nfunction renderArtifactTimelineModal', artifactStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(artifactStart, -1);
+
+  const items = [
+    { id: 'html-1', type: 'html', title: 'index.html', source: 'agent' },
+    { id: 'link-1', type: 'link', title: '127.0.0.1', url: 'http://127.0.0.1:4629', source: 'agent' },
+    { id: 'video-1', title: 'clip.mp4', path: '/Users/example/private/clip.mp4', source: 'user' },
+    { id: 'audio-1', title: 'voice.wav', path: '/Users/example/private/voice.wav', source: 'user' },
+  ];
+  const context = { rendered: '' };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(artifactStart, artifactEnd)}
+    const items = ${JSON.stringify(items)};
+    rendered = items.map((item) => artifactTimelineItemMarkup('thread-1', item)).join('');
+  `, context);
+
+  assert.match(context.rendered, /artifact-type-icon is-html/);
+  assert.match(context.rendered, /artifact-type-icon is-link/);
+  assert.match(context.rendered, /URL · Agent/);
+  assert.match(context.rendered, /artifact-type-icon is-video/);
+  assert.match(context.rendered, /artifact-type-icon is-audio/);
+  assert.doesNotMatch(context.rendered, /\/Users\/example\/private/);
+});
+
+test('artifact image previews fall back when local files disappear', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const artifactStart = app.indexOf('function localFilePreviewUrl');
+  const artifactEnd = app.indexOf('\nfunction artifactOpenLabel', artifactStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(artifactStart, -1);
+  assert.match(app, /function markArtifactImagePreviewUnavailable\(image\)/);
+  assert.match(app, /data-artifact-preview-image/);
+  assert.match(app, /data-artifact-preview-fallback/);
+  assert.match(app, /markArtifactImagePreviewUnavailable\(target\)/);
+  assert.match(styles, /\.artifact-timeline-thumb\.is-unavailable/);
+  assert.match(styles, /\.artifact-detail-preview\.is-unavailable/);
+
+  const item = {
+    id: 'artifact-1',
+    type: 'image',
+    title: 'missing.jpg',
+    path: '/Users/example/private/missing.jpg',
+    source: 'user',
+    turn: 4,
+  };
+  const context = { timeline: '', detail: '' };
+
+  vm.runInNewContext(`
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(artifactStart, artifactEnd)}
+    const item = ${JSON.stringify(item)};
+    timeline = artifactTimelineItemMarkup('thread-1', item);
+    detail = artifactDetailPreviewMarkup(item);
+  `, context);
+
+  assert.match(context.timeline, /data-artifact-preview-image/);
+  assert.match(context.timeline, /data-artifact-preview-fallback/);
+  assert.match(context.timeline, /artifact-type-icon is-image/);
+  assert.match(context.timeline, /JPG/);
+  assert.match(context.detail, /data-artifact-preview-image/);
+  assert.match(context.detail, /data-artifact-preview-fallback/);
+  assert.match(context.detail, /artifact-type-icon is-image/);
+  assert.match(context.detail, /JPG/);
+  assert.doesNotMatch(context.timeline, /\/Users\/example\/private/);
+  assert.doesNotMatch(context.detail, /\/Users\/example\/private/);
+});
+
+test('renders artifact module inside search result rows', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  const escapeStart = app.indexOf('function escapeHtml');
+  const escapeEnd = app.indexOf('\nfunction formatTokens', escapeStart);
+  const searchHelperStart = app.indexOf('function escapeRegExp');
+  const searchHelperEnd = app.indexOf('\nfunction hasActiveSearchQuery', searchHelperStart);
+  const previewStart = app.indexOf('function threadKindBadgesMarkup');
+  const previewEnd = app.indexOf('\nfunction threadMetaItems', previewStart);
+  const artifactStart = app.indexOf('function localFilePreviewUrl');
+  const artifactEnd = app.indexOf('\nfunction formatTimestamp', artifactStart);
+
+  assert.notEqual(escapeStart, -1);
+  assert.notEqual(searchHelperStart, -1);
+  assert.notEqual(previewStart, -1);
+  assert.notEqual(artifactStart, -1);
+
+  const thread = {
+    id: 'thread-1',
+    title: '带素材的搜索结果',
+    projectName: 'demo',
+    providerLabel: 'Codex',
+    model: 'gpt-5.5',
+    status: 'idle',
+    latestUserMessage: '请看这个结果',
+    artifacts: {
+      total: 2,
+      items: [
+        {
+          id: 'artifact-2',
+          type: 'html',
+          title: 'report.html',
+          path: '/Users/example/private/report.html',
+          source: 'agent',
+          turn: 2,
+        },
+        {
+          id: 'artifact-1',
+          type: 'image',
+          title: 'screen.png',
+          path: '/var/folders/private/screen.png',
+          source: 'user',
+          turn: 1,
+        },
+      ],
+    },
+  };
+  const context = { rendered: '' };
+
+  vm.runInNewContext(`
+    const state = { search: {} };
+    const elements = { searchInput: { value: '' } };
+    const STATUS_LABELS = { idle: '空闲' };
+    function providerLabel(thread) { return thread.providerLabel || 'Agent'; }
+    function canOpenThread() { return true; }
+    function openLabel() { return '打开'; }
+    function isSubagentThread() { return false; }
+    function statusMarkup(status) { return '<span class="status-pill">' + status + '</span>'; }
+    function tokenUsageMarkup() { return '<span class="thread-token-inline"></span>'; }
+    function searchResultMetaItems(thread) { return [thread.projectName, '6/17 12:00']; }
+    function displayThreadTitle(thread) { return thread.title || '未命名任务'; }
+    function compactSignal(value = '') { return String(value || '').replace(/\\s+/g, ' ').trim(); }
+    function attachmentPreviewStripMarkup() { return ''; }
+    function currentTurnDuration() { return ''; }
+    function threadRelationshipLabel() { return ''; }
+    function relativeTime() { return '58 分钟前'; }
+    ${app.slice(escapeStart, escapeEnd)}
+    ${app.slice(searchHelperStart, searchHelperEnd)}
+    ${app.slice(artifactStart, artifactEnd)}
+    ${app.slice(previewStart, previewEnd)}
+    const thread = ${JSON.stringify(thread)};
+    rendered = searchResultRowMarkup(thread, { query: '', isSelected: false });
+  `, context);
+
+  assert.match(context.rendered, /class="search-result-row[^"]*has-artifacts/);
+  assert.match(context.rendered, /class="search-result-main"/);
+  assert.match(context.rendered, /class="thread-project-rail"/);
+  assert.match(context.rendered, /class="thread-side"/);
+  assert.match(context.rendered, /class="thread-artifact-module"/);
+  assert.match(context.rendered, /data-open-artifact-timeline-id="thread-1"/);
+  assert.match(context.rendered, /report\.html/);
+  assert.match(context.rendered, /screen\.png/);
+  assert.doesNotMatch(context.rendered, /\/Users\/example\/private/);
+  assert.doesNotMatch(context.rendered, /\/var\/folders\/private/);
+});
+
+test('moves thread search into a dedicated full-width search page', async () => {
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+  const searchPageIndex = html.indexOf('<section id="search-page"');
+  const windowControlsIndex = html.indexOf('<div class="pwa-window-control-stack"');
+  const topbarIndex = html.indexOf('<header class="topbar">');
+  const hideButtonIndex = html.indexOf('id="app-hide-button"');
+  const returnButtonIndex = html.indexOf('id="close-search-page"');
+  const searchControlsIndex = html.indexOf('<section class="controls search-controls"');
+  const searchControlsSource = html.slice(searchControlsIndex, html.indexOf('</section>', searchControlsIndex));
+  const threadPanelIndex = html.indexOf('<section class="panel thread-panel"');
+  const defaultPanelSource = html.slice(threadPanelIndex, html.indexOf('<section class="panel project-history-panel"', threadPanelIndex));
+
+  assert.notEqual(searchPageIndex, -1);
+  assert.notEqual(windowControlsIndex, -1);
+  assert.notEqual(topbarIndex, -1);
+  assert.notEqual(hideButtonIndex, -1);
+  assert.notEqual(returnButtonIndex, -1);
+  assert.notEqual(searchControlsIndex, -1);
+  assert.notEqual(threadPanelIndex, -1);
+  assert.ok(windowControlsIndex < topbarIndex);
+  assert.ok(windowControlsIndex < hideButtonIndex);
+  assert.ok(hideButtonIndex < returnButtonIndex);
+  assert.ok(searchPageIndex < threadPanelIndex);
+  assert.doesNotMatch(defaultPanelSource, /id="search-input"/);
+  assert.doesNotMatch(searchControlsSource, /id="close-search-page"/);
+  assert.match(html, /id="open-search-page"/);
+  assert.match(html, /id="close-search-page"/);
+  assert.match(html, /id="search-load-sentinel"/);
+  assert.match(html, /id="search-detail-modal"/);
+  assert.match(html, /id="search-detail-content"/);
+  assert.match(html, /class="search-launcher"/);
+  assert.match(styles, /\[hidden\],[\s\S]*\.dashboard-view\[hidden\]\s*\{[\s\S]*display:\s*none !important;/);
+  assert.match(styles, /\.search-launcher\s*\{[\s\S]*min-height:\s*58px;/);
+  assert.match(styles, /\.search-field\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
+  assert.match(styles, /\.search-page\s*\{/);
+  assert.match(styles, /\.pwa-window-control-stack\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.pwa-window-control-stack\s*\{[\s\S]*left:\s*calc\(env\(titlebar-area-x,\s*0px\) \+ 74px\);/);
+  assert.match(styles, /\.pwa-window-control-stack\s*\{[\s\S]*z-index:\s*30;/);
+  assert.match(styles, /\.pwa-floating-button:not\(\[hidden\]\)\s*\{[\s\S]*border-radius:\s*999px;/);
+  assert.match(styles, /body\[data-view="search"\] \.topbar\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /body\[data-view="search"\] \.search-page\s*\{[\s\S]*margin-top:\s*0;/);
+  assert.match(styles, /body\[data-view="search"\] \.search-page-top\s*\{[\s\S]*position:\s*absolute;/);
+  assert.match(styles, /body\[data-view="search"\] \.search-panel-heading\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /body\[data-view="search"\] \.search-field > span\s*\{[\s\S]*clip-path:\s*inset\(50%\);/);
+  assert.match(styles, /\.search-return-button\s*\{[\s\S]*display:\s*none;/);
+  assert.match(styles, /body\[data-view="search"\] \.search-return-button\s*\{[\s\S]*display:\s*inline-flex;/);
+  assert.match(styles, /@media \(min-width: 721px\)[\s\S]*body\[data-view="search"\] \.search-field\s*\{[\s\S]*box-sizing:\s*border-box;/);
+  assert.match(styles, /@media \(min-width: 721px\)[\s\S]*body\[data-view="search"\] \.search-field\s*\{[\s\S]*padding-left:\s*max\(0px,/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*body\[data-view="search"\] \.search-page\s*\{[\s\S]*padding-top:\s*82px;/);
+  assert.match(styles, /\.search-panel\s*\{[\s\S]*overflow:\s*visible;/);
+  assert.match(styles, /\.search-result-list\s*\{[\s\S]*min-height:\s*0;/);
+  assert.match(styles, /\.search-load-sentinel\s*\{/);
+  assert.match(styles, /\.search-detail-modal\s*\{/);
+  assert.match(styles, /\.search-detail-sheet\s*\{/);
+  assert.match(styles, /\.search-controls input\[type="search"\]\s*\{[\s\S]*min-height:\s*62px;/);
+  assert.match(styles, /\.search-controls input\[type="search"\]\s*\{[\s\S]*font-size:\s*19px;/);
+  assert.match(styles, /\.search-controls\s*\{[\s\S]*grid-template-columns:\s*minmax\(148px,\s*0\.82fr\) minmax\(108px,\s*156px\) minmax\(180px,\s*1fr\) max-content max-content max-content;/);
+  assert.match(styles, /\.search-controls > \.toggle\s*\{[\s\S]*justify-self:\s*start;/);
+});
+
+test('uses dedicated search page state and API for history searches', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  assert.match(app, /search:\s*\{/);
+  assert.match(app, /function openSearchPage/);
+  assert.match(app, /function closeSearchPage/);
+  assert.match(app, /function setPageView/);
+  assert.match(app, /function focusSearchInputAtTop/);
+  assert.match(app, /focus\(\{ preventScroll: true \}\)/);
+  assert.match(app, /window\.scrollTo\(\{ top: Math\.max\(0, top\), behavior: 'auto' \}\)/);
+  assert.match(app, /async function runSearch/);
+  assert.match(app, /function loadMoreSearchResults/);
+  assert.match(app, /function openSearchDetailModal/);
+  assert.match(app, /function closeSearchDetailModal/);
+  assert.match(app, /fetch\(`\/api\/search\?\$\{params\.toString\(\)\}`/);
+  assert.match(app, /params\.set\('cursor', cursor\)/);
+  assert.match(app, /mergeSearchResults\(state\.search\.result, result\)/);
+  assert.match(app, /elements\.detail\.hidden = isSearch/);
+  assert.doesNotMatch(app.slice(app.indexOf('function renderSearchResults'), app.indexOf('function renderNotifications')), /renderDetail\(/);
+  assert.match(app, /function handleSearchControlsChanged/);
+  assert.match(app, /elements\.searchInput\.addEventListener\('input', handleSearchControlsChanged\)/);
+  assert.match(app, /window\.addEventListener\('scroll'/);
+  assert.match(app, /event\.key === 'Escape'/);
+});
+
+test('renders search result match metadata and project history', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function searchMatchMarkup\(thread, query/);
+  assert.match(app, /function searchConversationPreview\(thread, query/);
+  assert.match(app, /function searchSpeakerForField\(field/);
+  assert.match(app, /function searchTextSegment\(text, speaker/);
+  assert.match(app, /function searchConversationPreviewSegments\(thread, query/);
+  assert.match(app, /const firstUser = compactSignal\(thread\?\.firstUserMessage \|\| ''\);/);
+  assert.match(app, /if \(\['first user', 'recent user', 'agent output'\]\.includes\(matchField\) && thread\?\.match\?\.snippet\)/);
+  assert.match(app, /return \[searchTextSegment\(/);
+  assert.match(app, /function searchSpeakerLabel\(speaker/);
+  assert.match(app, /function searchSpeakerClass\(speaker/);
+  assert.match(app, /function searchResultExcerptMarkup\(thread/);
+  assert.match(app, /function searchResultSideMetaMarkup\(thread\)/);
+  assert.match(app, /function searchResultRowMarkup\(thread/);
+  assert.match(app, /function threadPrimaryModuleMarkup\(thread/);
+  assert.match(app, /class="search-result-excerpt"/);
+  assert.match(app, /class="search-result-excerpt-line"/);
+  assert.match(app, /class="search-result-speaker \$\{searchSpeakerClass\(segment\.speaker\)\}"/);
+  assert.match(app, /class="search-result-message"/);
+  assert.match(app, /class="search-result-excerpt-separator"/);
+  assert.match(app, /class="thread-project-rail"/);
+  assert.match(app, /class="thread-side"/);
+  assert.match(app, /class="thread-detail-button"/);
+  assert.match(app, /class="search-result-row/);
+  assert.match(app, /class="search-hit-line"/);
+  assert.match(app, /searchResultMetaItems\(thread\)\.map\(.*\)\.join\('<span aria-hidden="true">\\|<\/span>'\)/s);
+  assert.match(app, /async function loadProjectHistory/);
+  assert.match(app, /fetch\(`\/api\/projects\/history\?\$\{params\.toString\(\)\}`/);
+  assert.match(app, /renderProjectHistory\(state\.search\.projectHistory/);
+  assert.match(styles, /\.thread-row,\s*\.search-result-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(96px,\s*124px\) minmax\(0,\s*1fr\) minmax\(132px,\s*168px\) minmax\(236px,\s*300px\);/);
+  assert.match(styles, /\.thread-row\.has-artifacts \.thread-main,\s*\.search-result-row\.has-artifacts \.search-result-main\s*\{[\s\S]*grid-column:\s*1 \/ span 2;/);
+  assert.match(styles, /\.search-result-excerpt\s*\{[\s\S]*min-height:\s*0;/);
+  assert.match(styles, /\.search-result-excerpt\s*\{[\s\S]*max-height:\s*calc\(1\.45em \* 5 \+ 16px\);/);
+  assert.match(styles, /\.search-result-speaker-user\s*\{[\s\S]*color:\s*var\(--blue\);/);
+  assert.match(styles, /\.search-result-speaker-agent\s*\{[\s\S]*color:\s*var\(--red\);/);
+  assert.match(styles, /\.search-result-excerpt-line:only-child \.search-result-message\s*\{[\s\S]*-webkit-line-clamp:\s*3;/);
+  assert.match(styles, /\.search-result-excerpt-separator\s*\{/);
+  assert.match(styles, /\.search-result-row \.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
+  assert.match(styles, /\.search-result-row\.has-artifacts \.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
+  assert.match(styles, /\.project-history-summary/);
+});
+
+test('lets project history rows expand to fit metadata and usage bars', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const projectListBlock = [...styles.matchAll(/(?:^|\n)\.project-list\s*\{(?<body>[^}]*)\}/g)]
+    .map((match) => match.groups?.body || '')
+    .join('\n');
+
+  assert.match(projectListBlock, /align-content:\s*start;/);
+  assert.match(projectListBlock, /grid-auto-rows:\s*max-content;/);
 });
 
 test('opens thread deep links without waiting for the local server round trip', async () => {
@@ -377,6 +1191,53 @@ test('opens thread deep links without waiting for the local server round trip', 
     openThreadSource.indexOf('window.location.href = thread.appDeepLink') < openThreadSource.indexOf('fetch(`/api/threads/'),
     'Codex deep link path should run before the server opener fallback',
   );
+});
+
+test('opens Codex deep links even when a thread is missing from the sidebar index', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function shouldOpenDeepLinkInBrowser');
+  const end = app.indexOf('\nfunction disableButtonBriefly', start);
+  const context = { results: [] };
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    results = [
+      shouldOpenDeepLinkInBrowser({
+        provider: 'codex',
+        defaultOpenMode: 'codex-cli-resume',
+        appDeepLink: 'codex://threads/019ed427-0796-7d22-9eed-943079ff6b8e',
+      }),
+      shouldOpenDeepLinkInBrowser({
+        provider: 'opencode',
+        appDeepLink: 'opencode://open-project?directory=/tmp/demo',
+      }),
+    ];
+  `, context);
+
+  assert.deepEqual(Array.from(context.results), [true, false]);
+});
+
+test('uses clear visible labels for thread open actions', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function openLabel');
+  const end = app.indexOf('\nfunction canOpenThread', start);
+  const context = { labels: [] };
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(app, /function openLabel\(thread\)/);
+  assert.match(app, /data-open-thread-id="\$\{escapeHtml\(thread\.id\)\}"\$\{openDisabled\}>\$\{escapeHtml\(openLabel\(thread\)\)\}<\/button>/);
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    labels = [
+      openLabel({ openLabel: '恢复' }),
+      openLabel({ openLabel: '打开会话' }),
+      openLabel({}),
+    ];
+  `, context);
+  assert.deepEqual(Array.from(context.labels), ['打开', '打开会话', '打开']);
 });
 
 test('opens notification cards through the same source task opener', async () => {

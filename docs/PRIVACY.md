@@ -11,8 +11,13 @@ What it reads:
   `~/Library/Application Support/Claude`
 - Claude Desktop's local Chromium cache entry for the Claude usage endpoint,
   used only to read aggregate rate-limit percentages and reset times
+- Local file and URL references mentioned in Codex rollout messages, used to
+  summarize artifacts for the dashboard and search results
+- Local raster image files only when you explicitly preview an artifact image
 - Its own notification state under `~/.agent-mission-control`
 - Its own review job state under `~/.agent-mission-control/reviews.jsonl`
+- Its own local search index under
+  `~/.agent-mission-control/search-index.sqlite`
 
 What it may display locally:
 
@@ -20,6 +25,8 @@ What it may display locally:
   usage, quota samples, and recent user/final-message signals needed for the
   dashboard
 - Pending permission or review signals
+- Artifact titles, local paths, URLs, file types, image previews, and artifact
+  timelines extracted from local Codex rollout messages
 - Review job status, source/target Agent metadata, selected input preview,
   stderr snippets, and truncated review results stored locally in
   `~/.agent-mission-control/reviews.jsonl`
@@ -48,6 +55,8 @@ Review workflow:
   The app does not guess private provider cache locations for this mode.
 - Review job metadata and results are stored only in Agent Mission Control's
   own local state file: `~/.agent-mission-control/reviews.jsonl`.
+- Search metadata is stored only in Agent Mission Control's local SQLite index:
+  `~/.agent-mission-control/search-index.sqlite`.
 - The review debug summary is generated from stored job metadata such as job
   id, source, target, input mode, status, error, and stderr. It does not include
   the full prompt or full review result.
@@ -64,6 +73,7 @@ What it avoids:
 - Writing to Codex, OpenCode, or Claude state
 - Publishing data externally
 - Caching dashboard API payloads in the PWA service worker
+- Caching local image previews or search API payloads in the PWA service worker
 - Sending desktop/system notifications in the public release
 
 Keep `HOST` at the default `127.0.0.1` unless you fully understand the privacy

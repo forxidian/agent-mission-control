@@ -1,14 +1,167 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import {
+  applySessionIndexTitles,
   deriveCodexThreadTitle,
+  loadCodexDashboard,
+  parseRolloutArtifacts,
   parseSessionIndex,
   parseRolloutSignals,
+  readThreads,
   readRolloutSignals,
 } from '../src/codex-data.mjs';
+
+const execFileAsync = promisify(execFile);
+
+async function createCodexStateDb(rowCount) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-codex-state-'));
+  const databasePath = path.join(dir, 'state.sqlite');
+  const rows = Array.from({ length: rowCount }, (_, index) => {
+    const number = index + 1;
+    const timestamp = 1_800_000_000_000 - index;
+    return `(
+      'thread-${number}',
+      '/tmp/rollout-${number}.jsonl',
+      ${Math.floor(timestamp / 1000)},
+      ${Math.floor(timestamp / 1000)},
+      'vscode',
+      'openai',
+      '/tmp/project',
+      'Thread ${number}',
+      'workspace-write',
+      'never',
+      ${number},
+      0,
+      '',
+      '',
+      '',
+      '0.0.0',
+      '',
+      null,
+      null,
+      'enabled',
+      'gpt-5.5',
+      '',
+      ${timestamp},
+      ${timestamp}
+    )`;
+  }).join(',');
+
+  const insertSql = rows ? `
+    insert into threads (
+      id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+      sandbox_policy, approval_mode, tokens_used, archived, git_sha, git_branch,
+      git_origin_url, cli_version, first_user_message, agent_nickname, agent_role,
+      memory_mode, model, reasoning_effort, created_at_ms, updated_at_ms
+    ) values ${rows};
+  ` : '';
+
+  const sql = `
+    create table threads (
+      id text primary key,
+      rollout_path text not null,
+      created_at integer not null,
+      updated_at integer not null,
+      source text not null,
+      model_provider text not null,
+      cwd text not null,
+      title text not null,
+      sandbox_policy text not null,
+      approval_mode text not null,
+      tokens_used integer not null default 0,
+      archived integer not null default 0,
+      git_sha text,
+      git_branch text,
+      git_origin_url text,
+      cli_version text not null default '',
+      first_user_message text not null default '',
+      agent_nickname text,
+      agent_role text,
+      memory_mode text not null default 'enabled',
+      model text,
+      reasoning_effort text,
+      created_at_ms integer,
+      updated_at_ms integer
+    );
+    ${insertSql}
+  `;
+  await execFileAsync('sqlite3', [databasePath, sql]);
+
+  return databasePath;
+}
+
+async function createEmptyCodexStateDb() {
+  return createCodexStateDb(0);
+}
+
+test('reads the full Codex thread window by default for the dashboard', async () => {
+  const databasePath = await createCodexStateDb(181);
+
+  const rows = await readThreads({ databasePath });
+
+  assert.equal(rows.length, 181);
+});
+
+test('indexes recent Codex rollout sessions before sqlite registers the thread', async (t) => {
+  const databasePath = await createEmptyCodexStateDb();
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-sessions-'));
+  const sessionIndexPath = path.join(sessionsDir, 'missing-session-index.jsonl');
+  const rolloutDir = path.join(sessionsDir, '2026', '06', '16');
+  const threadId = '019ecefe-3206-7f51-816b-79b2a0f56c4e';
+  const rolloutPath = path.join(rolloutDir, `rollout-2026-06-16T13-53-46-${threadId}.jsonl`);
+  t.after(() => fs.rm(sessionsDir, { recursive: true, force: true }));
+
+  await fs.mkdir(rolloutDir, { recursive: true });
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({
+      timestamp: '2026-06-16T05:54:08.063Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        cwd: '/Users/example/Agent Loop进化',
+        source: 'vscode',
+        model_provider: 'openai',
+        cli_version: '0.0.0-test',
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-16T05:54:08.211Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: '这块布局简化合并一下，把空间让出来一些，让底下的搜索框能恰好出现在第一屏。',
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-16T06:01:37.677Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: '已改好。', phase: 'final_answer' },
+    }),
+  ].join('\n'));
+
+  const dashboard = await loadCodexDashboard({
+    databasePath,
+    sessionsDir,
+    sessionIndexPath,
+    maxOrphanRollouts: 20,
+    maxRollouts: 20,
+    nowMs: Date.parse('2026-06-16T06:05:00.000Z'),
+  });
+  const thread = dashboard.threads.find((item) => item.id === threadId);
+
+  assert.ok(thread);
+  assert.equal(thread.title, '这块布局简化合并一下，把空间让出来一些，让底下的搜索框能恰好出现在第一屏。');
+  assert.equal(thread.cwd, '/Users/example/Agent Loop进化');
+  assert.equal(thread.rolloutPath, rolloutPath);
+  assert.equal(thread.latestMeaningfulUserMessage, '这块布局简化合并一下，把空间让出来一些，让底下的搜索框能恰好出现在第一屏。');
+  assert.equal(thread.inCodexSidebar, false);
+  assert.equal(thread.defaultOpenMode, 'codex-cli-resume');
+});
 
 test('parses latest token-count and rate-limit signals from rollout jsonl', () => {
   const jsonl = [
@@ -52,6 +205,85 @@ test('parses latest token-count and rate-limit signals from rollout jsonl', () =
   assert.equal(signals.completionHint, true);
   assert.equal(signals.latestAgentFinalAtMs, 1777444508583);
   assert.equal(signals.latestMessageKind, 'agent');
+});
+
+test('extracts Codex thread artifacts across user and agent turns', () => {
+  const imagePath = '/var/folders/tmp/codex-clipboard-demo.png';
+  const htmlPath = '/Users/example/project/report.html';
+  const mdPath = '/Users/example/project/notes.md';
+  const jsonl = [
+    JSON.stringify({
+      timestamp: '2026-06-17T08:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: [
+          '# Files mentioned by the user:',
+          '',
+          `## codex-clipboard-demo.png: ${imagePath}`,
+          '',
+          '## My request for Codex:',
+          '',
+          '看一下这张图。',
+        ].join('\n'),
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-17T08:01:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'agent_message',
+        message: `已生成 HTML 报告：${htmlPath}\n补充说明在 ${mdPath}\n预览链接：https://example.com/report.html`,
+        phase: 'final_answer',
+      },
+    }),
+    JSON.stringify({
+      timestamp: '2026-06-17T08:03:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: '再参考 https://github.com/forxidian/agent-mission-control',
+      },
+    }),
+  ].join('\n');
+
+  const artifacts = parseRolloutArtifacts(jsonl);
+  const signals = parseRolloutSignals(jsonl);
+
+  assert.equal(artifacts.total, 5);
+  assert.equal(artifacts.turns.length, 2);
+  assert.deepEqual(artifacts.turns.map((turn) => turn.turn), [2, 1]);
+  assert.deepEqual(artifacts.items.map((item) => item.type), ['link', 'link', 'markdown', 'html', 'image']);
+  assert.equal(artifacts.items.find((item) => item.type === 'image').path, imagePath);
+  assert.equal(artifacts.items.find((item) => item.type === 'html' && item.path).path, htmlPath);
+  assert.equal(artifacts.items.find((item) => item.type === 'markdown').path, mdPath);
+  assert.equal(artifacts.items.find((item) => item.type === 'link').url, 'https://github.com/forxidian/agent-mission-control');
+  assert.equal(signals.artifacts.total, 5);
+  assert.equal(signals.artifacts.items.length, 3);
+  assert.equal(signals.artifacts.items[0].type, 'link');
+});
+
+test('extracts clean artifact URLs from Markdown links whose label is the URL', () => {
+  const url = 'https://www.bilibili.com/toy/toy-patent-disclosures/index.html';
+  const jsonl = [
+    JSON.stringify({
+      timestamp: '2026-06-17T08:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'agent_message',
+        message: `预览链接：[${url}](${url})`,
+        phase: 'final_answer',
+      },
+    }),
+  ].join('\n');
+
+  const artifacts = parseRolloutArtifacts(jsonl);
+
+  assert.equal(artifacts.total, 1);
+  assert.equal(artifacts.items[0].url, url);
+  assert.equal(artifacts.items[0].title, 'index.html');
+  assert.equal(artifacts.items[0].type, 'link');
+  assert.equal(artifacts.items[0].typeLabel, 'URL');
 });
 
 test('sums today token usage from token-count events without duplicate limit rows', () => {
@@ -311,13 +543,11 @@ test('tracks meaningful user text for stale long Codex titles', () => {
   assert.equal(signals.latestMeaningfulUserMessage, '但我已经有80份，成本0.9760的底仓');
 });
 
-test('uses rollout user context when the stored Codex title is a stale long prompt', () => {
-  const longStoredTitle = '我一个信得过的朋友给我分享了一个他最近在做的套利的交易系统，然后我也想进行复刻尝试。'.repeat(3);
-
+test('uses rollout user context only when the stored Codex title is missing or placeholder', () => {
   assert.equal(
-    deriveCodexThreadTitle(longStoredTitle, {
+    deriveCodexThreadTitle('未命名任务', {
       latestMeaningfulUserMessage: '回执部分：重复信息不需要每次都发，发一次就行了',
-      firstUserMessage: longStoredTitle,
+      firstUserMessage: '我一个信得过的朋友给我分享了一个他最近在做的套利的交易系统。',
     }),
     '回执部分：重复信息不需要每次都发，发一次就行了',
   );
@@ -327,6 +557,24 @@ test('uses rollout user context when the stored Codex title is a stale long prom
       latestMeaningfulUserMessage: '这个不应该覆盖短标题',
     }),
     '管理多 Agent 线程',
+  );
+});
+
+test('preserves stored Codex thread titles instead of replacing them with recent user text', () => {
+  const storedThreadName = [
+    'https://x.com/i/status/2065005648060797155',
+    '',
+    '调研一下，生成高辨识度，易用理解的网页报告',
+  ].join('\n');
+  const displayThreadName = 'https://x.com/i/status/2065005648060797155 调研一下，生成高辨识度，易用理解的网页报告';
+
+  assert.equal(
+    deriveCodexThreadTitle(storedThreadName, {
+      latestMeaningfulUserMessage: 'OK，发布toy',
+      latestUserMessage: '发布',
+      firstUserMessage: 'OK，发布toy',
+    }),
+    displayThreadName,
   );
 });
 
@@ -343,6 +591,20 @@ test('parses Codex session index titles used by the sidebar', () => {
 
   assert.equal(index.get('019e07e7-192c-7941-b639-8d58d2e86b3a'), '调研 /goal 新命令');
   assert.equal(index.has('empty'), false);
+});
+
+test('marks threads missing from the Codex sidebar index', () => {
+  const rows = applySessionIndexTitles([
+    { id: 'visible-thread', title: 'Stored title' },
+    { id: 'hidden-thread', title: 'Old title' },
+  ], new Map([
+    ['visible-thread', 'Sidebar title'],
+  ]));
+
+  assert.equal(rows[0].thread_name, 'Sidebar title');
+  assert.equal(rows[0].in_codex_sidebar, true);
+  assert.equal(rows[1].thread_name, undefined);
+  assert.equal(rows[1].in_codex_sidebar, false);
 });
 
 test('keeps a thread in progress when commentary follows the latest user message', () => {

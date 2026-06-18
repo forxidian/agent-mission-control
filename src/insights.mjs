@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { isSubagentThread, subagentInfo } from './thread-classification.mjs';
+import { isAutomationThread, isSubagentThread, subagentInfo } from './thread-classification.mjs';
 
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 const WARM_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -10,6 +10,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function coerceNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function coerceBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  }
+  return Boolean(coerceNumber(value));
 }
 
 function unixValueToMs(value) {
@@ -279,6 +290,8 @@ export function normalizeThread(row, nowMs = Date.now()) {
   const source = String(row.source || '');
   const isCodexCli = ['cli', 'terminal', 'tui'].includes(source.toLowerCase());
   const resumeCommand = `codex resume ${id}`;
+  const inCodexSidebar = coerceBoolean(row.in_codex_sidebar ?? row.inCodexSidebar, true);
+  const defaultOpenMode = isCodexCli || !inCodexSidebar ? 'codex-cli-resume' : 'codex-deeplink';
   const subagent = subagentInfo(row);
   const goalStatus = String(row.goal_status || '').toLowerCase();
   const goalCreatedAtMs = unixValueToMs(row.goal_created_at_ms);
@@ -307,7 +320,10 @@ export function normalizeThread(row, nowMs = Date.now()) {
     appDeepLink: UUID_RE.test(id) ? `codex://threads/${id}` : '',
     canOpen: UUID_RE.test(id),
     openLabel: '打开',
+    defaultOpenMode,
     resumeCommand,
+    inCodexSidebar,
+    isAutomation: isAutomationThread(row),
     isSubagent: subagent.isSubagent,
     parentThreadId: subagent.parentThreadId,
     subagentDepth: subagent.depth,

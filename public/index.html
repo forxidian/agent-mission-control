@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#181713">
     <meta name="application-name" content="Agent Mission Control">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Agent 控制台">
     <title>Agent 任务控制台</title>
@@ -13,8 +14,26 @@
     <link rel="apple-touch-icon" href="/icon-192.png">
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body>
+  <body data-view="dashboard">
     <main class="shell">
+      <div class="pwa-window-control-stack" aria-label="窗口控制">
+        <button id="app-hide-button" class="action-button secondary pwa-window-button pwa-floating-button pwa-hide-button" type="button" hidden title="隐藏面板">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M3 3l18 18"></path>
+            <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path>
+            <path d="M9.2 5.4A9.8 9.8 0 0 1 12 5c5 0 8.4 4.1 9.5 7a12 12 0 0 1-2 3.1"></path>
+            <path d="M6.5 6.7A12 12 0 0 0 2.5 12c1.1 2.9 4.5 7 9.5 7a9.9 9.9 0 0 0 4.3-1"></path>
+          </svg>
+          <span>隐藏</span>
+        </button>
+        <button id="close-search-page" class="action-button secondary pwa-window-button pwa-floating-button search-return-button" type="button" title="返回看板">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M19 12H5"></path>
+            <path d="m12 19-7-7 7-7"></path>
+          </svg>
+          <span>返回看板</span>
+        </button>
+      </div>
       <header class="topbar">
         <div>
           <p class="eyebrow">本地多 Agent 控制台</p>
@@ -27,12 +46,6 @@
             <span class="monitor-status-label">监控未启动</span>
             <span id="monitor-status-tooltip" class="monitor-tooltip" role="tooltip" aria-hidden="true"></span>
           </p>
-          <button id="app-minimize-button" class="action-button secondary pwa-window-button pwa-minimize-button" type="button" hidden title="收起到 Dock">
-            <svg aria-hidden="true" viewBox="0 0 24 24">
-              <path d="M5 12h14"></path>
-            </svg>
-            <span>收起</span>
-          </button>
           <button id="app-install-button" class="action-button secondary pwa-install-button" type="button" hidden title="安装为应用">
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="M12 3v12"></path>
@@ -69,7 +82,7 @@
 
       <section id="status-banner" class="status-banner" hidden></section>
 
-      <section class="panel priority-inbox-panel" aria-labelledby="inbox-heading">
+      <section class="panel priority-inbox-panel dashboard-view" aria-labelledby="inbox-heading">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">通知</p>
@@ -83,21 +96,27 @@
         <div id="inbox" class="inbox-list priority-inbox-list"></div>
       </section>
 
-      <section id="summary" class="summary-grid" aria-label="看板摘要"></section>
+      <section id="summary" class="summary-grid dashboard-view" aria-label="看板摘要"></section>
 
-      <div class="layout">
-        <section class="panel thread-panel" aria-labelledby="threads-heading">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">工作</p>
-              <h2 id="threads-heading">近期工作</h2>
-            </div>
-            <p id="thread-count" class="panel-note">0 项</p>
+      <section id="search-page" class="search-page" aria-labelledby="search-heading" hidden>
+        <div class="search-page-top">
+          <div>
+            <p class="eyebrow">历史检索</p>
+            <h2 id="search-heading">搜索线程</h2>
           </div>
-          <section class="controls" aria-label="任务筛选">
+        </div>
+        <section class="panel search-panel" aria-label="历史线程搜索">
+          <div class="panel-heading search-panel-heading">
+            <div>
+              <p class="eyebrow">Search</p>
+              <h2>全量历史</h2>
+            </div>
+            <p id="search-count" class="panel-note">输入关键词</p>
+          </div>
+          <section class="controls search-controls" aria-label="历史线程筛选">
             <label class="search-field">
               <span>搜索</span>
-              <input id="search-input" type="search" autocomplete="off" placeholder="任务、项目、来源、路径">
+              <input id="search-input" type="search" autocomplete="off" placeholder="搜索历史线程、项目、路径、最近信号">
             </label>
             <label>
               <span>来源</span>
@@ -126,21 +145,106 @@
               <input id="archive-toggle" type="checkbox">
               <span>显示归档</span>
             </label>
+            <label class="toggle">
+              <input id="subagent-toggle" type="checkbox">
+              <span>显示 Sub Agent</span>
+            </label>
+            <label class="toggle">
+              <input id="automation-toggle" type="checkbox">
+              <span>显示自动化</span>
+            </label>
           </section>
+          <div id="search-results" class="search-result-list" aria-live="polite"></div>
+          <div id="search-load-sentinel" class="search-load-sentinel" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <section id="search-detail-modal" class="search-detail-modal" role="dialog" aria-modal="true" aria-labelledby="search-detail-title" hidden>
+        <button class="search-detail-scrim" type="button" data-close-search-detail aria-label="关闭任务详情"></button>
+        <article class="search-detail-sheet">
+          <div class="search-detail-bar">
+            <div>
+              <p class="eyebrow">任务详情</p>
+              <h2 id="search-detail-title">线程详情</h2>
+            </div>
+            <button id="close-search-detail" class="action-button secondary" type="button" data-close-search-detail>关闭</button>
+          </div>
+          <div id="search-detail-content" class="search-detail-content"></div>
+        </article>
+      </section>
+
+      <section id="image-preview-modal" class="image-preview-modal" role="dialog" aria-modal="true" aria-labelledby="image-preview-title" hidden>
+        <button class="image-preview-scrim" type="button" data-close-image-preview aria-label="关闭原图预览"></button>
+        <article class="image-preview-sheet">
+          <div class="image-preview-bar">
+            <div>
+              <p class="eyebrow">图片预览</p>
+              <h2 id="image-preview-title">原图</h2>
+            </div>
+            <button class="action-button secondary" type="button" data-close-image-preview>关闭</button>
+          </div>
+          <div class="image-preview-stage">
+            <img id="image-preview-image" class="image-preview-image" alt="">
+          </div>
+        </article>
+      </section>
+
+      <section id="artifact-timeline-modal" class="artifact-timeline-modal" role="dialog" aria-modal="true" aria-labelledby="artifact-timeline-title" hidden>
+        <button class="artifact-modal-scrim" type="button" data-close-artifact-timeline aria-label="关闭素材时间轴"></button>
+        <article class="artifact-timeline-sheet">
+          <div class="artifact-modal-bar">
+            <div>
+              <p class="eyebrow">素材时间轴</p>
+              <h2 id="artifact-timeline-title">线程素材</h2>
+            </div>
+            <button class="action-button secondary" type="button" data-close-artifact-timeline>关闭</button>
+          </div>
+          <div id="artifact-timeline-content" class="artifact-timeline-content"></div>
+        </article>
+      </section>
+
+      <section id="artifact-detail-modal" class="artifact-detail-modal" role="dialog" aria-modal="true" aria-labelledby="artifact-detail-title" hidden>
+        <button class="artifact-modal-scrim" type="button" data-close-artifact-detail aria-label="关闭素材详情"></button>
+        <article class="artifact-detail-sheet">
+          <div class="artifact-modal-bar">
+            <div>
+              <p class="eyebrow">素材详情</p>
+              <h2 id="artifact-detail-title">素材</h2>
+            </div>
+            <button class="action-button secondary" type="button" data-close-artifact-detail>关闭</button>
+          </div>
+          <div id="artifact-detail-content" class="artifact-detail-content"></div>
+        </article>
+      </section>
+
+      <div class="layout dashboard-view">
+        <section class="panel thread-panel" aria-labelledby="threads-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">工作</p>
+              <h2 id="threads-heading">最近线程</h2>
+            </div>
+            <div class="panel-heading-actions">
+              <p id="thread-count" class="panel-note">0 项</p>
+            </div>
+          </div>
+          <button id="open-search-page" class="search-launcher" type="button" aria-label="打开历史线程搜索">
+            <span class="search-launcher-label">搜索历史</span>
+            <span class="search-launcher-placeholder">搜索线程、项目、路径、最近信号</span>
+            <span class="search-launcher-action">打开搜索</span>
+          </button>
           <div id="threads" class="thread-list" aria-live="polite"></div>
         </section>
 
-        <aside class="side-rail">
-          <section class="panel" aria-labelledby="projects-heading">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">用量</p>
-                <h2 id="projects-heading">项目排行</h2>
-              </div>
+        <section class="panel project-history-panel" aria-labelledby="projects-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">用量</p>
+              <h2 id="projects-heading">项目历史</h2>
             </div>
-            <div id="projects" class="project-list"></div>
-          </section>
-        </aside>
+          </div>
+          <div id="projects" class="project-list"></div>
+        </section>
       </div>
 
       <section id="detail" class="detail-panel" aria-live="polite"></section>

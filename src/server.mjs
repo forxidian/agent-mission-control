@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import os from 'node:os';
@@ -7,7 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_PROVIDER_IDS, getClaudeCacheStats, openClaudeThread } from './claude-data.mjs';
-import { getCodexCacheStats } from './codex-data.mjs';
+import { getCodexCacheStats, getCodexThreadArtifacts } from './codex-data.mjs';
 import { loadDashboard as loadMissionControlDashboard } from './dashboard.mjs';
 import { NotificationCenter } from './notifications.mjs';
 import { openOpenCodeSession } from './opencode-data.mjs';
@@ -16,6 +16,7 @@ import { getReviewContentForThread } from './review-content.mjs';
 import { createReviewJobStore } from './review-jobs.mjs';
 import { buildReviewPrompt } from './review-prompts.mjs';
 import { listReviewTargets, runReviewWithProvider } from './review-runners.mjs';
+import { createSearchIndex } from './search-index.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -39,6 +40,21 @@ const PWA_APP_DIRS = [
 const DEFAULT_DASHBOARD_CACHE_TTL_MS = 10_000;
 const DEFAULT_NOTIFICATION_CACHE_TTL_MS = 30_000;
 const DEFAULT_PENDING_SUMMARY_DASHBOARD_MAX_AGE_MS = 120_000;
+const DEFAULT_SEARCH_INDEX_MAX_AGE_MS = 5 * 60_000;
+const DEFAULT_SEARCH_INDEX_THREAD_LIMIT = 5000;
+const DEFAULT_SEARCH_INDEX_PROVIDER_LIMIT = 1000;
+const DEFAULT_SEARCH_INDEX_ROLLOUT_LIMIT = 160;
+const SEARCH_ARTIFACT_SUMMARY_LIMIT = 3;
+const SEARCH_ARTIFACT_HYDRATION_CONCURRENCY = 6;
+const MAX_LOCAL_PREVIEW_BYTES = 25 * 1024 * 1024;
+const LOCAL_PREVIEW_IMAGE_TYPES = new Map([
+  ['.bmp', 'image/bmp'],
+  ['.gif', 'image/gif'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.webp', 'image/webp'],
+]);
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -82,6 +98,29 @@ async function readJsonBody(request) {
 
   if (!raw.trim()) return {};
   return JSON.parse(raw);
+}
+
+function isCrossOriginLocalRequest(request) {
+  const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite && !['same-origin', 'same-site', 'none'].includes(fetchSite)) return true;
+
+  const origin = String(request.headers.origin || '').trim();
+  if (!origin) return false;
+
+  const host = String(request.headers.host || '').trim();
+  if (!host) return true;
+
+  try {
+    return new URL(origin).host !== host;
+  } catch {
+    return true;
+  }
+}
+
+function rejectCrossOriginLocalRequest(request, response) {
+  if (!isCrossOriginLocalRequest(request)) return false;
+  sendJson(response, 403, { error: 'Cross-origin local file access is blocked' });
+  return true;
 }
 
 function sendError(response, error, fallbackMessage = 'Request failed') {
@@ -327,13 +366,13 @@ export async function openInstalledPwaApp({
   return { opened: true, method: 'macos-pwa-app' };
 }
 
-export async function minimizeInstalledPwaApp({
+export async function hideInstalledPwaApp({
   platform = process.platform,
   runCommand = execFileAsync,
   appScriptNames = PWA_APP_SCRIPT_NAMES,
 } = {}) {
   if (platform !== 'darwin') {
-    const error = new Error('Installed PWA app minimizer is only supported on macOS');
+    const error = new Error('Installed PWA app hider is only supported on macOS');
     error.statusCode = 501;
     throw error;
   }
@@ -343,9 +382,15 @@ export async function minimizeInstalledPwaApp({
     try {
       await runCommand('osascript', [
         '-e',
-        `tell application "${appleScriptString(appName)}" to set miniaturized of every window to true`,
+        `set targetBundleId to id of application "${appleScriptString(appName)}"`,
+        '-e',
+        'tell application "System Events"',
+        '-e',
+        'set visible of first application process whose bundle identifier is targetBundleId to false',
+        '-e',
+        'end tell',
       ], { timeout: 5000 });
-      return { minimized: true, method: 'macos-pwa-app' };
+      return { hidden: true, method: 'macos-pwa-app' };
     } catch (error) {
       lastError = error;
     }
@@ -355,6 +400,8 @@ export async function minimizeInstalledPwaApp({
   error.statusCode = 404;
   throw error;
 }
+
+export const minimizeInstalledPwaApp = hideInstalledPwaApp;
 
 export async function openThreadInCodex(thread) {
   if (!thread.appDeepLink) {
@@ -409,7 +456,7 @@ export async function openThreadInCodexCli(thread, {
   };
 }
 
-export async function openThreadInProvider(thread) {
+export async function openThreadInProvider(thread, options = {}) {
   if (thread.provider === 'opencode') {
     return openOpenCodeSession(thread);
   }
@@ -418,8 +465,8 @@ export async function openThreadInProvider(thread) {
     return openClaudeThread(thread);
   }
 
-  if (thread.provider === 'codex-cli') {
-    return openThreadInCodexCli(thread);
+  if (thread.provider === 'codex-cli' || thread.defaultOpenMode === 'codex-cli-resume') {
+    return openThreadInCodexCli(thread, options);
   }
 
   return openThreadInCodex(thread);
@@ -481,6 +528,254 @@ function parseReviewLimit(value) {
   const limit = Number.parseInt(value || '50', 10);
   if (!Number.isFinite(limit) || limit < 1) return 50;
   return Math.min(limit, 200);
+}
+
+function parseSearchLimit(value) {
+  const limit = Number.parseInt(value || '50', 10);
+  if (!Number.isFinite(limit) || limit < 1) return 50;
+  return Math.min(limit, 200);
+}
+
+function parseBooleanSearchParam(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+function artifactTypeCounts(items = []) {
+  const counts = {};
+  for (const item of items) {
+    if (!item?.type) continue;
+    counts[item.type] = (counts[item.type] || 0) + 1;
+  }
+  return counts;
+}
+
+function artifactSummaryForSearch(artifacts = {}) {
+  const items = Array.isArray(artifacts?.items) ? artifacts.items : [];
+  const total = Number(artifacts?.total ?? items.length) || items.length;
+  if (!total) return { total: 0, latestAtMs: null, typeCounts: {}, items: [] };
+
+  return {
+    total,
+    latestAtMs: artifacts?.latestAtMs ?? items[0]?.atMs ?? null,
+    typeCounts: artifacts?.typeCounts && typeof artifacts.typeCounts === 'object'
+      ? artifacts.typeCounts
+      : artifactTypeCounts(items),
+    items: items.slice(0, SEARCH_ARTIFACT_SUMMARY_LIMIT),
+  };
+}
+
+function shouldHydrateSearchArtifacts(thread = {}) {
+  const provider = String(thread.provider || '');
+  return Boolean(thread.rolloutPath)
+    && provider.startsWith('codex')
+    && Number(thread?.artifacts?.total || 0) <= 0;
+}
+
+async function hydrateCodexSearchArtifacts(result = {}, loadCodexThreadArtifacts) {
+  const items = Array.isArray(result?.items) ? result.items : [];
+  const candidates = items.filter(shouldHydrateSearchArtifacts);
+  if (!candidates.length) return result;
+
+  let cursor = 0;
+  const workerCount = Math.min(SEARCH_ARTIFACT_HYDRATION_CONCURRENCY, candidates.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (cursor < candidates.length) {
+      const thread = candidates[cursor];
+      cursor += 1;
+
+      try {
+        const loaded = await loadCodexThreadArtifacts({ thread });
+        const summary = artifactSummaryForSearch(loaded?.artifacts);
+        if (summary.total > 0) thread.artifacts = summary;
+      } catch {
+        // Search should stay useful even if one historical rollout disappeared or is malformed.
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  return result;
+}
+
+function normalizeLocalPreviewPath(value = '') {
+  let text = String(value || '').trim();
+  if (!text) return '';
+
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    // The query parser already decodes normal values; keep malformed input as-is.
+  }
+  text = text.replace(/^file:\/+/, '/');
+  if (text.startsWith('~/')) {
+    text = path.join(os.homedir(), text.slice(2));
+  }
+
+  if (!path.isAbsolute(text)) return '';
+  return text;
+}
+
+export async function openLocalFilePath(filePath, {
+  platform = process.platform,
+  runCommand = execFileAsync,
+} = {}) {
+  if (!filePath) throw new Error('Local file path is required');
+
+  if (platform === 'darwin') {
+    await runCommand('open', [filePath], { timeout: 5000 });
+    return { opened: true, method: 'macos-open' };
+  }
+
+  if (platform === 'win32') {
+    await runCommand('cmd', ['/c', 'start', '', filePath], { timeout: 5000 });
+    return { opened: true, method: 'windows-start' };
+  }
+
+  await runCommand('xdg-open', [filePath], { timeout: 5000 });
+  return { opened: true, method: 'xdg-open' };
+}
+
+async function readFileHeader(filePath, length = 16) {
+  const handle = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+function imageContentTypeFromHeader(filePath, header) {
+  const extension = path.extname(filePath).toLowerCase();
+  const extensionType = LOCAL_PREVIEW_IMAGE_TYPES.get(extension);
+  if (!extensionType) return '';
+
+  if (extensionType === 'image/png') {
+    return header.length >= 8
+      && header[0] === 0x89
+      && header[1] === 0x50
+      && header[2] === 0x4e
+      && header[3] === 0x47
+      && header[4] === 0x0d
+      && header[5] === 0x0a
+      && header[6] === 0x1a
+      && header[7] === 0x0a
+      ? extensionType
+      : '';
+  }
+
+  if (extensionType === 'image/jpeg') {
+    return header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff
+      ? extensionType
+      : '';
+  }
+
+  if (extensionType === 'image/gif') {
+    const prefix = header.subarray(0, 6).toString('ascii');
+    return prefix === 'GIF87a' || prefix === 'GIF89a' ? extensionType : '';
+  }
+
+  if (extensionType === 'image/webp') {
+    return header.length >= 12
+      && header.subarray(0, 4).toString('ascii') === 'RIFF'
+      && header.subarray(8, 12).toString('ascii') === 'WEBP'
+      ? extensionType
+      : '';
+  }
+
+  if (extensionType === 'image/bmp') {
+    return header.length >= 2 && header[0] === 0x42 && header[1] === 0x4d ? extensionType : '';
+  }
+
+  return '';
+}
+
+async function serveLocalFilePreview(request, response, url) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.writeHead(405, { allow: 'GET, HEAD' });
+    response.end('Method not allowed');
+    return;
+  }
+  if (rejectCrossOriginLocalRequest(request, response)) return;
+
+  const requestedPath = normalizeLocalPreviewPath(url.searchParams.get('path') || '');
+  if (!requestedPath) {
+    sendJson(response, 400, { error: 'Local image path is required' });
+    return;
+  }
+
+  try {
+    const filePath = await realpath(requestedPath);
+    const info = await stat(filePath);
+    if (!info.isFile()) {
+      response.writeHead(404);
+      response.end('Not found');
+      return;
+    }
+    if (info.size > MAX_LOCAL_PREVIEW_BYTES) {
+      sendJson(response, 413, { error: 'Local image is too large to preview' });
+      return;
+    }
+
+    const contentType = imageContentTypeFromHeader(filePath, await readFileHeader(filePath));
+    if (!contentType) {
+      sendJson(response, 415, { error: 'Only local raster image previews are supported' });
+      return;
+    }
+
+    response.writeHead(200, {
+      'content-type': contentType,
+      'content-length': info.size,
+      'cache-control': 'no-store',
+      'cross-origin-resource-policy': 'same-origin',
+      'x-content-type-options': 'nosniff',
+    });
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+    createReadStream(filePath).pipe(response);
+  } catch {
+    response.writeHead(404);
+    response.end('Not found');
+  }
+}
+
+async function serveLocalFileOpen(request, response, {
+  openLocalFile = openLocalFilePath,
+} = {}) {
+  if (request.method !== 'POST') {
+    response.writeHead(405, { allow: 'POST' });
+    response.end('Method not allowed');
+    return;
+  }
+  if (rejectCrossOriginLocalRequest(request, response)) return;
+
+  try {
+    const body = await readJsonBody(request);
+    const requestedPath = normalizeLocalPreviewPath(body.path || '');
+    if (!requestedPath) {
+      sendJson(response, 400, { error: 'Local file path is required' });
+      return;
+    }
+
+    const filePath = await realpath(requestedPath);
+    const info = await stat(filePath);
+    if (!info.isFile()) {
+      response.writeHead(404);
+      response.end('Not found');
+      return;
+    }
+
+    const result = await openLocalFile(filePath);
+    sendJson(response, 200, {
+      ...result,
+      path: filePath,
+    });
+  } catch (error) {
+    sendError(response, error, 'Failed to open local file');
+  }
 }
 
 async function executeReviewJob({
@@ -546,13 +841,21 @@ export function createServer({
   ),
   now = Date.now,
   openThread = openThreadInProvider,
+  openLocalFile = openLocalFilePath,
   openInstalledApp = openInstalledPwaApp,
-  minimizeInstalledApp = minimizeInstalledPwaApp,
+  hideInstalledApp = hideInstalledPwaApp,
+  minimizeInstalledApp = hideInstalledApp,
   getInstalledAppStatus = getInstalledPwaAppStatus,
   reviewStore = createReviewJobStore(),
   runReview = runReviewWithProvider,
   loadReviewTargets = listReviewTargets,
+  loadCodexThreadArtifacts = getCodexThreadArtifacts,
   publicDir = DEFAULT_PUBLIC_DIR,
+  searchIndex = createSearchIndex(),
+  searchIndexMaxAgeMs = positiveInteger(process.env.SEARCH_INDEX_MAX_AGE_MS, DEFAULT_SEARCH_INDEX_MAX_AGE_MS),
+  searchIndexThreadLimit = positiveInteger(process.env.SEARCH_INDEX_THREAD_LIMIT, DEFAULT_SEARCH_INDEX_THREAD_LIMIT),
+  searchIndexProviderLimit = positiveInteger(process.env.SEARCH_INDEX_PROVIDER_LIMIT, DEFAULT_SEARCH_INDEX_PROVIDER_LIMIT),
+  searchIndexRolloutLimit = positiveInteger(process.env.SEARCH_INDEX_ROLLOUT_LIMIT, DEFAULT_SEARCH_INDEX_ROLLOUT_LIMIT),
 } = {}) {
   let dashboardLoadPromise = null;
   let dashboardCache = null;
@@ -688,6 +991,29 @@ export function createServer({
     return loadSharedDashboard();
   };
 
+  const rebuildSearchIndex = async () => {
+    const dashboard = await loadDashboard({
+      limit: searchIndexThreadLimit,
+      openCodeMaxCount: searchIndexProviderLimit,
+      claudeMaxCount: searchIndexProviderLimit,
+      maxRollouts: searchIndexRolloutLimit,
+    });
+    return searchIndex.indexDashboard(dashboard);
+  };
+
+  const ensureSearchIndex = async ({ force = false } = {}) => {
+    const current = await searchIndex.status();
+    const indexedAtMs = Number(current?.indexedAtMs || 0);
+    const ageMs = indexedAtMs ? now() - indexedAtMs : Number.POSITIVE_INFINITY;
+
+    if (!force && current?.available && indexedAtMs > 0 && ageMs >= 0 && ageMs < searchIndexMaxAgeMs) {
+      return current;
+    }
+
+    await rebuildSearchIndex();
+    return searchIndex.status();
+  };
+
   const notificationsForDashboard = async (dashboard, { force = false } = {}) => {
     if (!notificationCenter) return null;
 
@@ -796,6 +1122,130 @@ export function createServer({
       }
 
       sendJson(response, 200, performanceSnapshot());
+      return;
+    }
+
+    if (url.pathname === '/api/local-file-preview') {
+      await serveLocalFilePreview(request, response, url);
+      return;
+    }
+
+    if (url.pathname === '/api/local-file-open') {
+      await serveLocalFileOpen(request, response, { openLocalFile });
+      return;
+    }
+
+    const artifactMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/artifacts$/);
+    if (artifactMatch) {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const threadId = decodeURIComponent(artifactMatch[1]);
+        const dashboard = await dashboardForRequest();
+        const thread = findDashboardThread(dashboard, threadId);
+        sendJson(response, 200, await loadCodexThreadArtifacts({ thread }));
+      } catch (error) {
+        sendError(response, error, 'Failed to load thread artifacts');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/search/status') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        sendJson(response, 200, await searchIndex.status());
+      } catch (error) {
+        sendError(response, error, 'Failed to load search index status');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/search/reindex') {
+      if (request.method !== 'POST') {
+        response.writeHead(405, { allow: 'POST' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const result = await rebuildSearchIndex();
+        sendJson(response, 200, {
+          ...(await searchIndex.status()),
+          ...result,
+        });
+      } catch (error) {
+        sendError(response, error, 'Failed to rebuild search index');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/search') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        const force = parseBooleanSearchParam(url.searchParams.get('force'));
+        let indexStatus = await ensureSearchIndex({ force });
+        const searchParams = {
+          query: url.searchParams.get('q') || url.searchParams.get('query') || '',
+          provider: url.searchParams.get('provider') || 'all',
+          status: url.searchParams.get('status') || 'all',
+          project: url.searchParams.get('project') || 'all',
+          includeArchived: parseBooleanSearchParam(url.searchParams.get('archived'))
+            || parseBooleanSearchParam(url.searchParams.get('includeArchived')),
+          includeSubagents: parseBooleanSearchParam(url.searchParams.get('subagents'))
+            || parseBooleanSearchParam(url.searchParams.get('includeSubagents')),
+          includeAutomations: parseBooleanSearchParam(url.searchParams.get('automations'))
+            || parseBooleanSearchParam(url.searchParams.get('includeAutomations')),
+          limit: parseSearchLimit(url.searchParams.get('limit')),
+          cursor: url.searchParams.get('cursor') || '',
+        };
+        let result = await searchIndex.searchThreads(searchParams);
+        if (!force && searchParams.query.trim() && Number(result.total || 0) === 0) {
+          indexStatus = await ensureSearchIndex({ force: true });
+          result = await searchIndex.searchThreads(searchParams);
+        }
+        result = await hydrateCodexSearchArtifacts(result, loadCodexThreadArtifacts);
+        sendJson(response, 200, {
+          ...result,
+          index: indexStatus,
+        });
+      } catch (error) {
+        sendError(response, error, 'Failed to search threads');
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/projects/history') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      try {
+        await ensureSearchIndex({
+          force: parseBooleanSearchParam(url.searchParams.get('force')),
+        });
+        sendJson(response, 200, await searchIndex.projectHistory({
+          limit: parseSearchLimit(url.searchParams.get('limit')),
+          query: url.searchParams.get('q') || url.searchParams.get('query') || '',
+        }));
+      } catch (error) {
+        sendError(response, error, 'Failed to load project history');
+      }
       return;
     }
 
@@ -1022,7 +1472,7 @@ export function createServer({
       return;
     }
 
-    if (url.pathname === '/api/app/minimize-installed') {
+    if (url.pathname === '/api/app/hide-installed' || url.pathname === '/api/app/minimize-installed') {
       if (request.method !== 'POST') {
         response.writeHead(405, { allow: 'POST' });
         response.end('Method not allowed');
@@ -1030,10 +1480,12 @@ export function createServer({
       }
 
       try {
-        const result = await minimizeInstalledApp();
+        const result = url.pathname === '/api/app/minimize-installed'
+          ? await minimizeInstalledApp()
+          : await hideInstalledApp();
         sendJson(response, 200, result);
       } catch (error) {
-        sendError(response, error, 'Failed to minimize installed app');
+        sendError(response, error, 'Failed to hide installed app');
       }
       return;
     }
@@ -1050,7 +1502,15 @@ export function createServer({
         const body = await readJsonBody(request);
         const threadId = decodeURIComponent(openThreadMatch[1]);
         const dashboard = await dashboardForRequest();
-        const thread = dashboard.threads?.find((candidate) => candidate.id === threadId);
+        let thread = dashboard.threads?.find((candidate) => candidate.id === threadId);
+        if (!thread) {
+          const indexed = await searchIndex.searchThreads({
+            query: threadId,
+            includeArchived: true,
+            limit: 5,
+          }).catch(() => null);
+          thread = indexed?.items?.find((candidate) => candidate.id === threadId) || null;
+        }
 
         if (!thread) {
           sendJson(response, 404, { error: 'Thread not found' });

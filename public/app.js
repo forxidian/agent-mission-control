@@ -15,6 +15,30 @@ const state = {
   refreshError: '',
   noticeTimer: null,
   inboxExpanded: false,
+  search: {
+    isOpen: false,
+    query: '',
+    result: null,
+    error: '',
+    isLoading: false,
+    timer: null,
+    requestId: 0,
+    nextCursor: '',
+    hasMore: false,
+    isLoadingMore: false,
+    loadMoreError: '',
+    modalThreadId: '',
+    projectHistory: null,
+    projectHistoryError: '',
+  },
+  artifacts: {
+    threadId: '',
+    detailThreadId: '',
+    detailArtifactId: '',
+    dataByThread: new Map(),
+    errorsByThread: new Map(),
+    isLoading: false,
+  },
   review: {
     openThreadId: '',
     targets: null,
@@ -35,23 +59,44 @@ const state = {
 const elements = {
   autoRefresh: document.querySelector('#auto-refresh'),
   archiveToggle: document.querySelector('#archive-toggle'),
+  artifactDetailContent: document.querySelector('#artifact-detail-content'),
+  artifactDetailModal: document.querySelector('#artifact-detail-modal'),
+  artifactDetailTitle: document.querySelector('#artifact-detail-title'),
+  artifactTimelineContent: document.querySelector('#artifact-timeline-content'),
+  artifactTimelineModal: document.querySelector('#artifact-timeline-modal'),
+  artifactTimelineTitle: document.querySelector('#artifact-timeline-title'),
+  subagentToggle: document.querySelector('#subagent-toggle'),
+  automationToggle: document.querySelector('#automation-toggle'),
   appInstallButton: document.querySelector('#app-install-button'),
-  appMinimizeButton: document.querySelector('#app-minimize-button'),
+  appHideButton: document.querySelector('#app-hide-button'),
+  closeSearchPage: document.querySelector('#close-search-page'),
   detail: document.querySelector('#detail'),
   inbox: document.querySelector('#inbox'),
   inboxHeading: document.querySelector('#inbox-heading'),
+  imagePreviewImage: document.querySelector('#image-preview-image'),
+  imagePreviewModal: document.querySelector('#image-preview-modal'),
+  imagePreviewTitle: document.querySelector('#image-preview-title'),
   lastUpdated: document.querySelector('#last-updated'),
   monitorStatus: document.querySelector('#monitor-status'),
   monitorStatusLabel: document.querySelector('#monitor-status .monitor-status-label'),
   monitorStatusTooltip: document.querySelector('#monitor-status-tooltip'),
   notificationCount: document.querySelector('#notification-count'),
   notificationToggle: document.querySelector('#notification-toggle'),
+  openSearchPage: document.querySelector('#open-search-page'),
   providerFilter: document.querySelector('#provider-filter'),
   projectFilter: document.querySelector('#project-filter'),
   refreshInterval: document.querySelector('#refresh-interval'),
   projects: document.querySelector('#projects'),
+  pwaWindowControls: document.querySelector('.pwa-window-control-stack'),
   refreshButton: document.querySelector('#refresh-button'),
+  searchCount: document.querySelector('#search-count'),
+  searchDetailContent: document.querySelector('#search-detail-content'),
+  searchDetailModal: document.querySelector('#search-detail-modal'),
+  searchDetailTitle: document.querySelector('#search-detail-title'),
   searchInput: document.querySelector('#search-input'),
+  searchLoadSentinel: document.querySelector('#search-load-sentinel'),
+  searchPage: document.querySelector('#search-page'),
+  searchResults: document.querySelector('#search-results'),
   statusBanner: document.querySelector('#status-banner'),
   statusFilter: document.querySelector('#status-filter'),
   summary: document.querySelector('#summary'),
@@ -66,6 +111,9 @@ const UNFOCUSED_REFRESH_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 1_000;
 const PENDING_SUMMARY_POLL_INTERVAL_MS = 10_000;
 const REVIEW_POLL_INTERVAL_MS = 5_000;
+const SEARCH_DEBOUNCE_MS = 180;
+const SEARCH_RESULT_LIMIT = 80;
+const RECENT_THREAD_LIMIT = 12;
 const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
 const REFRESH_INTERVAL_STORAGE_KEY = 'codex-mission-control:refresh-interval-ms';
@@ -413,11 +461,27 @@ function countRunningHostThreads(dashboard = state.dashboard) {
 }
 
 function tokenUsageMarkup(thread) {
+  const todayTokens = Number(thread?.todayTokenUsage || 0);
+  const historyTokens = Number(thread?.tokensUsed || 0);
+
   return `
-    <div class="token-block">
-      <span class="token-label">今日</span>
-      <strong>${escapeHtml(formatTokens(thread.todayTokenUsage))}</strong>
-      <span class="token-history">历史 ${escapeHtml(formatTokens(thread.tokensUsed))}</span>
+    <span class="thread-token-inline">
+      <span class="token-label">今日 ${escapeHtml(formatTokens(todayTokens))}</span>
+      <span class="token-history">历史 ${escapeHtml(formatTokens(historyTokens))}</span>
+    </span>
+  `;
+}
+
+function searchMatchMarkup(thread, query = currentSearchQuery()) {
+  const match = thread?.match;
+  if (!match?.field && !match?.snippet) return '';
+
+  const label = match.label || match.field || 'match';
+  const snippet = match.snippet || '';
+  return `
+    <div class="search-match">
+      <span>${escapeHtml(label)}</span>
+      ${snippet ? `<em>${highlightSearchTerm(snippet, query, 220)}</em>` : ''}
     </div>
   `;
 }
@@ -552,6 +616,16 @@ function summaryCard({ label, value, note = '', tone = '', rows = [], title = ''
   `;
 }
 
+function summaryStripItem({ label, value, note = '' }) {
+  return `
+    <span class="summary-strip-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ''}
+    </span>
+  `;
+}
+
 function renderTopbarMetrics(summary = {}) {
   if (!elements.topbarMetrics) return;
 
@@ -637,8 +711,121 @@ function renderProviderStrip(providers = []) {
   `;
 }
 
+function currentSearchQuery() {
+  return elements.searchInput?.value?.trim() || '';
+}
+
+function escapeRegExp(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightSearchTerm(value = '', query = currentSearchQuery(), maxLength = 260) {
+  const text = compactSignal(value, maxLength);
+  const escaped = escapeHtml(text);
+  const needle = String(query || '').trim();
+  if (!needle) return escaped;
+
+  const pattern = escapeRegExp(needle);
+  if (!pattern) return escaped;
+  return escaped.replace(new RegExp(pattern, 'gi'), (match) => `<mark>${match}</mark>`);
+}
+
+function hasActiveSearchQuery() {
+  return state.search.isOpen && currentSearchQuery().length > 0;
+}
+
+function isSearchPageOpen() {
+  return Boolean(state.search.isOpen);
+}
+
+function searchResultThreads() {
+  return state.search?.result?.items || [];
+}
+
+function dashboardViewSections() {
+  return [...document.querySelectorAll('.dashboard-view')];
+}
+
+function searchInputTopOffset() {
+  const fallbackOffset = 8;
+  const controls = elements.pwaWindowControls;
+  if (controls) {
+    const style = window.getComputedStyle(controls);
+    if (style.position === 'fixed') {
+      const rect = controls.getBoundingClientRect();
+      if (rect.height > 0) return Math.max(fallbackOffset, Math.ceil(rect.bottom + 6));
+    }
+  }
+
+  const hideButton = elements.appHideButton;
+  if (!hideButton || hideButton.hidden) return fallbackOffset;
+  const style = window.getComputedStyle(hideButton);
+  if (style.position !== 'fixed') return fallbackOffset;
+  return Math.max(fallbackOffset, Math.ceil(hideButton.getBoundingClientRect().bottom + 6));
+}
+
+function focusSearchInputAtTop() {
+  const input = elements.searchInput;
+  if (!input) return;
+
+  window.requestAnimationFrame(() => {
+    try {
+      input.focus({ preventScroll: true });
+    } catch {
+      input.focus();
+    }
+
+    const top = input.getBoundingClientRect().top + window.scrollY - searchInputTopOffset();
+    window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+  });
+}
+
+function setPageView(view) {
+  const isSearch = view === 'search';
+  state.search.isOpen = isSearch;
+  document.body.dataset.view = isSearch ? 'search' : 'dashboard';
+  if (elements.searchPage) elements.searchPage.hidden = !isSearch;
+  if (elements.detail) elements.detail.hidden = isSearch;
+  for (const section of dashboardViewSections()) {
+    section.hidden = isSearch;
+  }
+
+  if (isSearch) {
+    renderSearchResults();
+    requestSearchLoadCheck();
+    focusSearchInputAtTop();
+  } else {
+    closeSearchDetailModal({ renderResults: false });
+    renderThreads();
+  }
+}
+
+function openSearchPage({ pushState = true } = {}) {
+  if (pushState && window.location.hash !== '#search') {
+    window.history.pushState(null, '', '#search');
+  }
+  setPageView('search');
+}
+
+function closeSearchPage({ pushState = true } = {}) {
+  if (pushState && window.location.hash === '#search') {
+    window.history.pushState(null, '', `${window.location.pathname}${window.location.search}`);
+  }
+  setPageView('dashboard');
+}
+
+function syncPageViewFromLocation() {
+  if (window.location.hash === '#search') {
+    openSearchPage({ pushState: false });
+  } else {
+    closeSearchPage({ pushState: false });
+  }
+}
+
 function findThread(threadId) {
-  return state.dashboard?.threads?.find((thread) => thread.id === threadId) || null;
+  return state.dashboard?.threads?.find((thread) => thread.id === threadId)
+    || searchResultThreads().find((thread) => thread.id === threadId)
+    || null;
 }
 
 function findNotification(notificationId) {
@@ -683,10 +870,15 @@ function threadRowClasses(thread, isSelected) {
     isSelected ? 'is-selected' : '',
     isSubagentThread(thread) ? 'is-subagent' : '',
     Number(thread?.subagentCount || 0) > 0 ? 'is-host-agent' : '',
+    Number(thread?.artifacts?.total || 0) > 0 ? 'has-artifacts' : '',
   ].filter(Boolean).map(escapeHtml).join(' ');
 }
 
-function threadTitleMarkup(thread) {
+function displayThreadTitle(thread) {
+  return compactSignal(thread?.title || '未命名任务', 140) || '未命名任务';
+}
+
+function threadTitleMarkup(thread, query = currentSearchQuery()) {
   const isSubagent = isSubagentThread(thread);
   const subagentCount = Number(thread?.subagentCount || 0);
   const badges = [
@@ -697,9 +889,277 @@ function threadTitleMarkup(thread) {
 
   return `
     <div class="thread-title-line">
+      <span class="thread-title">${highlightSearchTerm(displayThreadTitle(thread), query, 140)}</span>
       ${badges.map((badge) => `<span class="thread-kind-badge">${escapeHtml(badge)}</span>`).join('')}
-      <span class="thread-title">${escapeHtml(thread.title)}</span>
     </div>
+  `;
+}
+
+function threadKindBadgesMarkup(thread) {
+  const isSubagent = isSubagentThread(thread);
+  const subagentCount = Number(thread?.subagentCount || 0);
+  const badges = [
+    isSubagent ? 'Sub' : '',
+    !isSubagent && subagentCount > 0 ? 'Host' : '',
+    !isSubagent && subagentCount > 0 ? `${subagentCount} Sub` : '',
+  ].filter(Boolean);
+
+  return badges.map((badge) => `<span class="thread-kind-badge">${escapeHtml(badge)}</span>`).join('');
+}
+
+function threadProjectRailMarkup(thread) {
+  const projectName = thread?.projectName || '未知项目';
+  return `
+    <div class="thread-project-rail" title="${escapeHtml(projectName)}">
+      <span class="thread-status-inline">${statusMarkup(thread.status)}</span>
+      <span class="thread-project-copy">
+        <span class="thread-project-label">项目</span>
+        <strong>${escapeHtml(projectName)}</strong>
+      </span>
+    </div>
+  `;
+}
+
+function threadMentionCandidates(thread) {
+  return [
+    { type: '用户输入', field: 'recent user', text: thread?.latestMeaningfulUserMessage || thread?.latestUserMessage || '' },
+    { type: 'Agent回答', field: 'agent output', text: thread?.lastAgentMessage || '' },
+    { type: '用户首次输入', field: 'first user', text: thread?.firstUserMessage || '' },
+  ].filter((item) => compactSignal(item.text));
+}
+
+function threadMention(thread, query = currentSearchQuery()) {
+  const candidates = threadMentionCandidates(thread);
+  const matchField = thread?.match?.field || '';
+  const fieldMatch = candidates.find((item) => item.field === matchField);
+  if (fieldMatch) return fieldMatch;
+
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  const textMatch = needle
+    ? candidates.find((item) => compactSignal(item.text).toLocaleLowerCase().includes(needle))
+    : null;
+  if (textMatch) return textMatch;
+
+  return candidates[0] || {
+    type: '用户输入',
+    field: 'recent user',
+    text: '暂无可展示的聊天内容',
+  };
+}
+
+function threadMentionMarkup(thread, query = currentSearchQuery()) {
+  const mention = threadMention(thread, query);
+  return `
+    <div class="thread-mention">${highlightSearchTerm(mention.text, query, 220)}</div>
+  `;
+}
+
+function threadSupportMetaItems(thread) {
+  const relationship = threadRelationshipLabel(thread);
+  const host = isSubagentThread(thread) ? hostThreadLabel(thread) : '';
+  const turnDuration = currentTurnDuration(thread);
+
+  return [
+    relationship ? `<span>${escapeHtml(relationship)}</span>` : '',
+    host ? `<span title="${escapeHtml(host)}">Host: ${escapeHtml(host)}</span>` : '',
+    turnDuration ? `<span>${escapeHtml(`本轮 ${turnDuration}`)}</span>` : '',
+  ].filter(Boolean);
+}
+
+function threadSideMarkup(thread, openDisabled) {
+  return `
+    <aside class="thread-side" aria-label="线程属性">
+      <div class="thread-side-metrics">
+        <span class="thread-side-metric">
+          <span>最近</span>
+          <strong>${escapeHtml(relativeTime(thread.updatedAtMs))}</strong>
+        </span>
+        ${tokenUsageMarkup(thread)}
+        <span class="thread-side-provider" title="${escapeHtml(providerLabel(thread))}">${escapeHtml(providerLabel(thread))}</span>
+      </div>
+      <div class="row-actions" aria-label="任务操作">
+        <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
+      </div>
+    </aside>
+  `;
+}
+
+function searchResultMetaItems(thread) {
+  return [
+    thread.projectName || '未知项目',
+    thread.updatedAtMs ? timeFormat.format(new Date(thread.updatedAtMs)) : '-',
+  ].filter(Boolean);
+}
+
+function threadResultDetailMarkup(thread, {
+  query = currentSearchQuery(),
+  showMeta = true,
+} = {}) {
+  const supportMetaItems = threadSupportMetaItems(thread);
+  const metaItems = showMeta ? searchResultMetaItems(thread) : [];
+
+  return `
+    <div class="thread-result-detail">
+      ${metaItems.length ? `
+        <div class="search-result-meta">
+          ${metaItems.map((item) => `<span>${escapeHtml(item)}</span>`).join('<span aria-hidden="true">|</span>')}
+        </div>
+      ` : ''}
+      <div class="search-result-heading">
+        <span class="search-result-title">${highlightSearchTerm(displayThreadTitle(thread), query, 160)}</span>
+        ${threadKindBadgesMarkup(thread)}
+      </div>
+      <div class="search-hit-line">
+        ${searchResultExcerptMarkup(thread, query)}
+      </div>
+      ${supportMetaItems.length ? `
+        <div class="thread-support-meta">
+          ${supportMetaItems.join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function threadPrimaryModuleMarkup(thread, {
+  className = 'thread-main',
+  query = currentSearchQuery(),
+  isSelected = false,
+  showMeta = true,
+} = {}) {
+  const attachmentStrip = attachmentPreviewStripMarkup(threadAttachmentSource(thread));
+
+  return `
+    <div class="${escapeHtml(className)}">
+      ${threadProjectRailMarkup(thread)}
+      <div class="thread-result-stack">
+        <button class="thread-detail-button" type="button" data-thread-id="${escapeHtml(thread.id)}" aria-pressed="${isSelected}">
+          ${threadResultDetailMarkup(thread, { query, showMeta })}
+        </button>
+        ${attachmentStrip ? `<div class="thread-result-attachments search-result-attachments">${attachmentStrip}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function searchConversationPreview(thread, query = currentSearchQuery()) {
+  return searchConversationPreviewSegments(thread, query)
+    .map((segment) => segment.text)
+    .join(' ');
+}
+
+function searchSpeakerForField(field = '') {
+  return field === 'agent output' ? 'agent' : 'user';
+}
+
+function searchTextSegment(text, speaker = 'user') {
+  return { type: 'text', speaker, text };
+}
+
+function searchConversationPreviewSegments(thread, query = currentSearchQuery()) {
+  const firstUser = compactSignal(thread?.firstUserMessage || '');
+  const recentUser = compactSignal(thread?.latestMeaningfulUserMessage || thread?.latestUserMessage || '');
+  const agentOutput = compactSignal(thread?.lastAgentMessage || '');
+  const candidates = [
+    { field: 'first user', speaker: 'user', text: firstUser },
+    { field: 'recent user', speaker: 'user', text: recentUser },
+    { field: 'agent output', speaker: 'agent', text: agentOutput },
+  ].filter((item) => item.text);
+
+  const matchField = thread?.match?.field || '';
+  if (['first user', 'recent user', 'agent output'].includes(matchField) && thread?.match?.snippet) {
+    const recalledText = compactSignal(thread.match.snippet);
+    const recalledSpeaker = searchSpeakerForField(matchField);
+    if (firstUser && matchField !== 'first user' && recalledText !== firstUser) {
+      return [
+        searchTextSegment(firstUser, 'user'),
+        { type: 'separator', text: '……' },
+        searchTextSegment(recalledText, recalledSpeaker),
+      ];
+    }
+    return [searchTextSegment(recalledText, recalledSpeaker)];
+  }
+
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  if (needle) {
+    const textMatch = candidates.find((item) => item.text.toLocaleLowerCase().includes(needle));
+    if (textMatch) {
+      if (firstUser && textMatch.field !== 'first user' && textMatch.text !== firstUser) {
+        return [
+          searchTextSegment(firstUser, 'user'),
+          { type: 'separator', text: '……' },
+          searchTextSegment(textMatch.text, textMatch.speaker),
+        ];
+      }
+      return [searchTextSegment(textMatch.text, textMatch.speaker)];
+    }
+  }
+
+  const fallback = candidates[0];
+  return [searchTextSegment(
+    fallback?.text || '暂无可展示的聊天内容',
+    fallback?.speaker || 'user',
+  )];
+}
+
+function searchSpeakerLabel(speaker = 'user') {
+  return speaker === 'agent' ? 'Agent：' : '用户：';
+}
+
+function searchSpeakerClass(speaker = 'user') {
+  return speaker === 'agent' ? 'search-result-speaker-agent' : 'search-result-speaker-user';
+}
+
+function searchResultExcerptMarkup(thread, query = currentSearchQuery()) {
+  const segments = searchConversationPreviewSegments(thread, query);
+  return `
+    <div class="search-result-excerpt">
+      ${segments.map((segment) => (
+        segment.type === 'separator'
+          ? `<span class="search-result-excerpt-separator" aria-hidden="true">${escapeHtml(segment.text || '……')}</span>`
+          : `
+            <span class="search-result-excerpt-line" data-speaker="${escapeHtml(segment.speaker || 'user')}">
+              <span class="search-result-speaker ${searchSpeakerClass(segment.speaker)}">${escapeHtml(searchSpeakerLabel(segment.speaker))}</span>
+              <span class="search-result-message">${highlightSearchTerm(segment.text, query, 420)}</span>
+            </span>
+          `
+      )).join('')}
+    </div>
+  `;
+}
+
+function threadAttachmentSource(thread) {
+  return thread?.latestMeaningfulUserMessage
+    || thread?.latestUserMessage
+    || thread?.firstUserMessage
+    || thread?.title
+    || '';
+}
+
+function searchResultSideMetaMarkup(thread) {
+  return `
+    <div class="search-result-side-meta">
+      <span>${escapeHtml(providerLabel(thread))}</span>
+      <span aria-hidden="true">|</span>
+      <span>${escapeHtml(thread.model || '未知模型')}</span>
+    </div>
+  `;
+}
+
+function searchResultRowMarkup(thread, { query = currentSearchQuery(), isSelected = false } = {}) {
+  const openDisabled = canOpenThread(thread) ? '' : ' disabled';
+  const artifactModule = threadArtifactModuleMarkup(thread);
+  return `
+    <article class="search-result-row${isSelected ? ' is-selected' : ''}${isSubagentThread(thread) ? ' is-subagent' : ''}${Number(thread?.subagentCount || 0) > 0 ? ' is-host-agent' : ''}${artifactModule ? ' has-artifacts' : ''}" data-thread-kind="${isSubagentThread(thread) ? 'subagent' : 'host'}">
+      ${threadPrimaryModuleMarkup(thread, {
+        className: 'search-result-main',
+        query,
+        isSelected,
+        showMeta: false,
+      })}
+      ${artifactModule}
+      ${threadSideMarkup(thread, openDisabled)}
+    </article>
   `;
 }
 
@@ -751,7 +1211,8 @@ function arrangeThreadRows(threads) {
 }
 
 function openLabel(thread) {
-  return thread?.openLabel || '打开';
+  const label = String(thread?.openLabel || '打开').trim() || '打开';
+  return label === '恢复' ? '打开' : label;
 }
 
 function canOpenThread(thread) {
@@ -759,7 +1220,8 @@ function canOpenThread(thread) {
 }
 
 function shouldOpenDeepLinkInBrowser(thread) {
-  return thread?.provider === 'codex' && String(thread?.appDeepLink || '').startsWith('codex://');
+  return thread?.provider === 'codex'
+    && String(thread?.appDeepLink || '').startsWith('codex://');
 }
 
 function disableButtonBriefly(button, durationMs = 1200) {
@@ -889,26 +1351,26 @@ function renderSummary(summary) {
   ];
 
   elements.summary.innerHTML = `
-    <section class="summary-section summary-section-current" aria-labelledby="current-summary-heading">
+    <section class="summary-section summary-section-compact" aria-labelledby="current-summary-heading">
       <div class="summary-section-heading">
         <h2 id="current-summary-heading">当前重点</h2>
-        <p>quota、待处理和今日消耗</p>
+        <p>quota、待处理、今日消耗、长期累计和来源接入</p>
       </div>
       <div class="summary-card-grid">
         ${currentItems.map(summaryCard).join('')}
       </div>
-    </section>
-    <section class="summary-secondary-row${providers.length ? '' : ' summary-secondary-row-solo'}" aria-label="长期累计与来源接入">
-      <section class="summary-section summary-section-lifetime" aria-labelledby="lifetime-summary-heading">
-        <div class="summary-section-heading">
-          <h2 id="lifetime-summary-heading">长期累计</h2>
-          <p>任务与 token 总账</p>
+      <div class="summary-meta-row${providers.length ? '' : ' summary-meta-row-solo'}" aria-label="长期累计与来源接入">
+        <div class="summary-lifetime-strip" aria-label="长期累计">
+          <div class="summary-strip-heading">
+            <span>长期累计</span>
+            <small>任务与 token 总账</small>
+          </div>
+          <div class="summary-strip-items">
+            ${lifetimeItems.map(summaryStripItem).join('')}
+          </div>
         </div>
-        <div class="summary-card-grid summary-card-grid-lifetime">
-          ${lifetimeItems.map(summaryCard).join('')}
-        </div>
-      </section>
-      ${renderProviderStrip(providers)}
+        ${renderProviderStrip(providers)}
+      </div>
     </section>
   `;
 }
@@ -948,44 +1410,25 @@ function renderProjectFilter(projects) {
 function filteredThreads() {
   if (!state.dashboard) return [];
 
-  const query = elements.searchInput.value.trim().toLowerCase();
-  const provider = elements.providerFilter.value;
-  const status = elements.statusFilter.value;
-  const project = elements.projectFilter.value;
-  const includeArchived = elements.archiveToggle.checked;
-
-  return state.dashboard.threads.filter((thread) => {
-    if (!includeArchived && thread.archived) return false;
-    if (provider !== 'all' && thread.provider !== provider) return false;
-    if (status !== 'all' && thread.status !== status) return false;
-    if (project !== 'all' && thread.cwd !== project) return false;
-    if (!query) return true;
-
-    return [
-      thread.title,
-      thread.projectName,
-      thread.providerLabel,
-      thread.provider,
-      thread.cwd,
-      thread.model,
-      thread.id,
-      threadRelationshipLabel(thread),
-      hostThreadLabel(thread),
-      thread.agentNickname,
-      thread.agentRole,
-    ].some((field) => String(field || '').toLowerCase().includes(query));
-  });
+  return [...state.dashboard.threads]
+    .filter((thread) => !thread.archived)
+    .sort((a, b) => (
+      Number(b.groupUpdatedAtMs || b.updatedAtMs || 0)
+      - Number(a.groupUpdatedAtMs || a.updatedAtMs || 0)
+    ))
+    .slice(0, RECENT_THREAD_LIMIT);
 }
 
 function renderThreads() {
   const threads = filteredThreads();
-  elements.threadCount.textContent = `${threads.length} 项`;
+
+  elements.threadCount.textContent = `${threads.length} 项 · 最近`;
 
   if (!threads.length) {
-    const provider = state.dashboard?.providers?.find((item) => item.id === elements.providerFilter.value);
-    elements.threads.innerHTML = provider?.status === 'missing'
-      ? `<p class="empty-state">${escapeHtml(provider.message || `${provider.label} 未检测到。安装后刷新看板。`)}</p>`
-      : '<p class="empty-state">没有匹配任务。</p>';
+    const missingProvider = state.dashboard?.providers?.find((item) => item.status === 'missing');
+    elements.threads.innerHTML = missingProvider
+      ? `<p class="empty-state">${escapeHtml(missingProvider.message || `${missingProvider.label} 未检测到。安装后刷新看板。`)}</p>`
+      : '<p class="empty-state">暂无最近线程。</p>';
     renderDetail(null);
     return;
   }
@@ -1000,24 +1443,80 @@ function renderThreads() {
     const openDisabled = canOpenThread(thread) ? '' : ' disabled';
     return `
       <article class="${threadRowClasses(thread, isSelected)}" data-thread-kind="${isSubagentThread(thread) ? 'subagent' : 'host'}">
-        <button class="thread-main" type="button" data-thread-id="${escapeHtml(thread.id)}" aria-pressed="${isSelected}">
-          <div>${statusMarkup(thread.status)}</div>
-          <div>
-            ${threadTitleMarkup(thread)}
-            <div class="thread-meta">
-              ${threadMetaItems(thread).map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
-            </div>
-          </div>
-          ${tokenUsageMarkup(thread)}
-        </button>
-        <div class="row-actions" aria-label="任务操作">
-          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>打开</button>
-        </div>
+        ${threadPrimaryModuleMarkup(thread, {
+          className: 'thread-main',
+          query: '',
+          isSelected,
+          showMeta: false,
+        })}
+        ${threadArtifactModuleMarkup(thread)}
+        ${threadSideMarkup(thread, openDisabled)}
       </article>
     `;
   }).join('');
 
   renderDetail(arrangedThreads.find((thread) => thread.id === state.selectedThreadId));
+}
+
+function renderSearchResults() {
+  if (!elements.searchResults) return;
+
+  const query = currentSearchQuery();
+  const threads = searchResultThreads();
+  const total = Number(state.search?.result?.total ?? threads.length);
+  const searchIndex = state.search?.result?.index;
+  const indexed = searchIndex?.threadCount ? ` · 索引 ${searchIndex.threadCount} 条` : '';
+  const loadedCount = threads.length;
+  const loadMoreText = state.search.loadMoreError
+    ? `加载更多失败：${state.search.loadMoreError}`
+    : state.search.isLoadingMore
+    ? '正在加载更多历史线程...'
+    : (state.search.hasMore ? '继续向下滚动加载更多' : '已加载全部匹配线程');
+
+  if (!query && !state.search.result) {
+    elements.searchCount.textContent = '输入关键词';
+    elements.searchResults.innerHTML = '<p class="empty-state search-empty-state">输入关键词后搜索全部历史线程。</p>';
+    renderSearchLoadState('');
+    return;
+  }
+
+  if (state.search.isLoading && !state.search.result) {
+    elements.searchCount.textContent = '搜索中';
+    elements.searchResults.innerHTML = '<p class="empty-state search-empty-state">正在搜索全部历史线程...</p>';
+    renderSearchLoadState('');
+    return;
+  }
+
+  if (state.search.error) {
+    elements.searchCount.textContent = '搜索异常';
+    elements.searchResults.innerHTML = `<p class="empty-state search-empty-state">搜索失败：${escapeHtml(state.search.error)}</p>`;
+    renderSearchLoadState('');
+    return;
+  }
+
+  const countLabel = total > loadedCount
+    ? `${loadedCount} / ${total} 项${indexed}`
+    : `${total} 项${indexed}`;
+  elements.searchCount.textContent = state.search.isLoading ? `更新中 · ${countLabel}` : countLabel;
+
+  if (!threads.length) {
+    elements.searchResults.innerHTML = '<p class="empty-state search-empty-state">没有匹配历史线程。</p>';
+    renderSearchLoadState('');
+    return;
+  }
+
+  elements.searchResults.innerHTML = threads.map((thread) => searchResultRowMarkup(thread, {
+    query,
+    isSelected: thread.id === state.search.modalThreadId,
+  })).join('');
+
+  renderSearchLoadState(loadMoreText);
+}
+
+function renderSearchLoadState(message = '') {
+  if (!elements.searchLoadSentinel) return;
+  elements.searchLoadSentinel.textContent = message;
+  elements.searchLoadSentinel.hidden = !message;
 }
 
 function renderNotifications(notifications) {
@@ -1080,9 +1579,12 @@ function renderNotifications(notifications) {
   ` : '');
 }
 
-function renderProjects(projects) {
+function renderProjectHistory(history) {
+  const projects = history?.items || [];
   if (!projects.length) {
-    elements.projects.innerHTML = '<p class="empty-state">暂无活跃项目。</p>';
+    elements.projects.innerHTML = state.search?.projectHistoryError
+      ? `<p class="empty-state">项目历史加载失败：${escapeHtml(state.search.projectHistoryError)}</p>`
+      : '<p class="empty-state">暂无项目历史。</p>';
     return;
   }
 
@@ -1095,10 +1597,13 @@ function renderProjects(projects) {
           <div class="project-name">${escapeHtml(project.projectName)}</div>
           <div class="project-meta">
             <span>${project.threadCount} 项任务</span>
+            ${Number.isFinite(Number(project.activeThreadCount)) ? `<span>${escapeHtml(project.activeThreadCount)} 活跃</span>` : ''}
+            ${Number(project.archivedThreadCount || 0) > 0 ? `<span>${escapeHtml(project.archivedThreadCount)} 归档</span>` : ''}
             <span>今日 ${escapeHtml(formatTokens(project.todayTokensUsed))}</span>
             <span>历史 ${escapeHtml(formatTokens(project.tokensUsed))}</span>
             <span>${escapeHtml(relativeTime(project.latestUpdatedAtMs))}</span>
           </div>
+          ${project.providers?.length ? `<div class="project-history-summary">${project.providers.map(escapeHtml).join(' · ')}</div>` : ''}
         </div>
         <div class="project-bar" aria-hidden="true" style="--value: ${width}%"><span></span></div>
       </article>
@@ -1106,11 +1611,341 @@ function renderProjects(projects) {
   }).join('');
 }
 
+function renderProjects(projects) {
+  if (state.search?.projectHistory?.items?.length || state.search?.projectHistoryError) {
+    renderProjectHistory(state.search.projectHistory);
+    return;
+  }
+
+  renderProjectHistory({ items: projects });
+}
+
+function attachmentPreviewStripMarkup(value = '') {
+  const imageItems = localFileMentionItems(value)
+    .filter((item) => item.previewable && item.path)
+    .slice(0, 3);
+
+  if (!imageItems.length) return '';
+
+  return `
+    <div class="attachment-preview-strip" aria-label="图片附件预览">
+      ${imageItems.map((item) => {
+        const src = localFilePreviewUrl(item.path);
+        const title = `${item.name} · ${item.type}`;
+        return `
+          <button
+            class="attachment-thumb-button"
+            type="button"
+            data-preview-image-src="${escapeHtml(src)}"
+            data-preview-image-title="${escapeHtml(title)}"
+            aria-label="${escapeHtml(`查看原图 ${item.name}`)}"
+          >
+            <span class="attachment-thumb-frame" aria-hidden="true">
+              <img data-preview-image-thumb src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async">
+              <span class="attachment-thumb-fallback" data-preview-image-fallback hidden>不可预览</span>
+            </span>
+            <span class="attachment-thumb-label">${escapeHtml(item.name)}</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 function compactSignal(value = '', maxLength = 180) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = (localFileMentionSummary(value) || String(value || '')).replace(/\s+/g, ' ').trim();
   if (!text) return '';
   if (text.length <= maxLength) return text;
   return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function localFileMentionSummary(value = '') {
+  const items = localFileMentionItems(value);
+  if (!items.length) return '';
+
+  const visibleItems = items.slice(0, 3);
+  const summary = visibleItems.map((item) => `${item.name} · ${item.type}`).join('；');
+  const hiddenCount = items.length - visibleItems.length;
+  return hiddenCount > 0 ? `${summary}；另 ${hiddenCount} 个文件` : summary;
+}
+
+function localFileMentionItems(value = '') {
+  const text = String(value || '');
+  if (!shouldSummarizeLocalFileMentions(text)) return [];
+
+  const items = [];
+  const seen = new Set();
+  const addItem = (name, filePath = '') => {
+    const fileName = localFileName(name) || localFileName(filePath);
+    const cleanPath = localFilePath(filePath || name);
+    const key = cleanPath || fileName;
+    if (!fileName || seen.has(key)) return;
+    seen.add(key);
+    items.push({
+      name: fileName,
+      path: cleanPath,
+      previewable: Boolean(cleanPath && isPreviewableImageFile(fileName)),
+      type: localFileTypeLabel(fileName),
+    });
+  };
+
+  const fileHeadingPattern = /##\s+([^:\n#]+?\.[A-Za-z0-9]{1,12})\s*:\s*((?:file:\/\/|~\/|\/|[A-Za-z]:[\\/])[^#\n\r]*?)(?=(?:\s+##\s)|(?:\s+#\s)|\n|$)/g;
+  for (const match of text.matchAll(fileHeadingPattern)) {
+    addItem(match[1], match[2]);
+  }
+
+  const imagePathPattern = /<image\b[^>]*\bpath=(["'])(.*?)\1[^>]*>/gi;
+  for (const match of text.matchAll(imagePathPattern)) {
+    addItem('', match[2]);
+  }
+
+  if (!items.length) {
+    const standalonePathPattern = /(?:^|[\s(["'`])((?:file:\/\/|~\/|\/|[A-Za-z]:[\\/])[^"'`<>\n\r]+?\.[A-Za-z0-9]{1,12})(?=$|[\s)"'`<>])/g;
+    for (const match of text.matchAll(standalonePathPattern)) {
+      addItem('', match[1]);
+    }
+  }
+
+  return items;
+}
+
+function shouldSummarizeLocalFileMentions(value = '') {
+  const text = String(value || '');
+  if (/Files mentioned by the user/i.test(text) || /<image\b/i.test(text)) return true;
+
+  const compactText = text.replace(/\s+/g, ' ').trim();
+  return /^(?:file:\/\/|~\/|\/|[A-Za-z]:[\\/]).+\.[A-Za-z0-9]{1,12}$/.test(compactText);
+}
+
+function localFileName(value = '') {
+  let text = String(value || '').trim();
+  if (!text) return '';
+
+  text = text.replace(/^["'(<]+|[>"')]+$/g, '');
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    // Keep the original text if it is not URL encoded.
+  }
+  text = text.replace(/^file:\/+/, '/').replace(/\\/g, '/').split(/[?#]/)[0];
+
+  const parts = text.split('/').filter(Boolean);
+  const fileName = parts.pop() || text;
+  return /\.[A-Za-z0-9]{1,12}$/.test(fileName) ? fileName : '';
+}
+
+function localFilePath(value = '') {
+  let text = String(value || '').trim();
+  if (!text) return '';
+
+  text = text.replace(/^["'(<]+|[>"')]+$/g, '');
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    // Keep the original text if it is not URL encoded.
+  }
+  text = text.replace(/^file:\/+/, '/').replace(/\\/g, '/').split(/[?#]/)[0];
+  return /^(?:~\/|\/|[A-Za-z]:\/)/.test(text) ? text : '';
+}
+
+function isPreviewableImageFile(fileName = '') {
+  const extension = (String(fileName).match(/\.([A-Za-z0-9]{1,12})$/)?.[1] || '').toLowerCase();
+  return ['bmp', 'gif', 'jpeg', 'jpg', 'png', 'webp'].includes(extension);
+}
+
+function localFilePreviewUrl(filePath = '') {
+  return `/api/local-file-preview?path=${encodeURIComponent(filePath)}`;
+}
+
+function markAttachmentPreviewUnavailable(image) {
+  const button = image?.closest?.('.attachment-thumb-button');
+  if (!button) return;
+
+  const fallback = button.querySelector('[data-preview-image-fallback]');
+  image.hidden = true;
+  image.removeAttribute('src');
+  button.classList.add('is-unavailable');
+  button.disabled = true;
+  button.removeAttribute('data-preview-image-src');
+  button.setAttribute('aria-label', `${button.dataset.previewImageTitle || '图片'} 暂不可预览`);
+  if (fallback) fallback.hidden = false;
+}
+
+function markArtifactImagePreviewUnavailable(image) {
+  const frame = image?.closest?.('.artifact-poster, .artifact-timeline-thumb, .artifact-detail-preview');
+  if (!frame) return;
+
+  const fallback = frame.querySelector('[data-artifact-preview-fallback]');
+  image.hidden = true;
+  image.removeAttribute('src');
+  frame.classList.add('is-unavailable');
+  if (fallback) fallback.hidden = false;
+}
+
+function localFileExtension(fileName = '') {
+  const cleanName = String(fileName || '').split(/[?#]/)[0];
+  const match = cleanName.match(/\.([A-Za-z0-9]{1,12})$/);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function localFileTypeLabel(fileName = '') {
+  const extension = localFileExtension(fileName);
+  if (!extension) return '文件';
+
+  if (['avif', 'bmp', 'gif', 'heic', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp'].includes(extension)) return '图片';
+  if (extension === 'pdf') return 'PDF';
+  if (['md', 'markdown', 'mdx'].includes(extension)) return 'Markdown';
+  if (['doc', 'docx', 'pages', 'rtf'].includes(extension)) return '文档';
+  if (['csv', 'numbers', 'xls', 'xlsx'].includes(extension)) return '表格';
+  if (['key', 'ppt', 'pptx'].includes(extension)) return '演示文稿';
+  if (['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(extension)) return '视频';
+  if (['aac', 'aiff', 'flac', 'm4a', 'mp3', 'wav'].includes(extension)) return '音频';
+  if (['zip', 'gz', 'rar', 'tar', 'tgz', '7z'].includes(extension)) return '压缩包';
+  if (['txt', 'log'].includes(extension)) return '文本';
+  if (['css', 'go', 'html', 'java', 'js', 'json', 'jsx', 'mjs', 'py', 'rs', 'sh', 'ts', 'tsx', 'xml', 'yaml', 'yml'].includes(extension)) return '代码';
+  return extension.toUpperCase();
+}
+
+function artifactItems(thread) {
+  return Array.isArray(thread?.artifacts?.items) ? thread.artifacts.items : [];
+}
+
+function artifactTotal(thread) {
+  return Number(thread?.artifacts?.total || artifactItems(thread).length || 0);
+}
+
+function artifactTypeLabel(item = {}) {
+  if (item.typeLabel) return item.typeLabel;
+  if (item.type === 'image') return '图片';
+  if (item.type === 'html') return 'HTML';
+  if (item.type === 'markdown') return 'Markdown';
+  if (item.type === 'link') return 'URL';
+  return localFileTypeLabel(item.title || item.path || item.url || '') || '文件';
+}
+
+function artifactSourceLabel(source = '') {
+  return source === 'agent' ? 'Agent' : '用户';
+}
+
+function artifactDisplayTitle(item = {}) {
+  return item.title || item.name || item.url || artifactTypeLabel(item);
+}
+
+function artifactPosterGlyph(item = {}) {
+  const extension = String(item.extension || localFileExtension(item.title || item.path || item.url) || '').toUpperCase();
+  if (item.type === 'image') return extension ? extension.slice(0, 4) : 'IMG';
+  if (item.type === 'html') return 'HTML';
+  if (item.type === 'markdown') return 'MD';
+  if (item.type === 'link') return 'URL';
+  return extension ? extension.slice(0, 4) : 'FILE';
+}
+
+function artifactIconKind(item = {}) {
+  const extension = String(item.extension || localFileExtension(item.title || item.path || item.url) || '').toLowerCase();
+  if (item.type === 'image' || ['avif', 'bmp', 'gif', 'heic', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp'].includes(extension)) return 'image';
+  if (item.type === 'link') return 'link';
+  if (item.type === 'html' || ['htm', 'html'].includes(extension)) return 'html';
+  if (item.type === 'markdown' || ['md', 'markdown', 'mdx'].includes(extension)) return 'markdown';
+  if (extension === 'pdf') return 'pdf';
+  if (['doc', 'docx', 'pages', 'rtf'].includes(extension)) return 'document';
+  if (['csv', 'numbers', 'xls', 'xlsx'].includes(extension)) return 'spreadsheet';
+  if (['key', 'ppt', 'pptx'].includes(extension)) return 'presentation';
+  if (['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(extension)) return 'video';
+  if (['aac', 'aiff', 'flac', 'm4a', 'mp3', 'wav'].includes(extension)) return 'audio';
+  if (['zip', 'gz', 'rar', 'tar', 'tgz', '7z'].includes(extension)) return 'archive';
+  if (['txt', 'log'].includes(extension)) return 'text';
+  if (['css', 'go', 'java', 'js', 'json', 'jsx', 'mjs', 'py', 'rs', 'sh', 'ts', 'tsx', 'xml', 'yaml', 'yml'].includes(extension)) return 'code';
+  return 'file';
+}
+
+function artifactIconSvg(kind = 'file') {
+  const paths = {
+    image: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="10" r="1.5"></circle><path d="m4 17 5-5 4 4 2-2 5 5"></path>',
+    link: '<path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"></path>',
+    html: '<rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="m10 9-3 3 3 3"></path><path d="m14 9 3 3-3 3"></path>',
+    markdown: '<path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"></path><path d="M7 15V9l3 3 3-3v6"></path><path d="M16 9v6"></path><path d="m14 13 2 2 2-2"></path>',
+    pdf: '<path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M14 3v5h5"></path><path d="M8 13h8"></path><path d="M8 17h5"></path>',
+    document: '<path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M14 3v5h5"></path><path d="M8 12h8"></path><path d="M8 16h8"></path>',
+    spreadsheet: '<rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M4 10h16"></path><path d="M4 15h16"></path><path d="M10 4v16"></path><path d="M15 4v16"></path>',
+    presentation: '<rect x="4" y="5" width="16" height="11" rx="2"></rect><path d="M12 16v4"></path><path d="M8 20h8"></path><path d="M9 12l2-2 2 2 3-4"></path>',
+    video: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m10 9 5 3-5 3V9Z"></path>',
+    audio: '<path d="M9 18V6l10-2v12"></path><circle cx="6" cy="18" r="3"></circle><circle cx="16" cy="16" r="3"></circle>',
+    archive: '<path d="M4 7h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"></path><path d="M4 7l2-4h12l2 4"></path><path d="M9 11h6"></path>',
+    text: '<path d="M7 3h10a2 2 0 0 1 2 2v16H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M8 8h8"></path><path d="M8 12h8"></path><path d="M8 16h5"></path>',
+    code: '<path d="m9 8-4 4 4 4"></path><path d="m15 8 4 4-4 4"></path><path d="m13 5-2 14"></path>',
+    file: '<path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M14 3v5h5"></path>',
+  };
+
+  return `<svg class="artifact-type-icon-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" focusable="false">${paths[kind] || paths.file}</svg>`;
+}
+
+function artifactTypeIconMarkup(item = {}, attributes = '') {
+  const kind = artifactIconKind(item);
+  const glyph = artifactPosterGlyph(item);
+  const attributeText = attributes ? ` ${attributes}` : '';
+  return `
+    <span class="artifact-type-icon is-${kind}"${attributeText} aria-hidden="true">
+      ${artifactIconSvg(kind)}
+      <span class="artifact-type-icon-label">${escapeHtml(glyph)}</span>
+    </span>
+  `;
+}
+
+function artifactPreviewImageSrc(item = {}) {
+  if (item.type !== 'image' || !item.path) return '';
+  return localFilePreviewUrl(item.path);
+}
+
+function artifactPosterMarkup(item = {}, index = 0) {
+  const title = artifactDisplayTitle(item);
+  const src = artifactPreviewImageSrc(item);
+  return `
+    <span class="artifact-poster" style="--poster-index: ${index}" title="${escapeHtml(`${title} · ${artifactTypeLabel(item)}`)}">
+      ${src
+        ? `<img data-artifact-preview-image src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async">${artifactTypeIconMarkup(item, 'data-artifact-preview-fallback hidden')}`
+        : artifactTypeIconMarkup(item)}
+    </span>
+  `;
+}
+
+function artifactPosterStackMarkup(items = [], total = items.length) {
+  const visibleItems = items.slice(0, 3);
+  if (!visibleItems.length) {
+    return `<span class="artifact-empty-poster" aria-hidden="true">${artifactTypeIconMarkup({})}</span>`;
+  }
+
+  return `
+    <span class="artifact-poster-stack" aria-hidden="true">
+      ${visibleItems.map((item, index) => artifactPosterMarkup(item, index)).join('')}
+      ${total > visibleItems.length ? `<span class="artifact-count-badge">+${escapeHtml(total - visibleItems.length)}</span>` : ''}
+    </span>
+  `;
+}
+
+function threadArtifactModuleMarkup(thread) {
+  const total = artifactTotal(thread);
+  if (!total) return '';
+
+  const items = artifactItems(thread);
+  const firstItem = items[0] || {};
+  const isSingle = total === 1 && firstItem.id;
+  const actionAttributes = isSingle
+    ? `data-open-artifact-detail-id="${escapeHtml(firstItem.id)}" data-artifact-thread-id="${escapeHtml(thread.id)}"`
+    : `data-open-artifact-timeline-id="${escapeHtml(thread.id)}"`;
+  const label = total === 1
+    ? `${artifactTypeLabel(firstItem)} · ${artifactDisplayTitle(firstItem)}`
+    : `${total} 项素材`;
+
+  return `
+    <button class="thread-artifact-module" type="button" ${actionAttributes} aria-label="${escapeHtml(`查看${label}`)}">
+      ${artifactPosterStackMarkup(items, total)}
+      <span class="thread-artifact-copy">
+        <span>素材</span>
+        <strong>${escapeHtml(total === 1 ? artifactTypeLabel(firstItem) : `${total} 项`)}</strong>
+        <small>${escapeHtml(total === 1 ? artifactDisplayTitle(firstItem) : '图片 / 文件 / URL')}</small>
+      </span>
+    </button>
+  `;
 }
 
 function formatTimestamp(timestamp) {
@@ -1302,7 +2137,7 @@ function buildThreadSummary(thread) {
     '用途：粘给新的 Codex 任务接手；只含本地元数据和截断信号，不含完整内容。',
     '',
     '状态摘要:',
-    `- 任务: ${thread.title || '未命名任务'}`,
+    `- 任务: ${displayThreadTitle(thread)}`,
     `- 来源: ${providerLabel(thread)}`,
     `- 阶段: ${threadPhaseLabel(thread, pendingTools, notifications)}`,
     `- 状态: ${STATUS_LABELS[thread.status] || thread.status || '-'}`,
@@ -1736,10 +2571,9 @@ function renderReviewPanel(thread) {
   `;
 }
 
-function renderDetail(thread) {
+function threadDetailMarkup(thread) {
   if (!thread) {
-    elements.detail.innerHTML = '<p class="empty-state">选择一个任务查看结构化审计信号。</p>';
-    return;
+    return '<p class="empty-state">选择一个任务查看结构化审计信号。</p>';
   }
 
   const openDisabled = canOpenThread(thread) ? '' : ' disabled';
@@ -1789,11 +2623,11 @@ function renderDetail(thread) {
     });
   }
 
-  elements.detail.innerHTML = `
+  return `
     <div class="detail-heading">
       <div>
         <p class="eyebrow">任务详情</p>
-        <h2>${escapeHtml(thread.title)}</h2>
+        <h2>${escapeHtml(displayThreadTitle(thread))}</h2>
       </div>
     </div>
     <div class="detail-layout">
@@ -1803,7 +2637,7 @@ function renderDetail(thread) {
           <p>摘要只包含本地元数据和截断信号，不含完整内容。</p>
         </div>
         <div class="detail-actions" aria-label="当前任务操作">
-          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>打开</button>
+          <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
           <button class="action-button secondary" type="button" data-copy-command-id="${escapeHtml(thread.id)}">复制命令</button>
           <button class="action-button secondary" type="button" data-copy-summary-id="${escapeHtml(thread.id)}">复制摘要</button>
           <button class="action-button secondary" type="button" data-open-review-panel-id="${escapeHtml(thread.id)}">交给另一个 Agent 评审</button>
@@ -1905,9 +2739,14 @@ function renderDetail(thread) {
           <p>只展示截断片段</p>
         </div>
         ${renderDetailList(signalItems, '暂无最近输入或输出信号。')}
+        ${attachmentPreviewStripMarkup(threadAttachmentSource(thread))}
       </section>
     </div>
   `;
+}
+
+function renderDetail(thread) {
+  elements.detail.innerHTML = threadDetailMarkup(thread);
 }
 
 function renderDashboard() {
@@ -1921,6 +2760,7 @@ function renderDashboard() {
   renderNotifications(state.notifications || state.dashboard.notifications);
   renderProjects(state.dashboard.projects);
   renderThreads();
+  if (isSearchPageOpen()) renderSearchResults();
   elements.lastUpdated.textContent = `已更新 ${timeFormat.format(new Date(state.dashboard.generatedAtMs))}`;
   renderMonitorStatus();
 }
@@ -2015,17 +2855,17 @@ function updateInstallButton() {
 }
 
 function updateWindowButtons() {
-  if (!elements.appMinimizeButton) return;
-  elements.appMinimizeButton.hidden = !isStandaloneApp();
+  if (!elements.appHideButton) return;
+  elements.appHideButton.hidden = !isStandaloneApp();
 }
 
-async function minimizeInstalledApp() {
+async function hideInstalledApp() {
   try {
-    const response = await fetch('/api/app/minimize-installed', { method: 'POST' });
+    const response = await fetch('/api/app/hide-installed', { method: 'POST' });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
   } catch (error) {
-    showError(`无法收起桌面应用：${error.message}`);
+    showError(`无法隐藏桌面应用：${error.message}`);
   }
 }
 
@@ -2212,6 +3052,9 @@ async function loadDashboard({ silent = false, force = false } = {}) {
         state.dashboardSignature = nextSignature;
         renderDashboardStatusOnly();
       }
+      if (state.search && (force || !state.search.projectHistory)) {
+        void loadProjectHistory({ force });
+      }
     }
   } catch (error) {
     state.refreshError = error.message;
@@ -2292,6 +3135,186 @@ async function fetchJson(url, options = {}) {
   return body;
 }
 
+function searchParamsFromControls({ force = false, cursor = '' } = {}) {
+  const params = new URLSearchParams();
+  params.set('q', currentSearchQuery());
+  params.set('provider', elements.providerFilter?.value || 'all');
+  params.set('status', elements.statusFilter?.value || 'all');
+  params.set('project', elements.projectFilter?.value || 'all');
+  params.set('limit', String(SEARCH_RESULT_LIMIT));
+  if (cursor) params.set('cursor', cursor);
+  if (elements.archiveToggle?.checked) params.set('archived', '1');
+  if (elements.subagentToggle?.checked) params.set('subagents', '1');
+  if (elements.automationToggle?.checked) params.set('automations', '1');
+  if (force) params.set('force', '1');
+  return params;
+}
+
+function mergeSearchResults(previous, next) {
+  const seen = new Set();
+  const items = [];
+  for (const item of [...(previous?.items || []), ...(next?.items || [])]) {
+    const key = item?.id || item?.externalId || '';
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    items.push(item);
+  }
+  return {
+    ...next,
+    items,
+  };
+}
+
+function resetSearchPaging() {
+  state.search.nextCursor = '';
+  state.search.hasMore = false;
+  state.search.isLoadingMore = false;
+  state.search.loadMoreError = '';
+}
+
+async function runSearch({ force = false, allowEmpty = false, append = false, cursor = '' } = {}) {
+  const query = currentSearchQuery();
+  state.search.query = query;
+
+  if (!query && !allowEmpty) {
+    state.search.result = null;
+    state.search.error = '';
+    state.search.isLoading = false;
+    resetSearchPaging();
+    closeSearchDetailModal({ renderResults: false });
+    renderSearchResults();
+    return null;
+  }
+
+  if (append && (!cursor || state.search.isLoadingMore || !state.search.hasMore)) return null;
+  if (!append) {
+    resetSearchPaging();
+    closeSearchDetailModal({ renderResults: false });
+  }
+
+  const requestId = state.search.requestId + 1;
+  state.search.requestId = requestId;
+  state.search.isLoading = !append;
+  state.search.isLoadingMore = append;
+  state.search.error = '';
+  state.search.loadMoreError = '';
+  renderSearchResults();
+
+  try {
+    const params = searchParamsFromControls({ force, cursor });
+    const result = await fetch(`/api/search?${params.toString()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+        return body;
+      });
+    if (requestId !== state.search.requestId) return null;
+    state.search.result = append ? mergeSearchResults(state.search.result, result) : result;
+    state.search.nextCursor = result.nextCursor || '';
+    state.search.hasMore = Boolean(result.nextCursor);
+    state.search.error = '';
+    return result;
+  } catch (error) {
+    if (requestId !== state.search.requestId) return null;
+    if (append && state.search.result) {
+      state.search.loadMoreError = error.message;
+      state.search.hasMore = false;
+      state.search.nextCursor = '';
+    } else {
+      state.search.error = error.message;
+    }
+    return null;
+  } finally {
+    if (requestId === state.search.requestId) {
+      state.search.isLoading = false;
+      state.search.isLoadingMore = false;
+      renderSearchResults();
+      requestSearchLoadCheck();
+    }
+  }
+}
+
+async function loadProjectHistory({ force = false } = {}) {
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', '24');
+    if (force) params.set('force', '1');
+    const history = await fetch(`/api/projects/history?${params.toString()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+        return body;
+      });
+    state.search.projectHistory = history;
+    state.search.projectHistoryError = '';
+    renderProjectHistory(state.search.projectHistory);
+    return history;
+  } catch (error) {
+    state.search.projectHistoryError = error.message;
+    renderProjects(state.dashboard?.projects || []);
+    return null;
+  }
+}
+
+function clearSearchResult() {
+  if (state.search.timer) {
+    clearTimeout(state.search.timer);
+    state.search.timer = null;
+  }
+  state.search.requestId += 1;
+  state.search.query = '';
+  state.search.result = null;
+  state.search.error = '';
+  state.search.isLoading = false;
+  resetSearchPaging();
+  closeSearchDetailModal({ renderResults: false });
+  renderSearchResults();
+}
+
+function shouldLoadMoreSearchResults() {
+  if (!isSearchPageOpen()) return false;
+  if (!state.search.result || !state.search.hasMore) return false;
+  if (state.search.isLoading || state.search.isLoadingMore) return false;
+  if (!elements.searchLoadSentinel || elements.searchLoadSentinel.hidden) return false;
+  const sentinelBox = elements.searchLoadSentinel.getBoundingClientRect();
+  return sentinelBox.top < window.innerHeight + 520;
+}
+
+function loadMoreSearchResults() {
+  if (!shouldLoadMoreSearchResults()) return;
+  void runSearch({
+    allowEmpty: Boolean(state.search.result),
+    append: true,
+    cursor: state.search.nextCursor,
+  });
+}
+
+function requestSearchLoadCheck() {
+  window.requestAnimationFrame(() => {
+    loadMoreSearchResults();
+  });
+}
+
+function handleSearchControlsChanged() {
+  if (state.search.timer) {
+    clearTimeout(state.search.timer);
+    state.search.timer = null;
+  }
+
+  if (!hasActiveSearchQuery()) {
+    clearSearchResult();
+    renderSearchResults();
+    return;
+  }
+
+  state.search.timer = window.setTimeout(() => {
+    state.search.timer = null;
+    runSearch();
+  }, SEARCH_DEBOUNCE_MS);
+  state.search.isLoading = true;
+  renderSearchResults();
+}
+
 async function loadReviewTargets() {
   if (state.review.targets) return state.review.targets;
   state.review.targets = await fetchJson('/api/review-targets', { cache: 'no-store' });
@@ -2329,7 +3352,364 @@ async function loadReviewJobs(threadId) {
   return items;
 }
 
+function isSearchDetailModalOpen() {
+  return Boolean(state.search.modalThreadId && elements.searchDetailModal && !elements.searchDetailModal.hidden);
+}
+
+function isImagePreviewModalOpen() {
+  return Boolean(elements.imagePreviewModal && !elements.imagePreviewModal.hidden);
+}
+
+function isArtifactTimelineModalOpen() {
+  return Boolean(state.artifacts.threadId && elements.artifactTimelineModal && !elements.artifactTimelineModal.hidden);
+}
+
+function isArtifactDetailModalOpen() {
+  return Boolean(state.artifacts.detailArtifactId && elements.artifactDetailModal && !elements.artifactDetailModal.hidden);
+}
+
+function syncModalBodyClass() {
+  document.body.classList.toggle(
+    'has-modal',
+    isSearchDetailModalOpen()
+      || isImagePreviewModalOpen()
+      || isArtifactTimelineModalOpen()
+      || isArtifactDetailModalOpen(),
+  );
+}
+
+function renderSearchDetailModal() {
+  if (!elements.searchDetailModal || !elements.searchDetailContent) return;
+
+  const thread = findThread(state.search.modalThreadId);
+  if (!thread) {
+    closeSearchDetailModal({ renderResults: true });
+    return;
+  }
+
+  if (elements.searchDetailTitle) {
+    elements.searchDetailTitle.textContent = displayThreadTitle(thread);
+  }
+  elements.searchDetailContent.innerHTML = threadDetailMarkup(thread);
+  elements.searchDetailModal.hidden = false;
+  syncModalBodyClass();
+}
+
+function openSearchDetailModal(threadId) {
+  state.search.modalThreadId = threadId;
+  renderSearchDetailModal();
+  renderSearchResults();
+  window.setTimeout(() => {
+    elements.searchDetailModal?.querySelector('[data-close-search-detail]')?.focus();
+  }, 0);
+}
+
+function closeSearchDetailModal({ renderResults = true } = {}) {
+  state.search.modalThreadId = '';
+  if (elements.searchDetailModal) elements.searchDetailModal.hidden = true;
+  if (elements.searchDetailContent) elements.searchDetailContent.innerHTML = '';
+  syncModalBodyClass();
+  if (renderResults) renderSearchResults();
+}
+
+function openImagePreview(src, title = '原图') {
+  if (!elements.imagePreviewModal || !elements.imagePreviewImage) return;
+
+  elements.imagePreviewImage.src = src;
+  elements.imagePreviewImage.alt = title;
+  if (elements.imagePreviewTitle) elements.imagePreviewTitle.textContent = title;
+  elements.imagePreviewModal.hidden = false;
+  syncModalBodyClass();
+  window.setTimeout(() => {
+    elements.imagePreviewModal?.querySelector('[data-close-image-preview]')?.focus();
+  }, 0);
+}
+
+function closeImagePreview() {
+  if (elements.imagePreviewImage) {
+    elements.imagePreviewImage.removeAttribute('src');
+    elements.imagePreviewImage.alt = '';
+  }
+  if (elements.imagePreviewModal) elements.imagePreviewModal.hidden = true;
+  syncModalBodyClass();
+}
+
+function artifactDataForThread(threadId) {
+  return state.artifacts.dataByThread.get(threadId) || null;
+}
+
+function artifactErrorForThread(threadId) {
+  return state.artifacts.errorsByThread.get(threadId) || '';
+}
+
+function artifactItemsForThread(threadId) {
+  const loaded = artifactDataForThread(threadId);
+  if (Array.isArray(loaded?.artifacts?.items)) return loaded.artifacts.items;
+  return artifactItems(findThread(threadId));
+}
+
+function artifactTurnsForThread(threadId) {
+  const loaded = artifactDataForThread(threadId);
+  if (Array.isArray(loaded?.artifacts?.turns)) return loaded.artifacts.turns;
+  const items = artifactItemsForThread(threadId);
+  const byTurn = new Map();
+  for (const item of items) {
+    const turn = Number(item.turn || 0) || 1;
+    const group = byTurn.get(turn) || { turn, atMs: item.atMs || null, items: [] };
+    group.atMs = Math.max(Number(group.atMs || 0), Number(item.atMs || 0)) || group.atMs;
+    group.items.push(item);
+    byTurn.set(turn, group);
+  }
+  return [...byTurn.values()].sort((a, b) => Number(b.atMs || 0) - Number(a.atMs || 0) || Number(b.turn || 0) - Number(a.turn || 0));
+}
+
+function findArtifact(threadId, artifactId) {
+  return artifactItemsForThread(threadId).find((item) => item.id === artifactId) || null;
+}
+
+async function loadThreadArtifacts(threadId) {
+  if (!threadId) return null;
+  const existing = artifactDataForThread(threadId);
+  if (existing) return existing;
+
+  state.artifacts.isLoading = true;
+  state.artifacts.errorsByThread.delete(threadId);
+  renderArtifactTimelineModal();
+  try {
+    const data = await fetchJson(`/api/threads/${encodeURIComponent(threadId)}/artifacts`, {
+      cache: 'no-store',
+    });
+    state.artifacts.dataByThread.set(threadId, data);
+    state.artifacts.errorsByThread.delete(threadId);
+    return data;
+  } catch (error) {
+    state.artifacts.errorsByThread.set(threadId, error.message);
+    return null;
+  } finally {
+    state.artifacts.isLoading = false;
+    renderArtifactTimelineModal();
+  }
+}
+
+function artifactMetaLine(item = {}) {
+  return [
+    item.turn ? `第 ${item.turn} 轮` : '',
+    artifactSourceLabel(item.source),
+    formatTimestamp(item.atMs),
+  ].filter((part) => part && part !== '-').join(' · ');
+}
+
+function artifactTimelineItemMarkup(threadId, item = {}) {
+  const src = artifactPreviewImageSrc(item);
+  return `
+    <button class="artifact-timeline-item" type="button" data-open-artifact-detail-id="${escapeHtml(item.id || '')}" data-artifact-thread-id="${escapeHtml(threadId)}">
+      <span class="artifact-timeline-thumb" aria-hidden="true">
+        ${src
+          ? `<img data-artifact-preview-image src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async">${artifactTypeIconMarkup(item, 'data-artifact-preview-fallback hidden')}`
+          : artifactTypeIconMarkup(item)}
+      </span>
+      <span class="artifact-timeline-copy">
+        <strong>${escapeHtml(artifactDisplayTitle(item))}</strong>
+        <small>${escapeHtml(`${artifactTypeLabel(item)} · ${artifactSourceLabel(item.source)}`)}</small>
+      </span>
+    </button>
+  `;
+}
+
+function renderArtifactTimelineModal() {
+  if (!elements.artifactTimelineModal || !elements.artifactTimelineContent) return;
+
+  const threadId = state.artifacts.threadId;
+  const thread = findThread(threadId);
+  if (!threadId || !thread) {
+    closeArtifactTimelineModal();
+    return;
+  }
+
+  if (elements.artifactTimelineTitle) {
+    elements.artifactTimelineTitle.textContent = displayThreadTitle(thread);
+  }
+
+  const error = artifactErrorForThread(threadId);
+  const turns = artifactTurnsForThread(threadId);
+  const total = artifactDataForThread(threadId)?.artifacts?.total || artifactTotal(thread);
+  let content = '';
+  if (state.artifacts.isLoading && !artifactDataForThread(threadId)) {
+    content = '<p class="empty-state compact">正在读取素材时间轴...</p>';
+  } else if (error) {
+    content = `<p class="empty-state compact">素材读取失败：${escapeHtml(error)}</p>`;
+  } else if (!turns.length) {
+    content = '<p class="empty-state compact">这个线程暂未发现素材。</p>';
+  } else {
+    content = `
+      <div class="artifact-timeline-summary">
+        <strong>${escapeHtml(total)} 项素材</strong>
+        <span>按对话时间逆序排列</span>
+      </div>
+      <div class="artifact-timeline-list">
+        ${turns.map((turn) => `
+          <article class="artifact-turn">
+            <div class="artifact-turn-marker" aria-hidden="true"></div>
+            <div class="artifact-turn-body">
+              <div class="artifact-turn-heading">
+                <strong>第 ${escapeHtml(turn.turn)} 轮</strong>
+                <span>${escapeHtml(formatTimestamp(turn.atMs))}</span>
+              </div>
+              <div class="artifact-turn-grid">
+                ${(turn.items || []).map((item) => artifactTimelineItemMarkup(threadId, item)).join('')}
+              </div>
+            </div>
+          </article>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  elements.artifactTimelineContent.innerHTML = content;
+  elements.artifactTimelineModal.hidden = false;
+  syncModalBodyClass();
+}
+
+function openArtifactTimeline(threadId) {
+  state.artifacts.threadId = threadId;
+  renderArtifactTimelineModal();
+  loadThreadArtifacts(threadId);
+  window.setTimeout(() => {
+    elements.artifactTimelineModal?.querySelector('[data-close-artifact-timeline]')?.focus();
+  }, 0);
+}
+
+function closeArtifactTimelineModal() {
+  state.artifacts.threadId = '';
+  if (elements.artifactTimelineModal) elements.artifactTimelineModal.hidden = true;
+  if (elements.artifactTimelineContent) elements.artifactTimelineContent.innerHTML = '';
+  syncModalBodyClass();
+}
+
+function artifactDetailPreviewMarkup(item = {}) {
+  const src = artifactPreviewImageSrc(item);
+  if (src) {
+    return `
+      <div class="artifact-detail-preview is-image">
+        <img data-artifact-preview-image src="${escapeHtml(src)}" alt="${escapeHtml(artifactDisplayTitle(item))}">
+        ${artifactTypeIconMarkup(item, 'data-artifact-preview-fallback hidden')}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="artifact-detail-preview">
+      ${artifactTypeIconMarkup(item)}
+    </div>
+  `;
+}
+
+function artifactOpenLabel(item = {}) {
+  if (item.url) return item.type === 'image' ? '打开图片链接' : '打开链接';
+  if (item.type === 'html') return '用浏览器打开';
+  if (item.type === 'markdown') return '打开 Markdown';
+  return '打开文件';
+}
+
+function artifactDetailMarkup(threadId, item = {}) {
+  const canOpen = Boolean(item.url || item.path);
+  const urlLine = item.url ? `
+    <p class="artifact-link-line">
+      <span>链接</span>
+      <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a>
+    </p>
+  ` : '';
+
+  return `
+    <div class="artifact-detail-layout">
+      ${artifactDetailPreviewMarkup(item)}
+      <div class="artifact-detail-info">
+        <div class="artifact-detail-type">${escapeHtml(artifactTypeLabel(item))}</div>
+        <h3>${escapeHtml(artifactDisplayTitle(item))}</h3>
+        <p>${escapeHtml(artifactMetaLine(item))}</p>
+        ${urlLine}
+        <div class="detail-actions">
+          <button class="action-button primary" type="button" data-open-artifact-target-id="${escapeHtml(item.id || '')}" data-artifact-thread-id="${escapeHtml(threadId)}"${canOpen ? '' : ' disabled'}>${escapeHtml(artifactOpenLabel(item))}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderArtifactDetailModal() {
+  if (!elements.artifactDetailModal || !elements.artifactDetailContent) return;
+  const threadId = state.artifacts.detailThreadId;
+  const artifactId = state.artifacts.detailArtifactId;
+  const item = findArtifact(threadId, artifactId);
+
+  if (!threadId || !artifactId || !item) {
+    closeArtifactDetailModal();
+    return;
+  }
+
+  if (elements.artifactDetailTitle) elements.artifactDetailTitle.textContent = artifactDisplayTitle(item);
+  elements.artifactDetailContent.innerHTML = artifactDetailMarkup(threadId, item);
+  elements.artifactDetailModal.hidden = false;
+  syncModalBodyClass();
+}
+
+async function openArtifactDetail(threadId, artifactId) {
+  state.artifacts.detailThreadId = threadId;
+  state.artifacts.detailArtifactId = artifactId;
+  if (!findArtifact(threadId, artifactId)) {
+    await loadThreadArtifacts(threadId);
+  }
+  renderArtifactDetailModal();
+  window.setTimeout(() => {
+    elements.artifactDetailModal?.querySelector('[data-close-artifact-detail]')?.focus();
+  }, 0);
+}
+
+function closeArtifactDetailModal() {
+  state.artifacts.detailThreadId = '';
+  state.artifacts.detailArtifactId = '';
+  if (elements.artifactDetailModal) elements.artifactDetailModal.hidden = true;
+  if (elements.artifactDetailContent) elements.artifactDetailContent.innerHTML = '';
+  syncModalBodyClass();
+}
+
+async function openArtifactTarget(threadId, artifactId, sourceButton = null) {
+  const item = findArtifact(threadId, artifactId);
+  if (!item) return;
+
+  if (item.url) {
+    window.open(item.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+
+  if (!item.path) return;
+  const originalText = sourceButton?.textContent || '';
+  if (sourceButton) {
+    sourceButton.disabled = true;
+    sourceButton.textContent = '正在打开';
+  }
+  try {
+    await fetchJson('/api/local-file-open', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: item.path }),
+    });
+    showNotice('已交给系统打开。');
+  } catch (error) {
+    showError(`打开失败：${error.message}`);
+  } finally {
+    if (sourceButton) {
+      sourceButton.disabled = false;
+      sourceButton.textContent = originalText;
+    }
+  }
+}
+
 function renderSelectedDetail() {
+  if (isSearchDetailModalOpen()) {
+    renderSearchDetailModal();
+    return;
+  }
   renderDetail(findThread(state.selectedThreadId));
 }
 
@@ -2446,6 +3826,11 @@ async function refreshReviewJobs(threadId, { silent = false } = {}) {
 }
 
 function selectThread(threadId) {
+  if (isSearchPageOpen()) {
+    openSearchDetailModal(threadId);
+    return;
+  }
+
   state.selectedThreadId = threadId;
   renderThreads();
   document.querySelector('#detail')?.scrollIntoView({ block: 'nearest' });
@@ -2467,13 +3852,16 @@ function focusTopbarAction(action) {
   }
 
   if (action === 'running') {
+    openSearchPage();
     if (elements.searchInput) elements.searchInput.value = '';
     if (elements.providerFilter) elements.providerFilter.value = 'all';
     if (elements.projectFilter) elements.projectFilter.value = 'all';
     if (elements.statusFilter) elements.statusFilter.value = 'running';
     if (elements.archiveToggle) elements.archiveToggle.checked = false;
-    renderThreads();
-    scrollPanelIntoView(elements.threads?.closest('.thread-panel'));
+    if (elements.subagentToggle) elements.subagentToggle.checked = false;
+    if (elements.automationToggle) elements.automationToggle.checked = false;
+    void runSearch({ allowEmpty: true });
+    scrollPanelIntoView(elements.searchPage);
 
     if (!countRunningHostThreads()) showNotice('当前没有工作中的 Host Agent。');
   }
@@ -2740,7 +4128,7 @@ async function openThread(threadId, sourceButton, { notificationId = '', copyRes
     loadDashboard({ silent: true });
   } catch (error) {
     if (!copyResume) {
-      showError(`无法直接打开任务，请手动打开源线程：${thread.title || thread.id}`);
+      showError(`无法直接打开任务，请手动打开源线程：${displayThreadTitle(thread) || thread.id}`);
       return;
     }
     try {
@@ -2878,18 +4266,34 @@ function initializeInstallPrompt() {
   });
 }
 
-elements.appMinimizeButton?.addEventListener('click', minimizeInstalledApp);
+elements.appHideButton?.addEventListener('click', hideInstalledApp);
 elements.appInstallButton?.addEventListener('click', installOrOpenApp);
-elements.refreshButton.addEventListener('click', () => loadDashboard({ force: true }));
-elements.searchInput.addEventListener('input', renderThreads);
-elements.providerFilter.addEventListener('change', renderThreads);
-elements.statusFilter.addEventListener('change', renderThreads);
-elements.projectFilter.addEventListener('change', renderThreads);
-elements.archiveToggle.addEventListener('change', renderThreads);
+elements.refreshButton.addEventListener('click', () => {
+  if (isSearchPageOpen()) {
+    void Promise.all([
+      runSearch({ force: true, allowEmpty: true }),
+      loadProjectHistory({ force: true }),
+    ]);
+    return;
+  }
+  loadDashboard({ force: true });
+});
+elements.openSearchPage?.addEventListener('click', () => openSearchPage());
+elements.closeSearchPage?.addEventListener('click', () => closeSearchPage());
+elements.searchInput.addEventListener('input', handleSearchControlsChanged);
+elements.providerFilter.addEventListener('change', handleSearchControlsChanged);
+elements.statusFilter.addEventListener('change', handleSearchControlsChanged);
+elements.projectFilter.addEventListener('change', handleSearchControlsChanged);
+elements.archiveToggle.addEventListener('change', handleSearchControlsChanged);
+elements.subagentToggle?.addEventListener('change', handleSearchControlsChanged);
+elements.automationToggle?.addEventListener('change', handleSearchControlsChanged);
 elements.autoRefresh.addEventListener('change', syncMonitor);
 elements.refreshInterval?.addEventListener('change', syncMonitor);
 document.addEventListener('visibilitychange', refreshWhenVisible);
 window.addEventListener('focus', refreshWhenVisible);
+window.addEventListener('scroll', () => {
+  if (isSearchPageOpen()) loadMoreSearchResults();
+}, { passive: true });
 window.addEventListener('blur', () => {
   if (elements.autoRefresh.checked && document.visibilityState !== 'hidden') {
     scheduleNextMonitorTick();
@@ -2902,9 +4306,88 @@ elements.notificationToggle.addEventListener('click', () => {
   renderNotifications(state.notifications || state.dashboard?.notifications);
 });
 
+document.addEventListener('error', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLImageElement && target.matches('[data-preview-image-thumb]')) {
+    markAttachmentPreviewUnavailable(target);
+    return;
+  }
+
+  if (target instanceof HTMLImageElement && target.matches('[data-artifact-preview-image]')) {
+    markArtifactImagePreviewUnavailable(target);
+  }
+}, true);
+
 document.addEventListener('click', (event) => {
   const clicked = event.target instanceof Element ? event.target : null;
   if (!clicked) return;
+
+  const closeSearchDetailTarget = clicked.closest('[data-close-search-detail]');
+  if (closeSearchDetailTarget) {
+    event.preventDefault();
+    closeSearchDetailModal();
+    elements.searchInput?.focus();
+    return;
+  }
+
+  const closeImagePreviewTarget = clicked.closest('[data-close-image-preview]');
+  if (closeImagePreviewTarget) {
+    event.preventDefault();
+    closeImagePreview();
+    return;
+  }
+
+  const closeArtifactTimelineTarget = clicked.closest('[data-close-artifact-timeline]');
+  if (closeArtifactTimelineTarget) {
+    event.preventDefault();
+    closeArtifactTimelineModal();
+    return;
+  }
+
+  const closeArtifactDetailTarget = clicked.closest('[data-close-artifact-detail]');
+  if (closeArtifactDetailTarget) {
+    event.preventDefault();
+    closeArtifactDetailModal();
+    return;
+  }
+
+  const imagePreviewTarget = clicked.closest('[data-preview-image-src]');
+  if (imagePreviewTarget) {
+    event.preventDefault();
+    openImagePreview(
+      imagePreviewTarget.dataset.previewImageSrc,
+      imagePreviewTarget.dataset.previewImageTitle || '原图',
+    );
+    return;
+  }
+
+  const artifactTarget = clicked.closest('[data-open-artifact-target-id]');
+  if (artifactTarget) {
+    event.preventDefault();
+    openArtifactTarget(
+      artifactTarget.dataset.artifactThreadId,
+      artifactTarget.dataset.openArtifactTargetId,
+      artifactTarget,
+    );
+    return;
+  }
+
+  const artifactDetailTarget = clicked.closest('[data-open-artifact-detail-id]');
+  if (artifactDetailTarget) {
+    event.preventDefault();
+    openArtifactDetail(
+      artifactDetailTarget.dataset.artifactThreadId,
+      artifactDetailTarget.dataset.openArtifactDetailId,
+    );
+    return;
+  }
+
+  const artifactTimelineTarget = clicked.closest('[data-open-artifact-timeline-id]');
+  if (artifactTimelineTarget) {
+    event.preventDefault();
+    openArtifactTimeline(artifactTimelineTarget.dataset.openArtifactTimelineId);
+    return;
+  }
 
   const inboxToggle = clicked.closest('[data-toggle-inbox]');
   if (inboxToggle) {
@@ -3045,6 +4528,28 @@ document.addEventListener('click', (event) => {
   selectThread(target.dataset.threadId);
 });
 
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && isArtifactDetailModalOpen()) {
+    closeArtifactDetailModal();
+    return;
+  }
+
+  if (event.key === 'Escape' && isArtifactTimelineModalOpen()) {
+    closeArtifactTimelineModal();
+    return;
+  }
+
+  if (event.key === 'Escape' && isImagePreviewModalOpen()) {
+    closeImagePreview();
+    return;
+  }
+
+  if (event.key === 'Escape' && isSearchDetailModalOpen()) {
+    closeSearchDetailModal();
+    elements.searchInput?.focus();
+  }
+});
+
 document.addEventListener('submit', (event) => {
   const form = event.target instanceof Element ? event.target.closest('[data-review-form-thread-id]') : null;
   if (!form) return;
@@ -3084,6 +4589,8 @@ document.addEventListener('input', (event) => {
   }
 });
 
+window.addEventListener('hashchange', syncPageViewFromLocation);
+syncPageViewFromLocation();
 initializeInstallPrompt();
 initializeLaunchHandling();
 registerServiceWorker();

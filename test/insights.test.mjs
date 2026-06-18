@@ -39,6 +39,29 @@ test('normalizes sqlite thread rows into dashboard thread objects', () => {
   assert.equal(thread.appDeepLink, `codex://threads/${id}`);
   assert.equal(thread.canOpen, true);
   assert.equal(thread.openLabel, '打开');
+  assert.equal(thread.defaultOpenMode, 'codex-deeplink');
+  assert.equal(thread.inCodexSidebar, true);
+  assert.equal(thread.resumeCommand, `codex resume ${id}`);
+});
+
+test('prefers CLI resume for Codex threads missing from the sidebar index', () => {
+  const id = '123e4567-e89b-12d3-a456-426614174000';
+  const thread = normalizeThread({
+    id,
+    title: 'Old hidden thread',
+    cwd: '/Users/example/Documents/work',
+    source: 'vscode',
+    in_codex_sidebar: 0,
+    archived: 0,
+    created_at: 1777420000,
+    updated_at: 1777423600,
+  }, 1777427200000);
+
+  assert.equal(thread.provider, 'codex');
+  assert.equal(thread.inCodexSidebar, false);
+  assert.equal(thread.appDeepLink, `codex://threads/${id}`);
+  assert.equal(thread.defaultOpenMode, 'codex-cli-resume');
+  assert.equal(thread.openLabel, '打开');
   assert.equal(thread.resumeCommand, `codex resume ${id}`);
 });
 
@@ -54,6 +77,21 @@ test('prefers Codex sidebar thread names over stale sqlite titles', () => {
   }, 1777427200000);
 
   assert.equal(thread.title, '调研 /goal 新命令');
+});
+
+test('marks Codex automation threads even when sidebar title hides the automation prefix', () => {
+  const thread = normalizeThread({
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    title: 'Automation: Codex Project Folder Check\nAutomation ID: codex-project-folder-check',
+    thread_name: 'Codex Project Folder Check',
+    cwd: '/Users/example/Documents/work',
+    archived: 0,
+    created_at: 1777420000,
+    updated_at: 1777423600,
+  }, 1777427200000);
+
+  assert.equal(thread.title, 'Codex Project Folder Check');
+  assert.equal(thread.isAutomation, true);
 });
 
 test('normalizes Codex sub-agent spawn metadata', () => {
