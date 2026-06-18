@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +34,7 @@ async function waitForServer(url, isServerAlive, timeoutMs = 10_000) {
 
 async function main() {
   await mkdir(path.dirname(outputPath), { recursive: true });
+  const chromeProfileDir = await mkdtemp(path.join(os.tmpdir(), 'agent-mission-control-chrome-profile-'));
 
   const child = spawn(process.execPath, [path.join(rootDir, 'scripts', 'mock-dashboard-server.mjs')], {
     cwd: rootDir,
@@ -59,7 +61,7 @@ async function main() {
       '--hide-scrollbars',
       '--no-first-run',
       '--no-default-browser-check',
-      '--user-data-dir=/tmp/agent-mission-control-chrome-profile',
+      `--user-data-dir=${chromeProfileDir}`,
       '--virtual-time-budget=5000',
       '--window-size=1440,1180',
       `--screenshot=${outputPath}`,
@@ -72,6 +74,7 @@ async function main() {
     console.log(`Wrote ${outputPath}`);
   } finally {
     child.kill('SIGTERM');
+    await rm(chromeProfileDir, { recursive: true, force: true });
   }
 }
 

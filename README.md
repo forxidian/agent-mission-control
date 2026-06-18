@@ -14,6 +14,7 @@
 
 - 新增全历史搜索：本地 SQLite FTS 索引支持按标题、项目、路径、最近输入、Agent 输出和 artifact 信息检索历史线程。
 - 新增 Codex artifact 视图：可从 rollout 中识别本地文件、图片、HTML、Markdown 和 URL，并在搜索结果或线程详情中预览 / 打开。
+- 更新 README 脱敏演示截图，使用虚构数据展示 0.4 搜索入口和 artifact 摘要布局。
 - Codex 默认读取窗口提升到 5000，并补充读取近期未进入 sqlite 的 rollout-only 会话，隐藏历史线程可用 `codex resume` 恢复。
 - 已安装 PWA 的窗口操作从“最小化”改为“隐藏”，避免在 Dock 右侧留下缩略图。
 - 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。

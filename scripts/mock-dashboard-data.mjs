@@ -28,6 +28,7 @@ function thread({
   rateLimits = null,
   lastAgentMessage = '',
   lastTokenUsage = null,
+  artifacts = null,
 }, nowMs) {
   const updatedAtMs = nowMs - updatedAgoMs;
   const latestUserMessageAtMs = latestUserAgoMs ? nowMs - latestUserAgoMs : null;
@@ -72,6 +73,7 @@ function thread({
     rolloutPath: `${cwd}/.agent/mock-rollout.jsonl`,
     lastAgentMessage,
     lastTokenUsage,
+    artifacts,
   };
 }
 
@@ -104,7 +106,7 @@ export function createMockThreads(nowMs = Date.now()) {
   return [
     thread({
       id: 'mock-codex-release-notes',
-      title: '整理 v0.1.0 release notes 和开源说明',
+      title: '整理 v0.4.0 release notes 和搜索发布说明',
       projectName: 'agent-mission-control',
       cwd: '/Users/example/workspaces/agent-mission-control',
       model: 'gpt-5.2',
@@ -117,7 +119,50 @@ export function createMockThreads(nowMs = Date.now()) {
       resumeCommand: 'codex resume mock-codex-release-notes',
       rateLimits: quota,
       lastTokenUsage: { total_tokens: 4_800_000 },
-      lastAgentMessage: '已完成 README、release notes 和社区入口的第一版整理，正在等待最终验收。',
+      lastAgentMessage: '已完成全历史搜索、artifact 视图和脱敏 UI 截图的发布说明，正在等待最终验收。',
+      artifacts: {
+        total: 3,
+        latestAtMs: nowMs - 6 * minute,
+        typeCounts: { image: 1, html: 1, markdown: 1 },
+        items: [
+          {
+            id: 'artifact-screenshot',
+            type: 'image',
+            typeLabel: '图片',
+            title: 'agent-mission-control-real-ui.png',
+            source: 'agent',
+            turn: 3,
+            atMs: nowMs - 6 * minute,
+            path: '/Users/example/workspaces/agent-mission-control/docs/assets/agent-mission-control-real-ui.png',
+            extension: 'png',
+            sequence: 2,
+          },
+          {
+            id: 'artifact-changelog',
+            type: 'markdown',
+            typeLabel: 'Markdown',
+            title: 'CHANGELOG.md',
+            source: 'agent',
+            turn: 3,
+            atMs: nowMs - 8 * minute,
+            path: '/Users/example/workspaces/agent-mission-control/CHANGELOG.md',
+            extension: 'md',
+            sequence: 1,
+          },
+          {
+            id: 'artifact-search-report',
+            type: 'html',
+            typeLabel: 'HTML',
+            title: 'search-history-preview.html',
+            source: 'agent',
+            turn: 2,
+            atMs: nowMs - 18 * minute,
+            path: '/Users/example/workspaces/agent-mission-control/docs/search-history-preview.html',
+            extension: 'html',
+            sequence: 0,
+          },
+        ],
+      },
     }, nowMs),
     thread({
       id: 'mock-opencode-provider',
@@ -168,7 +213,7 @@ export function createMockThreads(nowMs = Date.now()) {
     }, nowMs),
     thread({
       id: 'mock-codex-screenshot',
-      title: '生成 README 脱敏演示截图',
+      title: '生成 README 脱敏搜索演示截图',
       projectName: 'agent-mission-control',
       cwd: '/Users/example/workspaces/agent-mission-control',
       model: 'gpt-5.2-mini',
@@ -180,7 +225,7 @@ export function createMockThreads(nowMs = Date.now()) {
       appDeepLink: 'codex://threads/mock-codex-screenshot',
       resumeCommand: 'codex resume mock-codex-screenshot',
       lastTokenUsage: { total_tokens: 1_100_000 },
-      lastAgentMessage: '真实 UI 截图已由 mock dashboard 数据源生成。',
+      lastAgentMessage: 'README 截图已由虚构线程、项目和 artifact 数据生成。',
     }, nowMs),
     thread({
       id: 'mock-claude-cli-packaging',
@@ -262,7 +307,7 @@ export function createMockNotifications(nowMs = Date.now()) {
       status: 'read',
       title: '线程已完成，等待处理',
       reason: 'Agent 已完成一轮工作',
-      threadTitle: '生成 README 脱敏演示截图',
+      threadTitle: '生成 README 脱敏搜索演示截图',
       projectName: 'agent-mission-control',
       appDeepLink: 'codex://threads/mock-codex-screenshot',
       resumeCommand: 'codex resume mock-codex-screenshot',
