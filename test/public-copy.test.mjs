@@ -191,6 +191,30 @@ test('declares an installable PWA shell without caching local API payloads', asy
   assert.match(serviceWorker, /event\.request\.mode === 'navigate'/);
 });
 
+test('documents the 0.4 mock screenshot set for thread list, search, and artifacts', async () => {
+  const [readme, screenshotScript] = await Promise.all([
+    readFile(new URL('../README.md', import.meta.url), 'utf8'),
+    readFile(new URL('../scripts/capture-mock-screenshot.mjs', import.meta.url), 'utf8'),
+  ]);
+
+  for (const expected of [
+    '线程列表与素材摘要',
+    '全历史搜索',
+    '线程素材时间线',
+    'docs/assets/agent-mission-control-real-ui.png',
+    'docs/assets/agent-mission-control-search-ui.png',
+    'docs/assets/agent-mission-control-artifacts-ui.png',
+  ]) {
+    assert.match(readme, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  assert.match(readme, /不包含本机线程、路径、消息、token、素材文件或 quota 细节/);
+  assert.match(screenshotScript, /searchOutputPath/);
+  assert.match(screenshotScript, /artifactsOutputPath/);
+  assert.match(screenshotScript, /#search/);
+  assert.match(screenshotScript, /artifact-timeline-modal/);
+});
+
 test('uses topbar metrics as panel shortcuts', async () => {
   const [app, styles] = await Promise.all([
     readFile(new URL('../public/app.js', import.meta.url), 'utf8'),

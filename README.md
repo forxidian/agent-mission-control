@@ -6,15 +6,25 @@
 
 ## 功能截图
 
-![Agent Mission Control mock screenshot](docs/assets/agent-mission-control-real-ui.png)
+### 线程列表与素材摘要
 
-截图由 `npm run screenshot:mock` 通过虚构数据生成，只展示界面形态，不包含本机线程、路径、消息、token 或 quota 细节。
+![线程列表与素材摘要](docs/assets/agent-mission-control-real-ui.png)
+
+### 全历史搜索
+
+![全历史搜索](docs/assets/agent-mission-control-search-ui.png)
+
+### 线程素材时间线
+
+![线程素材时间线](docs/assets/agent-mission-control-artifacts-ui.png)
+
+截图由 `npm run screenshot:mock` 通过虚构数据生成，只展示界面形态，不包含本机线程、路径、消息、token、素材文件或 quota 细节。
 
 ## 最近更新
 
 - 新增全历史搜索：本地 SQLite FTS 索引支持按标题、项目、路径、最近输入、Agent 输出和 artifact 信息检索历史线程。
 - 新增 Codex artifact 视图：可从 rollout 中识别本地文件、图片、HTML、Markdown 和 URL，并在搜索结果或线程详情中预览 / 打开。
-- 更新 README 脱敏演示截图，使用虚构数据展示 0.4 搜索入口和 artifact 摘要布局。
+- 更新 README 脱敏截图组，分别呈现 0.4 的线程列表、全历史搜索和线程素材时间线体验。
 - Codex 默认读取窗口提升到 5000，并补充读取近期未进入 sqlite 的 rollout-only 会话，隐藏历史线程可用 `codex resume` 恢复。
 - 已安装 PWA 的窗口操作从“最小化”改为“隐藏”，避免在 Dock 右侧留下缩略图。
 - 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。

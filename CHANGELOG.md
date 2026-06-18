@@ -11,7 +11,7 @@ All notable changes to Agent Mission Control are documented here.
 - Added a dedicated full-history search mode backed by a local SQLite FTS index, with ranked thread results, filters, paging, and project history.
 - Added Codex rollout-only history discovery so recent CLI or sidebar-missing Codex sessions can appear in search and open through `codex resume`.
 - Added Codex artifact extraction from rollout messages, including local file / URL summaries, image previews, artifact timelines, and local file opening.
-- Added a refreshed README mock screenshot generated from synthetic data that shows the 0.4 search and artifact-focused dashboard layout.
+- Added a refreshed README mock screenshot set generated from synthetic data, covering the upgraded thread list, full-history search results, and Codex artifact timeline.
 
 #### Changed
 
@@ -25,7 +25,7 @@ All notable changes to Agent Mission Control are documented here.
 - Kept hidden Codex history threads openable through CLI resume when a browser deep link is not the right path.
 - Marked Codex automation threads even when the sidebar title hides the automation prefix.
 - Blocked cross-origin browser requests from using local artifact preview / open endpoints.
-- Fixed mock screenshot capture to use a fresh Chrome profile, preventing stale service worker caches from reusing older UI data.
+- Fixed mock screenshot capture to drive Chrome through DevTools with a fresh profile, so README screenshots can capture search and artifact modal states without stale service worker data.
 
 ### 中文
 
@@ -34,7 +34,7 @@ All notable changes to Agent Mission Control are documented here.
 - 新增独立全历史搜索模式，使用本地 SQLite FTS 索引，支持相关性排序、筛选、分页和项目历史。
 - 新增 Codex rollout-only 历史发现，让近期 CLI 或未出现在侧边栏的 Codex 会话也能被搜索，并通过 `codex resume` 打开。
 - 新增 Codex artifact 抽取能力，可从 rollout 消息中展示本地文件 / URL 摘要、图片预览、artifact 时间线和本地文件打开入口。
-- 更新 README 脱敏 mock 截图，使用虚构数据展示 0.4 搜索和 artifact 相关的新看板布局。
+- 更新 README 脱敏 mock 截图组，使用虚构数据分别展示 0.4 线程列表、全历史搜索结果和线程素材时间线。
 
 #### 调整
 
@@ -48,7 +48,7 @@ All notable changes to Agent Mission Control are documented here.
 - 对隐藏的 Codex 历史线程使用 CLI resume 打开，避免错误依赖浏览器 deep link。
 - 即使侧边栏标题隐藏了 automation 前缀，也能识别 Codex 自动化线程。
 - 阻止跨站浏览器请求调用本地 artifact 预览 / 打开接口。
-- 修复 mock 截图生成脚本，改用临时 Chrome profile，避免旧 service worker 缓存复用过期 UI 数据。
+- 修复 mock 截图生成脚本，改用临时 Chrome profile 并通过 DevTools 驱动真实界面状态，避免旧 service worker 缓存复用过期 UI 数据，也能稳定捕获搜索和素材弹窗。
 
 ## [0.3.1] - 2026-05-14
 
