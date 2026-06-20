@@ -567,6 +567,7 @@ test('builds current quota and daily token summary from latest rate-limit signal
   assert.equal(dashboard.summary.quota.groups[0].key, 'gpt');
   assert.equal(dashboard.summary.quota.groups[0].label, 'GPT');
   assert.equal(dashboard.summary.quota.groups[0].sourceThreadId, '1');
+  assert.equal(dashboard.summary.quota.codexResets, null);
 });
 
 test('ignores incomplete quota percent signals instead of treating them as fully available', () => {
@@ -682,6 +683,7 @@ test('groups quota by LLM family and keeps the freshest signal per family', () =
   assert.equal(dashboard.summary.quota.groups[0].realtime.availablePercent, 86);
   assert.equal(dashboard.summary.quota.groups[1].label, 'Claude');
   assert.equal(dashboard.summary.quota.groups[1].realtime.availablePercent, 56);
+  assert.equal(dashboard.summary.quota.codexResets, null);
 });
 
 test('prefers Codex account quota over model-specific Codex GPT limits', () => {
@@ -779,4 +781,120 @@ test('includes running LLM families even when they have no quota signal', () => 
   assert.equal(dashboard.summary.quota.groups[1].label, 'Claude');
   assert.equal(dashboard.summary.quota.groups[1].realtime, null);
   assert.equal(dashboard.summary.quota.groups[1].sourceThreadId, 'claude-running');
+});
+
+test('does not build a Codex reset schedule from non-Codex quota signals', () => {
+  const now = 1777427200000;
+  const dashboard = buildDashboard([
+    {
+      id: 'claude-quota',
+      title: 'Claude quota only',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'claude-code-cli',
+      providerLabel: 'Claude Code CLI',
+      model: 'claude-sonnet-4.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 22, window_minutes: 300, resets_at: 1777430000 },
+        secondary: { used_percent: 28, window_minutes: 10080, resets_at: 1778000000 },
+      },
+    },
+  ], now);
+
+  assert.equal(dashboard.summary.quota.groups[0].key, 'claude');
+  assert.equal(dashboard.summary.quota.codexResets, null);
+});
+
+test('summarizes gifted Codex reset credit expiry times from reset-credit payload', () => {
+  const now = Date.parse('2026-06-20T00:00:00.000Z');
+  const dashboard = buildDashboard([
+    {
+      id: 'codex-quota',
+      title: 'Codex quota',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'codex',
+      providerLabel: 'Codex',
+      model: 'gpt-5.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 8, window_minutes: 300, resets_at: 1781970039 },
+        secondary: { used_percent: 3, window_minutes: 10080, resets_at: 1782337245 },
+      },
+    },
+  ], now, {
+    codexResetCredits: {
+      available_count: 2,
+      observedAtMs: now - 500,
+      credits: [
+        {
+          id: 'later',
+          reset_type: 'codex_rate_limits',
+          status: 'available',
+          expires_at: '2026-07-18T00:45:50.593491Z',
+        },
+        {
+          id: 'used',
+          reset_type: 'codex_rate_limits',
+          status: 'redeemed',
+          expires_at: '2026-07-01T00:00:00.000Z',
+        },
+        {
+          id: 'earlier',
+          reset_type: 'codex_rate_limits',
+          status: 'available',
+          expires_at: '2026-07-12T04:37:03.518174Z',
+        },
+      ],
+    },
+  });
+
+  assert.equal(dashboard.summary.quota.codexResets.remainingCount, 2);
+  assert.equal(dashboard.summary.quota.codexResets.observedAtMs, now - 500);
+  assert.deepEqual(
+    dashboard.summary.quota.codexResets.entries.map((entry) => entry.label),
+    ['第 1 次', '第 2 次'],
+  );
+  assert.equal(dashboard.summary.quota.codexResets.entries[0].expiresAtMs, Date.parse('2026-07-12T04:37:03.518174Z'));
+  assert.equal(dashboard.summary.quota.codexResets.entries[1].expiresAtMs, Date.parse('2026-07-18T00:45:50.593491Z'));
+});
+
+test('does not show gifted Codex resets when no active Codex provider is present', () => {
+  const now = Date.parse('2026-06-20T00:00:00.000Z');
+  const dashboard = buildDashboard([
+    {
+      id: 'claude-quota',
+      title: 'Claude quota',
+      cwd: '/a',
+      projectName: 'a',
+      provider: 'claude-code-cli',
+      providerLabel: 'Claude Code CLI',
+      model: 'claude-sonnet-4.5',
+      tokensUsed: 100,
+      archived: false,
+      updatedAtMs: now - 60_000,
+      rateLimitUpdatedAtMs: now - 1_000,
+      rateLimits: {
+        primary: { used_percent: 22, window_minutes: 300, resets_at: 1781970039 },
+        secondary: { used_percent: 28, window_minutes: 10080, resets_at: 1782337245 },
+      },
+    },
+  ], now, {
+    codexResetCredits: {
+      available_count: 1,
+      credits: [{
+        status: 'available',
+        expires_at: '2026-07-12T04:37:03.518174Z',
+      }],
+    },
+  });
+
+  assert.equal(dashboard.summary.quota.codexResets, null);
 });

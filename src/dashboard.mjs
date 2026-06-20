@@ -51,6 +51,7 @@ export async function loadDashboard(options = {}) {
     ...(openCodeResult.threads || []),
     ...(claudeResult.threads || []),
   ], nowMs);
+  const codexResets = codexDashboard.summary?.quota?.codexResets || null;
 
   return {
     ...dashboard,
@@ -58,6 +59,10 @@ export async function loadDashboard(options = {}) {
     summary: {
       ...dashboard.summary,
       providers,
+      quota: {
+        ...dashboard.summary.quota,
+        codexResets,
+      },
     },
   };
 }

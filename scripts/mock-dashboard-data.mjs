@@ -370,7 +370,26 @@ export function createMockNotifications(nowMs = Date.now()) {
 }
 
 export function createMockDashboard(nowMs = Date.now()) {
-  const dashboard = buildDashboard(createMockThreads(nowMs), nowMs);
+  const dashboard = buildDashboard(createMockThreads(nowMs), nowMs, {
+    codexResetCredits: {
+      available_count: 2,
+      observedAtMs: nowMs - 5 * minute,
+      credits: [
+        {
+          reset_type: 'codex_rate_limits',
+          status: 'available',
+          granted_at: new Date(nowMs - 8 * 24 * hour).toISOString(),
+          expires_at: new Date(nowMs + 22 * 24 * hour).toISOString(),
+        },
+        {
+          reset_type: 'codex_rate_limits',
+          status: 'available',
+          granted_at: new Date(nowMs - 2 * 24 * hour).toISOString(),
+          expires_at: new Date(nowMs + 28 * 24 * hour).toISOString(),
+        },
+      ],
+    },
+  });
   const notifications = createMockNotifications(nowMs);
   const providers = [
     {

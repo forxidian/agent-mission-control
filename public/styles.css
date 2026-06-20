@@ -1100,7 +1100,7 @@ body[data-view="search"] .search-return-button {
 
 .summary-card-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
   gap: 8px;
 }
 
@@ -1134,6 +1134,23 @@ body[data-view="search"] .search-return-button {
 .summary-card.summary-quota {
   border-color: rgba(15, 111, 124, 0.42);
   background: #f7fbf6;
+}
+
+.summary-card.summary-reset {
+  border-color: rgba(35, 120, 90, 0.42);
+  background: #f8fbf4;
+}
+
+.summary-card-note-lines {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.summary-card-note-lines small {
+  margin-top: 0;
+  line-height: 1.4;
 }
 
 .summary-card-with-lines {

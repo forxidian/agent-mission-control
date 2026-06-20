@@ -5,6 +5,7 @@ const state = {
   autoTimer: null,
   heartbeatTimer: null,
   pendingSummaryTimer: null,
+  eventSource: null,
   installPromptEvent: null,
   isInstalledApp: false,
   isLoading: false,
@@ -12,6 +13,9 @@ const state = {
   dashboardSignature: '',
   nextRefreshAtMs: null,
   lastRefreshAtMs: null,
+  liveConnected: false,
+  liveEventVersion: 0,
+  pendingDashboardRefresh: null,
   refreshError: '',
   noticeTimer: null,
   inboxExpanded: false,
@@ -513,6 +517,12 @@ function formatCompactResetTime(timestamp) {
   return `刷新 ${timeFormat.format(new Date(value))}`;
 }
 
+function formatExpiryTime(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return '暂无到期时间';
+  return `${timeFormat.format(new Date(value))} 到期`;
+}
+
 function formatQuotaNote(timestamp, stale = false) {
   const resetText = formatCompactResetTime(timestamp);
   return stale ? `沿用上次记录 · ${resetText}` : resetText;
@@ -830,6 +840,26 @@ function quotaRows(groups, windowKey) {
   });
 }
 
+function codexResetNoteLines(resetSummary = {}) {
+  const entries = Array.isArray(resetSummary.entries) ? resetSummary.entries : [];
+  if (!entries.length) return [];
+  return entries.map((entry) => `${entry.label || '重置'} ${formatExpiryTime(entry.expiresAtMs)}`);
+}
+
+function codexResetSummaryCard(quota = {}) {
+  const resetSummary = quota.codexResets;
+  const entries = Array.isArray(resetSummary?.entries) ? resetSummary.entries : [];
+  if (!entries.length) return [];
+
+  const remainingCount = Number(resetSummary.remainingCount || entries.length);
+  return [{
+    label: '赠送重置',
+    value: `${remainingCount} 次`,
+    noteLines: codexResetNoteLines(resetSummary),
+    tone: 'reset',
+  }];
+}
+
 function quotaSummaryCards(quota) {
   const groups = Array.isArray(quota?.groups) ? quota.groups : [];
 
@@ -845,6 +875,7 @@ function quotaSummaryCards(quota) {
         rows: quotaRows(groups, 'weekly'),
         tone: 'quota',
       },
+      ...codexResetSummaryCard(quota),
     ];
   }
 
@@ -861,11 +892,23 @@ function quotaSummaryCards(quota) {
       note: formatQuotaNote(quota?.weekly?.resetsAtMs, quota?.stale),
       tone: 'quota',
     },
+    ...codexResetSummaryCard(quota),
   ];
 }
 
-function summaryCard({ label, value, note = '', tone = '', rows = [], title = '', breakdown = null, breakdownTotal = 0 }) {
+function summaryCard({
+  label,
+  value,
+  note = '',
+  noteLines = [],
+  tone = '',
+  rows = [],
+  title = '',
+  breakdown = null,
+  breakdownTotal = 0,
+}) {
   const hasRows = Array.isArray(rows) && rows.length > 0;
+  const visibleNoteLines = Array.isArray(noteLines) ? noteLines.filter(Boolean) : [];
   const classes = [
     'summary-card',
     tone ? `summary-${escapeHtml(tone)}` : '',
@@ -885,6 +928,11 @@ function summaryCard({ label, value, note = '', tone = '', rows = [], title = ''
     `
     : `
       <strong>${escapeHtml(value)}</strong>
+      ${visibleNoteLines.length ? `
+        <div class="summary-card-note-lines">
+          ${visibleNoteLines.map((line) => `<small>${escapeHtml(line)}</small>`).join('')}
+        </div>
+      ` : ''}
       ${note ? `<small>${escapeHtml(note)}</small>` : ''}
       ${breakdown ? summaryTokenBreakdownMarkup(breakdown, breakdownTotal) : ''}
     `;
@@ -3704,32 +3752,34 @@ function renderMonitorStatus() {
     return;
   }
 
+  const syncLabel = state.liveConnected ? '实时' : '轮询';
+
   if (document.visibilityState === 'hidden') {
-    setMonitorText(`${updated} · ${loadLabel} · 后台`);
+    setMonitorText(`${updated} · ${loadLabel} · ${syncLabel}后台`);
     return;
   }
 
   if (!pageHasFocus()) {
-    setMonitorText(`${updated} · ${loadLabel} · 降频 · ${secondsUntil(state.nextRefreshAtMs)}s`);
+    setMonitorText(`${updated} · ${loadLabel} · ${syncLabel}降频 · ${secondsUntil(state.nextRefreshAtMs)}s`);
     return;
   }
 
   if (state.isLoading) {
-    setMonitorText(`${updated} · ${loadLabel} · 同步`);
+    setMonitorText(`${updated} · ${loadLabel} · ${syncLabel}同步`);
     return;
   }
 
   if (state.refreshError) {
-    setMonitorText(`${updated} · ${loadLabel} · 异常 · ${secondsUntil(state.nextRefreshAtMs)}s`);
+    setMonitorText(`${updated} · ${loadLabel} · ${syncLabel}异常 · ${secondsUntil(state.nextRefreshAtMs)}s`);
     return;
   }
 
   if (!state.lastRefreshAtMs) {
-    setMonitorText(`${updated} · ${loadLabel} · ${refreshIntervalLabel(intervalMs)}`);
+    setMonitorText(`${updated} · ${loadLabel} · ${syncLabel} · ${refreshIntervalLabel(intervalMs)}`);
     return;
   }
 
-  setMonitorText(`${updated} · ${loadLabel} · ${refreshIntervalLabel(intervalMs)} · ${secondsUntil(state.nextRefreshAtMs)}s`);
+  setMonitorText(`${updated} · ${loadLabel} · ${syncLabel} · ${refreshIntervalLabel(intervalMs)} · ${secondsUntil(state.nextRefreshAtMs)}s`);
 }
 
 function isStandaloneApp() {
@@ -3938,7 +3988,14 @@ function clearError() {
 }
 
 async function loadDashboard({ silent = false, force = false } = {}) {
-  if (state.isLoading) return;
+  if (state.isLoading) {
+    const pending = state.pendingDashboardRefresh || { silent: true, force: false };
+    state.pendingDashboardRefresh = {
+      silent: pending.silent && silent,
+      force: pending.force || force,
+    };
+    return;
+  }
 
   state.isLoading = true;
   const deferRender = silent && hasActiveReviewInteraction();
@@ -3975,6 +4032,11 @@ async function loadDashboard({ silent = false, force = false } = {}) {
     state.isLoading = false;
     elements.refreshButton.disabled = false;
     renderMonitorStatus();
+    if (state.pendingDashboardRefresh) {
+      const pending = state.pendingDashboardRefresh;
+      state.pendingDashboardRefresh = null;
+      loadDashboard({ silent: pending.silent, force: pending.force });
+    }
   }
 }
 
@@ -5137,6 +5199,61 @@ async function markNotificationDone(notificationId) {
   }
 }
 
+function parseLivePayload(event) {
+  try {
+    return JSON.parse(event.data || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function connectDashboardEvents() {
+  if (!elements.autoRefresh.checked || state.eventSource || !('EventSource' in window)) return;
+
+  const source = new EventSource('/api/events');
+  state.eventSource = source;
+
+  source.onopen = () => {
+    state.liveConnected = true;
+    state.refreshError = '';
+    renderMonitorStatus();
+  };
+
+  source.addEventListener('connected', (event) => {
+    const payload = parseLivePayload(event);
+    state.liveConnected = true;
+    state.liveEventVersion = Math.max(state.liveEventVersion, Number(payload.version) || 0);
+    renderMonitorStatus();
+  });
+
+  source.addEventListener('dashboard', (event) => {
+    if (!elements.autoRefresh.checked) return;
+    const payload = parseLivePayload(event);
+    const version = Number(payload.version) || 0;
+    if (version && version <= state.liveEventVersion) return;
+    state.liveEventVersion = Math.max(state.liveEventVersion, version);
+    loadDashboard({ silent: true, force: true });
+  });
+
+  source.addEventListener('dashboard-error', (event) => {
+    const payload = parseLivePayload(event);
+    state.refreshError = payload.message || '实时同步失败';
+    renderMonitorStatus();
+  });
+
+  source.onerror = () => {
+    state.liveConnected = false;
+    renderMonitorStatus();
+  };
+}
+
+function disconnectDashboardEvents() {
+  if (!state.eventSource) return;
+  state.eventSource.close();
+  state.eventSource = null;
+  state.liveConnected = false;
+}
+
 function scheduleNextMonitorTick(delayMs = effectiveRefreshIntervalMs()) {
   if (state.autoTimer) {
     clearTimeout(state.autoTimer);
@@ -5180,8 +5297,10 @@ function syncMonitor() {
   localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, String(currentRefreshIntervalMs()));
 
   if (elements.autoRefresh.checked) {
+    connectDashboardEvents();
     scheduleNextMonitorTick();
   } else {
+    disconnectDashboardEvents();
     state.nextRefreshAtMs = null;
     renderMonitorStatus();
   }

@@ -14,6 +14,7 @@ import {
   parseRolloutArtifacts,
   parseSessionIndex,
   parseRolloutSignals,
+  readCodexResetCredits,
   readThreads,
   readRolloutSignals,
 } from '../src/codex-data.mjs';
@@ -676,6 +677,120 @@ test('parses Codex session index titles used by the sidebar', () => {
 
   assert.equal(index.get('019e07e7-192c-7941-b639-8d58d2e86b3a'), '调研 /goal 新命令');
   assert.equal(index.has('empty'), false);
+});
+
+test('reads gifted Codex reset credits from the ChatGPT reset-credit endpoint', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-reset-credits-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const authPath = path.join(dir, 'auth.json');
+  await fs.writeFile(authPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'header.payload.signature',
+      account_id: 'acct-1',
+    },
+  }));
+
+  const payload = {
+    available_count: 2,
+    credits: [
+      {
+        id: 'credit-1',
+        reset_type: 'codex_rate_limits',
+        status: 'available',
+        expires_at: '2026-07-12T04:37:03.518174Z',
+      },
+      {
+        id: 'credit-2',
+        reset_type: 'codex_rate_limits',
+        status: 'available',
+        expires_at: '2026-07-18T00:45:50.593491Z',
+      },
+    ],
+  };
+  const calls = [];
+  const result = await readCodexResetCredits({
+    authPath,
+    apiBaseUrl: 'https://example.test/backend-api/',
+    nowMs: 1777427200000,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        json: async () => payload,
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://example.test/backend-api/wham/rate-limit-reset-credits');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer header.payload.signature');
+  assert.equal(calls[0].options.headers['ChatGPT-Account-Id'], 'acct-1');
+  assert.equal(result.available_count, 2);
+  assert.equal(result.credits[0].expires_at, '2026-07-12T04:37:03.518174Z');
+  assert.equal(result.observedAtMs, 1777427200000);
+  assert.equal(result.source, 'chatgpt-wham-rate-limit-reset-credits');
+});
+
+test('skips gifted Codex reset credits when ChatGPT auth is unavailable', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-reset-credits-missing-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const authPath = path.join(dir, 'auth.json');
+  await fs.writeFile(authPath, JSON.stringify({ auth_mode: 'apikey', tokens: {} }));
+
+  let called = false;
+  const result = await readCodexResetCredits({
+    authPath,
+    fetchImpl: async () => {
+      called = true;
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+
+  assert.equal(result, null);
+  assert.equal(called, false);
+});
+
+test('honors AMC_CODEX_RESET_CREDITS=0 for dashboard scans', async (t) => {
+  const previous = process.env.AMC_CODEX_RESET_CREDITS;
+  process.env.AMC_CODEX_RESET_CREDITS = '0';
+  t.after(() => {
+    if (previous === undefined) {
+      delete process.env.AMC_CODEX_RESET_CREDITS;
+    } else {
+      process.env.AMC_CODEX_RESET_CREDITS = previous;
+    }
+  });
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-reset-disabled-'));
+  const databasePath = await createEmptyCodexStateDb();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const authPath = path.join(dir, 'auth.json');
+  await fs.writeFile(authPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'header.payload.signature',
+      account_id: 'acct-1',
+    },
+  }));
+
+  let called = false;
+  const dashboard = await loadCodexDashboard({
+    databasePath,
+    sessionsDir: dir,
+    sessionIndexPath: path.join(dir, 'session_index.jsonl'),
+    authPath,
+    fetchImpl: async () => {
+      called = true;
+      return { ok: true, json: async () => ({ available_count: 1, credits: [] }) };
+    },
+  });
+
+  assert.equal(called, false);
+  assert.equal(dashboard.summary.quota.codexResets, null);
 });
 
 test('marks threads missing from the Codex sidebar index', () => {

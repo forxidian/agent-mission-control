@@ -17,11 +17,16 @@ const DEFAULT_SESSION_INDEX = path.join(DEFAULT_CODEX_DIR, 'session_index.jsonl'
 const DEFAULT_SESSIONS_DIR = path.join(DEFAULT_CODEX_DIR, 'sessions');
 const DEFAULT_GLOBAL_STATE = path.join(DEFAULT_CODEX_DIR, '.codex-global-state.json');
 const CODEX_PINNED_THREAD_IDS_KEY = 'pinned-thread-ids';
+const DEFAULT_AUTH_PATH = path.join(DEFAULT_CODEX_DIR, 'auth.json');
+const DEFAULT_CODEX_BACKEND_API_BASE_URL = 'https://chatgpt.com/backend-api';
+const CODEX_RESET_CREDITS_PATH = '/wham/rate-limit-reset-credits';
 const DEFAULT_THREAD_LIMIT = 5000;
 const DEFAULT_ORPHAN_ROLLOUT_LIMIT = 160;
 const DEFAULT_INITIAL_ROLLOUT_BYTES = 512 * 1024;
 const DEFAULT_MAX_ROLLOUT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_ROLLOUT_SIGNAL_CACHE_LIMIT = 256;
+const DEFAULT_RESET_CREDITS_TIMEOUT_MS = 30000;
+const DEFAULT_RESET_CREDITS_CACHE_TTL_MS = 10 * 60 * 1000;
 const COMPLETION_HINT = /(\bdone\b|\bcompleted?\b|ready for review|handoff|完成|已完成|验收|交付|交接|可以看|可以试)/i;
 const DISPLAY_TITLE_LENGTH = 140;
 const LOW_SIGNAL_USER_MESSAGE = /^(继续|继续吧|你继续|你继续吧|好的|好的好的|可以|可以的|行|ok|okay|收到|嗯|嗯嗯|先这样)$/iu;
@@ -48,6 +53,12 @@ const codexCacheMetrics = {
   rolloutSignalWrites: 0,
   rolloutSignalEvictions: 0,
 };
+const resetCreditsCache = {
+  key: '',
+  value: null,
+  fetchedAtMs: 0,
+  pending: null,
+};
 
 function safeLimit(limit) {
   const number = Number.parseInt(limit, 10);
@@ -66,6 +77,122 @@ async function querySqliteJson(databasePath, sql) {
 async function commandVersion(command, args, runCommand = execFileAsync) {
   const { stdout, stderr } = await runCommand(command, args, { timeout: 5000 });
   return String(stdout || stderr || '').trim();
+}
+
+async function readCodexAuth(authPath = DEFAULT_AUTH_PATH) {
+  try {
+    return JSON.parse(await fs.readFile(authPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function accountIdFromAccessToken(accessToken = '') {
+  const [, payload] = String(accessToken).split('.');
+  if (!payload) return '';
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const auth = parsed?.['https://api.openai.com/auth'];
+    return typeof auth?.chatgpt_account_id === 'string' ? auth.chatgpt_account_id : '';
+  } catch {
+    return '';
+  }
+}
+
+function backendUrl(baseUrl, route) {
+  return `${String(baseUrl || DEFAULT_CODEX_BACKEND_API_BASE_URL).replace(/\/+$/, '')}/${String(route).replace(/^\/+/, '')}`;
+}
+
+function codexResetCreditsEnabled(value = process.env.AMC_CODEX_RESET_CREDITS) {
+  const normalized = String(value ?? '1').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(normalized);
+}
+
+async function fetchCodexResetCredits({
+  authPath = DEFAULT_AUTH_PATH,
+  apiBaseUrl = DEFAULT_CODEX_BACKEND_API_BASE_URL,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = DEFAULT_RESET_CREDITS_TIMEOUT_MS,
+  nowMs = Date.now(),
+} = {}) {
+  if (typeof fetchImpl !== 'function') return null;
+
+  const auth = await readCodexAuth(authPath);
+  const accessToken = auth?.tokens?.access_token || auth?.access_token || '';
+  if (!accessToken) return null;
+
+  const accountId = auth?.tokens?.account_id || auth?.account_id || accountIdFromAccessToken(accessToken);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+
+  try {
+    const response = await fetchImpl(backendUrl(apiBaseUrl, CODEX_RESET_CREDITS_PATH), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+        'OAI-Language': 'zh-CN',
+        originator: 'Codex Desktop',
+        'User-Agent': 'Agent Mission Control',
+      },
+      signal: controller.signal,
+    });
+
+    if (!response?.ok) return null;
+    const payload = await response.json();
+    return {
+      ...payload,
+      observedAtMs: nowMs,
+      source: 'chatgpt-wham-rate-limit-reset-credits',
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function readCodexResetCredits({
+  useCache = false,
+  refreshInBackground = false,
+  cacheTtlMs = DEFAULT_RESET_CREDITS_CACHE_TTL_MS,
+  nowMs = Date.now(),
+  ...options
+} = {}) {
+  const cacheKey = [
+    options.authPath || DEFAULT_AUTH_PATH,
+    options.apiBaseUrl || DEFAULT_CODEX_BACKEND_API_BASE_URL,
+  ].join('|');
+  const hasUsableCache = resetCreditsCache.value
+    && resetCreditsCache.key === cacheKey
+    && nowMs - resetCreditsCache.fetchedAtMs < cacheTtlMs;
+  if (useCache && hasUsableCache) return resetCreditsCache.value;
+
+  const refresh = () => {
+    if (!resetCreditsCache.pending || resetCreditsCache.key !== cacheKey) {
+      resetCreditsCache.key = cacheKey;
+      resetCreditsCache.pending = fetchCodexResetCredits({ ...options, nowMs })
+        .then((value) => {
+          if (value) {
+            resetCreditsCache.key = cacheKey;
+            resetCreditsCache.value = value;
+            resetCreditsCache.fetchedAtMs = nowMs;
+          }
+          return value;
+        })
+        .finally(() => {
+          resetCreditsCache.pending = null;
+        });
+    }
+    return resetCreditsCache.pending;
+  };
+
+  if (useCache && refreshInBackground) {
+    refresh().catch(() => null);
+    return resetCreditsCache.value;
+  }
+
+  return refresh();
 }
 
 export async function loadCodexCliProvider({
@@ -1232,9 +1359,22 @@ export async function loadCodexDashboard(options = {}) {
     .sort((a, b) => threadRowUpdatedAtMs(b) - threadRowUpdatedAtMs(a)), sessionIndex);
   const pinnedRows = applyCodexPinnedThreadIds(indexedRows, pinnedThreadIds);
   const threads = enrichThreads(pinnedRows, nowMs);
-  const enrichedThreads = await attachRolloutSignals(threads, {
-    ...options,
-    todayStartMs: options.todayStartMs || todayStart.getTime(),
-  });
-  return buildDashboard(enrichedThreads, nowMs);
+  const shouldReadCodexResetCredits = options.codexResetCreditsEnabled === false
+    ? false
+    : codexResetCreditsEnabled(options.codexResetCreditsEnabled);
+  const [enrichedThreads, codexResetCredits] = await Promise.all([
+    attachRolloutSignals(threads, {
+      ...options,
+      todayStartMs: options.todayStartMs || todayStart.getTime(),
+    }),
+    options.codexResetCredits === undefined
+      ? (shouldReadCodexResetCredits ? readCodexResetCredits({
+        ...options,
+        nowMs,
+        useCache: true,
+        refreshInBackground: true,
+      }) : Promise.resolve(null))
+      : Promise.resolve(options.codexResetCredits),
+  ]);
+  return buildDashboard(enrichedThreads, nowMs, { codexResetCredits });
 }

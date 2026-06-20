@@ -63,6 +63,14 @@ function compactModelLabel(value = '') {
   return String(value).trim().replace(/\s+/g, ' ');
 }
 
+function isCodexProvider(thread) {
+  const provider = compactModelLabel(thread.provider).toLowerCase();
+  const providerLabel = compactModelLabel(thread.providerLabel).toLowerCase();
+  return provider === 'codex'
+    || provider === 'codex-cli'
+    || providerLabel.includes('codex');
+}
+
 function quotaFamily(thread) {
   const model = compactModelLabel(thread.model);
   const providerText = compactModelLabel([
@@ -193,8 +201,58 @@ function quotaGroups(threads) {
   ));
 }
 
-function quotaSummary(threads) {
+function timestampToMs(value) {
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return coerceNumber(value);
+}
+
+function codexResetCreditEntries(codexResetCredits) {
+  const credits = Array.isArray(codexResetCredits?.credits) ? codexResetCredits.credits : [];
+  return credits
+    .filter((credit) => {
+      const status = String(credit.status || '').toLowerCase();
+      const resetType = String(credit.reset_type || credit.resetType || '').toLowerCase();
+      return (!status || status === 'available')
+        && (!resetType || resetType.includes('codex'));
+    })
+    .map((credit) => ({
+      key: String(credit.id || credit.key || credit.expires_at || credit.expiresAt || ''),
+      expiresAtMs: timestampToMs(credit.expires_at ?? credit.expiresAt ?? credit.expiresAtMs),
+      grantedAtMs: timestampToMs(credit.granted_at ?? credit.grantedAt ?? credit.grantedAtMs),
+    }))
+    .filter((credit) => credit.expiresAtMs > 0)
+    .sort((a, b) => a.expiresAtMs - b.expiresAtMs)
+    .map((credit, index) => ({
+      ...credit,
+      key: credit.key || `credit-${index + 1}`,
+      label: `第 ${index + 1} 次`,
+    }));
+}
+
+function codexResetSummary(threads, codexResetCredits) {
+  if (!threads.some(isCodexProvider)) return null;
+
+  const entries = codexResetCreditEntries(codexResetCredits);
+  if (!entries.length) return null;
+
+  const remainingCount = coerceNumber(
+    codexResetCredits?.available_count ?? codexResetCredits?.availableCount,
+    entries.length,
+  );
+
+  return {
+    remainingCount: Math.max(0, remainingCount || entries.length),
+    observedAtMs: timestampToMs(codexResetCredits?.observedAtMs) || null,
+    entries,
+  };
+}
+
+function quotaSummary(threads, { codexResetCredits = null } = {}) {
   const groups = quotaGroups(threads);
+  const codexResets = codexResetSummary(threads, codexResetCredits);
   const latest = groups
     .filter((group) => group.realtime || group.weekly)
     .sort((a, b) => (
@@ -208,6 +266,7 @@ function quotaSummary(threads) {
       observedAtMs: null,
       sourceThreadId: '',
       groups,
+      codexResets,
     };
   }
 
@@ -219,6 +278,7 @@ function quotaSummary(threads) {
     stale: latest.stale,
     staleAtMs: latest.staleAtMs,
     groups,
+    codexResets,
   };
 }
 
@@ -458,7 +518,7 @@ function aggregateTokenBreakdown(threads, breakdownField, totalField) {
   ), addTokenBreakdowns());
 }
 
-export function buildDashboard(threads, nowMs = Date.now()) {
+export function buildDashboard(threads, nowMs = Date.now(), { codexResetCredits = null } = {}) {
   const sortedThreads = attachThreadRelationships(threads
     .map((thread) => enrichThreadRuntime(thread, nowMs))
     .sort((a, b) => coerceNumber(b.updatedAtMs) - coerceNumber(a.updatedAtMs)));
@@ -496,7 +556,7 @@ export function buildDashboard(threads, nowMs = Date.now()) {
       todayTokenBreakdown,
       updatedToday: activeThreads.filter((thread) => thread.updatedAtMs >= todayStart.getTime()).length,
       inboxCount: inbox.length,
-      quota: quotaSummary(activeThreads),
+      quota: quotaSummary(activeThreads, { codexResetCredits }),
     },
     inbox,
     projects: aggregateProjects(sortedThreads).slice(0, 24),

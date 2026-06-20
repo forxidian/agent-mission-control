@@ -507,6 +507,10 @@ test('uses conservative automatic refresh behavior for local file scans', async 
   assert.match(app, /function pendingSummaryDiffers\(summary\)/);
   assert.match(app, /loadDashboard\(\{ silent: true, force: true \}\)/);
   assert.match(app, /startPendingSummarySync\(\)/);
+  assert.match(app, /new EventSource\('\/api\/events'\)/);
+  assert.match(app, /source\.addEventListener\('dashboard'/);
+  assert.match(app, /pending\.force \|\| force/);
+  assert.match(app, /loadDashboard\(\{ silent: pending\.silent, force: pending\.force \}\)/);
   assert.match(app, /本地扫描耗时/);
   assert.match(app, /服务内存占用/);
   assert.match(app, /topbarLoadLabel/);
@@ -546,21 +550,30 @@ test('does not expose per-thread rate limit copy', async () => {
   }
 });
 
-test('renders grouped quota rows for multiple LLM families without adding extra metric cards', async () => {
+test('renders grouped quota rows and gifted Codex reset timing', async () => {
   const [app, styles] = await Promise.all([
     readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
     readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
   ]);
 
   assert.match(app, /function quotaSummaryCards\(quota\)/);
+  assert.match(app, /function codexResetSummaryCard\(quota = \{\}\)/);
+  assert.match(app, /codexResets/);
+  assert.match(app, /label: '赠送重置'/);
+  assert.match(app, /formatExpiryTime\(entry\.expiresAtMs\)/);
+  assert.match(app, /noteLines: codexResetNoteLines\(resetSummary\)/);
+  assert.match(app, /summary-card-note-lines/);
   assert.match(app, /const groups = Array\.isArray\(quota\?\.groups\) \? quota\.groups : \[\]/);
   assert.match(app, /rows: quotaRows\(groups, 'realtime'\)/);
   assert.match(app, /rows: quotaRows\(groups, 'weekly'\)/);
   assert.match(app, /暂无 quota 信号/);
   assert.match(app, /summary-card-with-lines/);
+  assert.match(styles, /\.summary-card\.summary-reset\s*\{/);
+  assert.match(styles, /\.summary-card-note-lines\s*\{/);
   assert.match(styles, /\.summary-card-with-lines\s*\{/);
   assert.match(styles, /\.summary-card-line\s*\{/);
   assert.match(styles, /\.summary-card-line-label\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
+  assert.match(styles, /\.summary-card-grid\s*\{[\s\S]*repeat\(auto-fit,\s*minmax\(168px,\s*1fr\)\)/);
 });
 
 test('keeps the dashboard summary compact above the first-screen search entry', async () => {
