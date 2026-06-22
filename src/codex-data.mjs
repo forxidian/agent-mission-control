@@ -4,6 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { buildDashboard, enrichThreads } from './insights.mjs';
+import {
+  addTokenBreakdowns,
+  emptyTokenBreakdown,
+  normalizeTokenBreakdown,
+} from './token-usage.mjs';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_CODEX_DIR = path.join(os.homedir(), '.codex');
@@ -20,7 +25,10 @@ const DISPLAY_TITLE_LENGTH = 140;
 const LOW_SIGNAL_USER_MESSAGE = /^(继续|继续吧|你继续|你继续吧|好的|好的好的|可以|可以的|行|ok|okay|收到|嗯|嗯嗯|先这样)$/iu;
 const ROLLOUT_FILE_RE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 const ARTIFACT_SUMMARY_LIMIT = 3;
+const MEDIA_PLACEHOLDERS = ['[图片]', '[视频]', '[音频]', '[文件]'];
 const IMAGE_ARTIFACT_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'heic', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp']);
+const VIDEO_ARTIFACT_EXTENSIONS = new Set(['avi', 'm4v', 'mkv', 'mov', 'mp4', 'webm']);
+const AUDIO_ARTIFACT_EXTENSIONS = new Set(['aac', 'aiff', 'flac', 'm4a', 'mp3', 'wav']);
 const LOCAL_ARTIFACT_EXTENSIONS = [
   'avif', 'bmp', 'gif', 'heic', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp',
   'html', 'htm', 'md', 'markdown', 'mdx', 'pdf',
@@ -629,6 +637,96 @@ function compactInlineText(value = '') {
   return String(value).replace(/\s+/g, ' ').trim();
 }
 
+function textAfterCodexRequestHeading(value = '') {
+  const text = String(value || '');
+  const match = text.match(/^##\s+My request for Codex:\s*$/im);
+  if (!match) return text;
+  return text.slice((match.index || 0) + match[0].length);
+}
+
+function stripCodexRichMessageScaffold(value = '') {
+  return String(value || '')
+    .replace(/<image\b[\s\S]*?<\/image>/gi, ' ')
+    .replace(/<image\b[^>]*>/gi, ' ')
+    .replace(/<\/image>/gi, ' ')
+    .replace(/^#\s+Files mentioned by the user:\s*$/gim, ' ')
+    .replace(/^##\s+[^:\n#]+?\.[A-Za-z0-9]{1,12}\s*:\s*(?:file:\/\/|~\/|\/|[A-Za-z]:[\\/]).*$/gim, ' ')
+    .replace(/^##\s+My request for Codex:\s*$/gim, ' ');
+}
+
+function externalLinkPlaceholderText(value = '') {
+  return String(value || '')
+    .replace(/\[[^\]\n]*\]\(\s*https?:\/\/[^\s<>"'`)]+(?:\s+["'][^"']*["'])?\s*\)/gi, ' [外部链接] ')
+    .replace(/\bhttps?:\/\/[^\s<>"'`]+/gi, ' [外部链接] ');
+}
+
+function extensionPlaceholder(extension = '') {
+  const normalized = String(extension || '').toLowerCase();
+  if (IMAGE_ARTIFACT_EXTENSIONS.has(normalized)) return '[图片]';
+  if (VIDEO_ARTIFACT_EXTENSIONS.has(normalized)) return '[视频]';
+  if (AUDIO_ARTIFACT_EXTENSIONS.has(normalized)) return '[音频]';
+  return normalized ? '[文件]' : '';
+}
+
+function richAttachmentPlaceholders(value = '') {
+  const raw = String(value || '');
+  const placeholders = new Set();
+
+  if (/<image\b/i.test(raw)) placeholders.add('[图片]');
+  for (const target of extractLocalArtifactTargets(raw)) {
+    const extension = artifactExtension(target.title || target.path);
+    const placeholder = extensionPlaceholder(extension);
+    if (placeholder) placeholders.add(placeholder);
+  }
+
+  return [...placeholders];
+}
+
+function isImageOnlyTitle(value = '') {
+  const text = compactInlineText(value);
+  if (!text) return false;
+  return new RegExp(`^[^\\s]+\\.(?:${[...IMAGE_ARTIFACT_EXTENSIONS].join('|')})(?:\\s*[·-]\\s*(?:图片|image))?$`, 'iu').test(text);
+}
+
+function codexDisplayText(value = '') {
+  const raw = String(value || '');
+  if (!raw.trim()) return '';
+
+  const attachmentPlaceholders = richAttachmentPlaceholders(raw);
+  const body = compactInlineText(externalLinkPlaceholderText(
+    stripCodexRichMessageScaffold(textAfterCodexRequestHeading(raw)),
+  ));
+  const leadingPlaceholders = attachmentPlaceholders.filter((placeholder) => !body.includes(placeholder));
+  const displayText = compactInlineText([...leadingPlaceholders, body].filter(Boolean).join(' '));
+
+  if (displayText) return displayText;
+  if (isImageOnlyTitle(raw)) return '[图片]';
+  return compactInlineText(externalLinkPlaceholderText(stripCodexRichMessageScaffold(raw)));
+}
+
+function leadingMediaPlaceholders(value = '') {
+  const placeholders = [];
+  let text = compactInlineText(value);
+
+  while (text) {
+    const placeholder = MEDIA_PLACEHOLDERS.find((candidate) => text.startsWith(candidate));
+    if (!placeholder) break;
+    placeholders.push(placeholder);
+    text = compactInlineText(text.slice(placeholder.length));
+  }
+
+  return placeholders;
+}
+
+function titleWithSignalPlaceholders(title = '', signals = {}) {
+  const context = codexDisplayText(signals.latestMeaningfulUserMessage)
+    || codexDisplayText(signals.latestUserMessage)
+    || codexDisplayText(signals.firstUserMessage);
+  const missingPlaceholders = leadingMediaPlaceholders(context)
+    .filter((placeholder) => !title.includes(placeholder));
+  return compactInlineText([...missingPlaceholders, title].filter(Boolean).join(' '));
+}
+
 function truncateText(value = '', maxLength = DISPLAY_TITLE_LENGTH) {
   const text = compactInlineText(value);
   if (text.length <= maxLength) return text;
@@ -643,16 +741,18 @@ function isMeaningfulUserMessage(value = '') {
 
 function isPlaceholderStoredTitle(value = '') {
   const text = compactInlineText(value);
-  return !text || text === '未命名任务';
+  return !text || text === '未命名任务' || isImageOnlyTitle(text);
 }
 
 export function deriveCodexThreadTitle(storedTitle, signals = {}) {
-  const title = compactInlineText(storedTitle);
-  if (!isPlaceholderStoredTitle(storedTitle)) return truncateText(title);
+  const title = codexDisplayText(storedTitle);
+  if (!isPlaceholderStoredTitle(storedTitle)) {
+    return truncateText(titleWithSignalPlaceholders(title, signals));
+  }
 
-  const rolloutTitle = signals.latestMeaningfulUserMessage
-    || signals.latestUserMessage
-    || signals.firstUserMessage;
+  const rolloutTitle = codexDisplayText(signals.latestMeaningfulUserMessage)
+    || codexDisplayText(signals.latestUserMessage)
+    || codexDisplayText(signals.firstUserMessage);
   return truncateText(rolloutTitle || title || '未命名任务');
 }
 
@@ -748,6 +848,9 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
   const signals = {
     totalTokenUsage: null,
     lastTokenUsage: null,
+    totalTokenBreakdown: emptyTokenBreakdown(),
+    lastTokenBreakdown: emptyTokenBreakdown(),
+    todayTokenBreakdown: emptyTokenBreakdown(),
     modelContextWindow: null,
     rateLimits: null,
     latestRateLimitAtMs: null,
@@ -795,6 +898,8 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
     if (payload?.type === 'token_count') {
       signals.totalTokenUsage = payload.info?.total_token_usage || null;
       signals.lastTokenUsage = payload.info?.last_token_usage || null;
+      signals.totalTokenBreakdown = normalizeTokenBreakdown(signals.totalTokenUsage);
+      signals.lastTokenBreakdown = normalizeTokenBreakdown(signals.lastTokenUsage);
       signals.modelContextWindow = payload.info?.model_context_window || null;
 
       if (Object.prototype.hasOwnProperty.call(payload, 'rate_limits')) {
@@ -820,6 +925,10 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
         if (!seenTodayTokenEvents.has(eventKey)) {
           seenTodayTokenEvents.add(eventKey);
           signals.todayTokenUsage += todayTokens;
+          signals.todayTokenBreakdown = addTokenBreakdowns(
+            signals.todayTokenBreakdown,
+            signals.lastTokenBreakdown,
+          );
         }
       }
       continue;
@@ -843,7 +952,7 @@ export function parseRolloutSignals(jsonlText, { todayStartMs = 0 } = {}) {
     if (payload?.type === 'user_message') {
       const text = payloadText(payload);
       if (text) {
-        const compactText = truncateText(text, 500);
+        const compactText = truncateText(codexDisplayText(text), 500);
         signals.firstUserMessage ||= compactText;
         signals.latestUserMessage = compactText;
         if (isMeaningfulUserMessage(text)) {
@@ -1008,6 +1117,9 @@ async function attachRolloutSignals(threads, {
     const thread = candidates[index];
     thread.totalTokenUsage = result.value.totalTokenUsage;
     thread.lastTokenUsage = result.value.lastTokenUsage;
+    thread.tokenBreakdown = result.value.totalTokenBreakdown;
+    thread.lastTokenBreakdown = result.value.lastTokenBreakdown;
+    thread.todayTokenBreakdown = result.value.todayTokenBreakdown;
     thread.modelContextWindow = result.value.modelContextWindow;
     thread.rateLimits = result.value.rateLimits;
     thread.rateLimitUpdatedAtMs = result.value.latestRateLimitAtMs;

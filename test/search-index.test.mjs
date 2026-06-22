@@ -24,6 +24,8 @@ function thread(overrides = {}) {
     createdAtMs: overrides.createdAtMs || 1_699_999_900_000,
     tokensUsed: overrides.tokensUsed || 0,
     todayTokenUsage: overrides.todayTokenUsage || 0,
+    tokenBreakdown: overrides.tokenBreakdown,
+    todayTokenBreakdown: overrides.todayTokenBreakdown,
     model: overrides.model || 'gpt-5-codex',
     latestMeaningfulUserMessage: overrides.latestMeaningfulUserMessage || '',
     latestUserMessage: overrides.latestUserMessage || '',
@@ -243,12 +245,36 @@ test('preserves artifact summaries in history search results', async () => {
   assert.equal(result.items[0].artifacts.items[1].type, 'image');
 });
 
+test('marks an unversioned search index for rebuild and clears it after indexing', async () => {
+  const index = createSearchIndex({ databasePath: await tempDb(), now: () => 1_800_000_000_000 });
+
+  const before = await index.status();
+  assert.equal(before.needsRebuild, true);
+
+  await index.indexDashboard({ threads: [thread({ id: 'versioned-thread', title: '[图片] 设计师权限' })] });
+  const after = await index.status();
+
+  assert.equal(after.needsRebuild, false);
+  assert.equal(after.indexVersion, after.currentIndexVersion);
+});
+
 test('project history groups all indexed threads and keeps archived counts separate', async () => {
   const index = createSearchIndex({ databasePath: await tempDb(), now: () => 1_800_000_000_000 });
   await index.indexDashboard({
     threads: [
       thread({ id: 'one', cwd: '/Users/example/alpha', projectName: 'alpha', tokensUsed: 10, updatedAtMs: 1000 }),
-      thread({ id: 'two', cwd: '/Users/example/alpha', projectName: 'alpha', tokensUsed: 20, todayTokenUsage: 5, archived: true, status: 'archived', updatedAtMs: 2000 }),
+      thread({
+        id: 'two',
+        cwd: '/Users/example/alpha',
+        projectName: 'alpha',
+        tokensUsed: 20,
+        todayTokenUsage: 5,
+        tokenBreakdown: { total: 20, input: 8, cacheRead: 6, cacheWrite: 0, output: 4, reasoning: 2, uncategorized: 0 },
+        todayTokenBreakdown: { total: 5, input: 2, cacheRead: 1, cacheWrite: 0, output: 2, reasoning: 0, uncategorized: 0 },
+        archived: true,
+        status: 'archived',
+        updatedAtMs: 2000,
+      }),
       thread({ id: 'three', cwd: '/Users/example/beta', projectName: 'beta', provider: 'opencode', providerLabel: 'OpenCode', tokensUsed: 8, updatedAtMs: 3000 }),
     ],
   });
@@ -264,6 +290,24 @@ test('project history groups all indexed threads and keeps archived counts separ
     archivedThreadCount: 1,
     tokensUsed: 30,
     todayTokensUsed: 5,
+    tokenBreakdown: {
+      total: 30,
+      input: 8,
+      cacheRead: 6,
+      cacheWrite: 0,
+      output: 4,
+      reasoning: 2,
+      uncategorized: 10,
+    },
+    todayTokenBreakdown: {
+      total: 5,
+      input: 2,
+      cacheRead: 1,
+      cacheWrite: 0,
+      output: 2,
+      reasoning: 0,
+      uncategorized: 0,
+    },
     latestUpdatedAtMs: 2000,
     providers: ['Codex'],
   });
@@ -280,5 +324,7 @@ test('status reports index freshness and thread count', async () => {
   assert.equal(status.available, true);
   assert.equal(status.threadCount, 2);
   assert.equal(status.indexedAtMs, 1_800_000_000_000);
+  assert.equal(status.needsRebuild, false);
+  assert.equal(status.indexVersion, status.currentIndexVersion);
   assert.match(status.databasePath, /search\.sqlite$/);
 });

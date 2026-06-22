@@ -172,8 +172,26 @@ test('uses active Codex goals as an explicit running signal', () => {
 
 test('aggregates active token usage by project', () => {
   const projects = aggregateProjects([
-    { cwd: '/a/one', projectName: 'one', tokensUsed: 10, todayTokenUsage: 3, archived: false, updatedAtMs: 2000 },
-    { cwd: '/a/one', projectName: 'one', tokensUsed: 20, todayTokenUsage: 4, archived: false, updatedAtMs: 3000 },
+    {
+      cwd: '/a/one',
+      projectName: 'one',
+      tokensUsed: 10,
+      todayTokenUsage: 3,
+      tokenBreakdown: { total: 10, input: 6, cacheRead: 2, cacheWrite: 0, output: 2, reasoning: 0, uncategorized: 0 },
+      todayTokenBreakdown: { total: 3, input: 2, cacheRead: 0, cacheWrite: 0, output: 1, reasoning: 0, uncategorized: 0 },
+      archived: false,
+      updatedAtMs: 2000,
+    },
+    {
+      cwd: '/a/one',
+      projectName: 'one',
+      tokensUsed: 20,
+      todayTokenUsage: 4,
+      tokenBreakdown: { total: 20, input: 8, cacheRead: 6, cacheWrite: 0, output: 4, reasoning: 2, uncategorized: 0 },
+      todayTokenBreakdown: { total: 4, input: 1, cacheRead: 1, cacheWrite: 0, output: 1, reasoning: 1, uncategorized: 0 },
+      archived: false,
+      updatedAtMs: 3000,
+    },
     { cwd: '/a/two', projectName: 'two', tokensUsed: 50, archived: true, updatedAtMs: 4000 },
   ]);
 
@@ -184,6 +202,24 @@ test('aggregates active token usage by project', () => {
     threadCount: 2,
     tokensUsed: 30,
     todayTokensUsed: 7,
+    tokenBreakdown: {
+      total: 30,
+      input: 14,
+      cacheRead: 8,
+      cacheWrite: 0,
+      output: 6,
+      reasoning: 2,
+      uncategorized: 0,
+    },
+    todayTokenBreakdown: {
+      total: 7,
+      input: 3,
+      cacheRead: 1,
+      cacheWrite: 0,
+      output: 2,
+      reasoning: 1,
+      uncategorized: 0,
+    },
     latestUpdatedAtMs: 3000,
   });
 });
@@ -239,6 +275,15 @@ test('builds summary counts and inbox candidates', () => {
   assert.equal(dashboard.summary.runningThreads, 1);
   assert.equal(dashboard.summary.archivedThreads, 1);
   assert.equal(dashboard.summary.totalTokensUsed, 8_000_250);
+  assert.deepEqual(dashboard.summary.tokenBreakdown, {
+    total: 8_000_250,
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    reasoning: 0,
+    uncategorized: 8_000_250,
+  });
   assert.equal(dashboard.inbox.length, 2);
   assert.deepEqual(dashboard.inbox.map((item) => item.reason), ['running', 'high token usage']);
   assert.equal(dashboard.threads[0].status, 'running');

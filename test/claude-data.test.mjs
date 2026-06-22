@@ -74,6 +74,16 @@ test('parses Claude JSONL usage, running state, and pending user prompts', () =>
   assert.equal(signals.model, 'claude-sonnet-4-6');
   assert.equal(signals.tokensUsed, 350);
   assert.equal(signals.todayTokenUsage, 350);
+  assert.deepEqual(signals.tokenBreakdown, {
+    total: 350,
+    input: 100,
+    cacheRead: 200,
+    cacheWrite: 0,
+    output: 50,
+    reasoning: 0,
+    uncategorized: 0,
+  });
+  assert.deepEqual(signals.todayTokenBreakdown, signals.tokenBreakdown);
   assert.equal(signals.latestUserMessage, '帮我检查这个项目');
   assert.equal(signals.latestAgentFinalAtMs, null);
   assert.equal(signals.pendingToolCount, 1);

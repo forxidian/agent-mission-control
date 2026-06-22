@@ -4,6 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { enrichThreadRuntime } from './insights.mjs';
+import {
+  emptyTokenBreakdown,
+  normalizeTokenBreakdown,
+  tokenBreakdownWithFallbackTotal,
+} from './token-usage.mjs';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_COUNT = 120;
@@ -104,6 +109,11 @@ function tokenTotal(session) {
     usage.reasoningTokens,
     usage.reasoning_tokens,
   ].reduce((sum, value) => sum + coerceNumber(value), 0);
+}
+
+function tokenBreakdown(session) {
+  const usage = session.tokens || session.token || session.usage || session;
+  return tokenBreakdownWithFallbackTotal(normalizeTokenBreakdown(usage), tokenTotal(session));
 }
 
 function openCommandForSession(session) {
@@ -430,6 +440,8 @@ export function normalizeOpenCodeSession(session, nowMs = Date.now()) {
     model: modelLabel(session),
     reasoningEffort: '',
     tokensUsed: tokenTotal(session),
+    tokenBreakdown: tokenBreakdown(session),
+    todayTokenBreakdown: emptyTokenBreakdown(),
     hasUnreadTurn: false,
     awaitingPermission: false,
     archived: Boolean(session.archived),
@@ -475,6 +487,8 @@ export function normalizeOpenCodeDesktopSession(session, nowMs = Date.now()) {
     model: modelLabel(session),
     reasoningEffort: '',
     tokensUsed: 0,
+    tokenBreakdown: emptyTokenBreakdown(),
+    todayTokenBreakdown: emptyTokenBreakdown(),
     hasUnreadTurn: Boolean(session.hasUnreadTurn),
     awaitingPermission,
     awaitingReview: false,

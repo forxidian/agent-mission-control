@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { isAutomationThread, isSubagentThread, subagentInfo } from './thread-classification.mjs';
+import {
+  addTokenBreakdowns,
+  tokenBreakdownWithFallbackTotal,
+} from './token-usage.mjs';
 
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 const WARM_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -393,12 +397,22 @@ export function aggregateProjects(threads) {
       threadCount: 0,
       tokensUsed: 0,
       todayTokensUsed: 0,
+      tokenBreakdown: addTokenBreakdowns(),
+      todayTokenBreakdown: addTokenBreakdowns(),
       latestUpdatedAtMs: 0,
     };
 
     existing.threadCount += 1;
     existing.tokensUsed += coerceNumber(thread.tokensUsed);
     existing.todayTokensUsed += coerceNumber(thread.todayTokenUsage);
+    existing.tokenBreakdown = addTokenBreakdowns(
+      existing.tokenBreakdown,
+      tokenBreakdownWithFallbackTotal(thread.tokenBreakdown, thread.tokensUsed),
+    );
+    existing.todayTokenBreakdown = addTokenBreakdowns(
+      existing.todayTokenBreakdown,
+      tokenBreakdownWithFallbackTotal(thread.todayTokenBreakdown, thread.todayTokenUsage),
+    );
     existing.latestUpdatedAtMs = Math.max(existing.latestUpdatedAtMs, coerceNumber(thread.updatedAtMs));
     groups.set(key, existing);
   }
@@ -436,6 +450,13 @@ function countRunningHostThreads(threads) {
   return hostIds.size;
 }
 
+function aggregateTokenBreakdown(threads, breakdownField, totalField) {
+  return threads.reduce((sum, thread) => addTokenBreakdowns(
+    sum,
+    tokenBreakdownWithFallbackTotal(thread?.[breakdownField], coerceNumber(thread?.[totalField])),
+  ), addTokenBreakdowns());
+}
+
 export function buildDashboard(threads, nowMs = Date.now()) {
   const sortedThreads = attachThreadRelationships(threads
     .map((thread) => enrichThreadRuntime(thread, nowMs))
@@ -447,6 +468,9 @@ export function buildDashboard(threads, nowMs = Date.now()) {
   const totalTokensUsed = sortedThreads.reduce((sum, thread) => sum + coerceNumber(thread.tokensUsed), 0);
   const activeTokensUsed = activeThreads.reduce((sum, thread) => sum + coerceNumber(thread.tokensUsed), 0);
   const todayTokensUsed = activeThreads.reduce((sum, thread) => sum + coerceNumber(thread.todayTokenUsage), 0);
+  const tokenBreakdown = aggregateTokenBreakdown(sortedThreads, 'tokenBreakdown', 'tokensUsed');
+  const activeTokenBreakdown = aggregateTokenBreakdown(activeThreads, 'tokenBreakdown', 'tokensUsed');
+  const todayTokenBreakdown = aggregateTokenBreakdown(activeThreads, 'todayTokenBreakdown', 'todayTokenUsage');
   const todayStart = new Date(nowMs);
   todayStart.setHours(0, 0, 0, 0);
 
@@ -466,6 +490,9 @@ export function buildDashboard(threads, nowMs = Date.now()) {
       totalTokensUsed,
       activeTokensUsed,
       todayTokensUsed,
+      tokenBreakdown,
+      activeTokenBreakdown,
+      todayTokenBreakdown,
       updatedToday: activeThreads.filter((thread) => thread.updatedAtMs >= todayStart.getTime()).length,
       inboxCount: inbox.length,
       quota: quotaSummary(activeThreads),

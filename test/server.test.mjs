@@ -267,6 +267,52 @@ test('rebuilds a fresh search index once when a non-empty query has no matches',
   }
 });
 
+test('rebuilds a fresh search index when its version is stale', async () => {
+  const calls = [];
+  let rebuilt = false;
+  const searchIndex = {
+    status: async () => ({
+      available: true,
+      indexedAtMs: rebuilt ? 2000 : 1900,
+      threadCount: 1,
+      needsRebuild: !rebuilt,
+    }),
+    indexDashboard: async (dashboard) => {
+      calls.push({ method: 'indexDashboard', threadCount: dashboard.threads.length });
+      rebuilt = true;
+      return { indexedAtMs: 2000, threadCount: dashboard.threads.length };
+    },
+    searchThreads: async (params) => {
+      calls.push({ method: 'searchThreads', rebuilt, query: params.query });
+      return { query: params.query, total: 1, items: [{ id: 'versioned-thread', title: '[图片] 设计师权限' }] };
+    },
+    projectHistory: async () => ({ items: [] }),
+  };
+  const server = createServer({
+    now: () => 2000,
+    searchIndex,
+    searchIndexMaxAgeMs: 60_000,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{ id: 'versioned-thread', title: '[图片] 设计师权限' }],
+      projects: [],
+      inbox: [],
+    }),
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/search?q=%E8%AE%BE%E8%AE%A1`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.items[0].id, 'versioned-thread');
+    assert.deepEqual(calls.map((call) => call.method), ['indexDashboard', 'searchThreads']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('serves project history from the search index', async () => {
   const calls = [];
   const searchIndex = {

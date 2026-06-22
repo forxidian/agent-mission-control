@@ -5,6 +5,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import * as zlib from 'node:zlib';
 import { enrichThreadRuntime } from './insights.mjs';
+import {
+  addTokenBreakdowns,
+  emptyTokenBreakdown,
+  normalizeTokenBreakdown,
+} from './token-usage.mjs';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -359,9 +364,14 @@ function addUsage(signals, usage, timestampMs, usageKey, bucket = 'assistant') {
   signals.seenUsageKeys.add(usageKey);
   const tokenKey = bucket === 'result' ? 'resultTokensUsed' : 'assistantTokensUsed';
   const todayTokenKey = bucket === 'result' ? 'resultTodayTokenUsage' : 'assistantTodayTokenUsage';
+  const breakdownKey = bucket === 'result' ? 'resultTokenBreakdown' : 'assistantTokenBreakdown';
+  const todayBreakdownKey = bucket === 'result' ? 'resultTodayTokenBreakdown' : 'assistantTodayTokenBreakdown';
+  const breakdown = normalizeTokenBreakdown(usage);
   signals[tokenKey] += tokens;
+  signals[breakdownKey] = addTokenBreakdowns(signals[breakdownKey], breakdown);
   if (signals.todayStartMs && timestampMs >= signals.todayStartMs) {
     signals[todayTokenKey] += tokens;
+    signals[todayBreakdownKey] = addTokenBreakdowns(signals[todayBreakdownKey], breakdown);
   }
 }
 
@@ -370,10 +380,16 @@ function initialSignals(todayStartMs = 0) {
     todayStartMs,
     assistantTokensUsed: 0,
     assistantTodayTokenUsage: 0,
+    assistantTokenBreakdown: emptyTokenBreakdown(),
+    assistantTodayTokenBreakdown: emptyTokenBreakdown(),
     resultTokensUsed: 0,
     resultTodayTokenUsage: 0,
+    resultTokenBreakdown: emptyTokenBreakdown(),
+    resultTodayTokenBreakdown: emptyTokenBreakdown(),
     tokensUsed: 0,
     todayTokenUsage: 0,
+    tokenBreakdown: emptyTokenBreakdown(),
+    todayTokenBreakdown: emptyTokenBreakdown(),
     rateLimits: null,
     latestRateLimitAtMs: null,
     latestThreadRateLimitAtMs: null,
@@ -563,11 +579,19 @@ export function parseClaudeJsonlSignals(jsonlText = '', { todayStartMs = 0 } = {
   const todayTokenUsage = signals.resultTokensUsed
     ? signals.resultTodayTokenUsage
     : signals.assistantTodayTokenUsage;
+  const tokenBreakdown = signals.resultTokensUsed
+    ? signals.resultTokenBreakdown
+    : signals.assistantTokenBreakdown;
+  const todayTokenBreakdown = signals.resultTokensUsed
+    ? signals.resultTodayTokenBreakdown
+    : signals.assistantTodayTokenBreakdown;
 
   return {
     ...signals,
     tokensUsed,
     todayTokenUsage,
+    tokenBreakdown,
+    todayTokenBreakdown,
     seenUsageKeys: undefined,
     pendingToolsById: undefined,
     pendingToolAtMs,
@@ -897,6 +921,8 @@ function baseClaudeThread({
     reasoningEffort: '',
     tokensUsed: coerceNumber(signals?.tokensUsed),
     todayTokenUsage: coerceNumber(signals?.todayTokenUsage),
+    tokenBreakdown: signals?.tokenBreakdown || emptyTokenBreakdown(),
+    todayTokenBreakdown: signals?.todayTokenBreakdown || emptyTokenBreakdown(),
     rateLimits: signals?.rateLimits || null,
     rateLimitUpdatedAtMs: coerceNumber(signals?.latestRateLimitAtMs) || null,
     rateLimitActivityAtMs: coerceNumber(signals?.latestThreadRateLimitAtMs) || null,

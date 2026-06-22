@@ -180,6 +180,14 @@ const REVIEW_INPUT_MODES = [
   ['latest-turn', '最近一轮对话'],
   ['thread-summary', '线程摘要和最近输出'],
 ];
+const TOKEN_BREAKDOWN_ITEMS = [
+  { key: 'input', label: '新输入' },
+  { key: 'cacheRead', label: '缓存复用' },
+  { key: 'cacheWrite', label: '缓存写入' },
+  { key: 'output', label: '输出' },
+  { key: 'reasoning', label: '推理' },
+  { key: 'uncategorized', label: '未细分' },
+];
 
 function escapeHtml(value = '') {
   return String(value)
@@ -205,6 +213,263 @@ function formatTokens(value) {
 
   const fractionDigits = millions >= 100 ? 0 : 1;
   return `${Number(millions.toFixed(fractionDigits)).toLocaleString('en-US')}M`;
+}
+
+function formatTokenCount(value) {
+  const number = Math.max(0, Math.round(Number(value || 0)));
+  if (!Number.isFinite(number) || number === 0) return '0';
+  if (number >= 1_000_000) return formatTokens(number);
+  if (number >= 1_000) {
+    const thousands = number / 1_000;
+    const fractionDigits = thousands >= 100 ? 0 : 1;
+    return `${Number(thousands.toFixed(fractionDigits)).toLocaleString('en-US')}K`;
+  }
+  return number.toLocaleString('en-US');
+}
+
+function normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal = 0) {
+  const total = Math.max(0, Number(breakdown?.total || fallbackTotal || 0));
+  const normalized = { total };
+  let knownTotal = 0;
+  for (const item of TOKEN_BREAKDOWN_ITEMS) {
+    if (item.key === 'uncategorized') continue;
+    const value = Math.max(0, Number(breakdown?.[item.key] || 0));
+    normalized[item.key] = value;
+    knownTotal += value;
+  }
+  normalized.uncategorized = Math.max(0, Number(breakdown?.uncategorized || 0), total - knownTotal);
+  normalized.total = Math.max(total, knownTotal + normalized.uncategorized);
+  return normalized;
+}
+
+function tokenBreakdownEntries(breakdown, fallbackTotal = 0) {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  return TOKEN_BREAKDOWN_ITEMS
+    .map((item) => ({ ...item, value: Math.max(0, Number(normalized[item.key] || 0)) }))
+    .filter((item) => item.value > 0);
+}
+
+function tokenBreakdownBarMarkup(breakdown, fallbackTotal = 0) {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  const total = Math.max(1, normalized.total);
+  const entries = tokenBreakdownEntries(normalized);
+  if (!entries.length) return '<span class="token-breakdown-bar is-empty" aria-hidden="true"></span>';
+
+  return `
+    <span class="token-breakdown-bar" aria-hidden="true">
+      ${entries.map((item) => `
+        <span
+          class="token-breakdown-segment token-breakdown-${escapeHtml(item.key)}"
+          style="--value: ${Math.max(1, (item.value / total) * 100).toFixed(2)}%"
+        ></span>
+      `).join('')}
+    </span>
+  `;
+}
+
+function tokenBreakdownPopoverMarkup(breakdown, fallbackTotal = 0, title = 'token 消耗明细') {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  const entries = tokenBreakdownEntries(normalized);
+  if (!normalized.total || !entries.length) return '';
+
+  return `
+    <span class="token-breakdown-popover" role="tooltip">
+      <span class="token-breakdown-popover-heading">
+        <strong>${escapeHtml(formatTokenCount(normalized.total))}</strong>
+        <span>${escapeHtml(title)}</span>
+      </span>
+      ${tokenBreakdownBarMarkup(normalized)}
+      <span class="token-breakdown-list">
+        ${entries.map((item) => `
+          <span class="token-breakdown-row">
+            <span class="token-breakdown-dot token-breakdown-${escapeHtml(item.key)}" aria-hidden="true"></span>
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(formatTokenCount(item.value))}</strong>
+          </span>
+        `).join('')}
+      </span>
+    </span>
+  `;
+}
+
+function tokenBreakdownInfoMarkup(breakdown, fallbackTotal = 0, title = 'token 消耗明细') {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  if (!normalized.total) return '';
+
+  return `
+    <span class="token-breakdown-info">
+      <button class="token-info-button" type="button" aria-label="${escapeHtml(title)}">i</button>
+      ${tokenBreakdownPopoverMarkup(normalized, normalized.total, title)}
+    </span>
+  `;
+}
+
+let activeTokenBreakdownContainer = null;
+
+function ensureTokenBreakdownPopoverLayer() {
+  let layer = document.querySelector('#token-breakdown-popover-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'token-breakdown-popover-layer';
+    layer.className = 'token-breakdown-popover-layer';
+    layer.hidden = true;
+    document.body.append(layer);
+  }
+  return layer;
+}
+
+function hideTokenBreakdownPopover() {
+  const layer = document.querySelector('#token-breakdown-popover-layer');
+  if (layer) {
+    layer.hidden = true;
+    layer.replaceChildren();
+    layer.style.left = '';
+    layer.style.top = '';
+  }
+  activeTokenBreakdownContainer = null;
+}
+
+function clampNumber(value, min, max) {
+  if (max < min) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
+function preferredTokenPopoverPlacement(container) {
+  return container?.closest?.('.thread-token-inline, .project-token-meta') ? 'above' : 'below';
+}
+
+function positionFloatingTokenBreakdownPopover(layer, container) {
+  const popover = layer?.querySelector?.('.token-breakdown-popover');
+  if (!popover || !container) return;
+
+  const viewportPadding = 8;
+  const gap = 7;
+  layer.style.left = '0px';
+  layer.style.top = '0px';
+
+  const triggerRect = container.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const popoverWidth = popoverRect.width;
+  const popoverHeight = popoverRect.height;
+  const spaceAbove = triggerRect.top - viewportPadding;
+  const spaceBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
+  const prefersAbove = preferredTokenPopoverPlacement(container) === 'above';
+  const placeAbove = prefersAbove
+    ? spaceAbove >= popoverHeight + gap || spaceAbove >= spaceBelow
+    : spaceBelow < popoverHeight + gap && spaceAbove > spaceBelow;
+
+  const idealTop = placeAbove
+    ? triggerRect.top - popoverHeight - gap
+    : triggerRect.bottom + gap;
+  let idealLeft = container.closest?.('.thread-token-inline')
+    ? triggerRect.right - popoverWidth
+    : triggerRect.left;
+
+  if (container.closest?.('.summary-strip-item strong')) {
+    idealLeft = triggerRect.right - popoverWidth;
+  }
+
+  layer.style.left = `${Math.round(clampNumber(
+    idealLeft,
+    viewportPadding,
+    window.innerWidth - popoverWidth - viewportPadding,
+  ))}px`;
+  layer.style.top = `${Math.round(clampNumber(
+    idealTop,
+    viewportPadding,
+    window.innerHeight - popoverHeight - viewportPadding,
+  ))}px`;
+}
+
+function renderFloatingTokenBreakdownPopover(container) {
+  const sourcePopover = container?.querySelector?.('.token-breakdown-popover');
+  if (!sourcePopover) {
+    hideTokenBreakdownPopover();
+    return;
+  }
+
+  const layer = ensureTokenBreakdownPopoverLayer();
+  const popover = sourcePopover.cloneNode(true);
+  popover.removeAttribute('style');
+  popover.classList.add('is-floating');
+  layer.classList.toggle('is-project-token', Boolean(container.closest?.('.project-token-meta')));
+  layer.replaceChildren(popover);
+  layer.hidden = false;
+  activeTokenBreakdownContainer = container;
+  positionFloatingTokenBreakdownPopover(layer, container);
+}
+
+function positionTokenBreakdownPopover(container) {
+  renderFloatingTokenBreakdownPopover(container);
+}
+
+function handleTokenBreakdownPosition(event) {
+  const container = event.target instanceof Element
+    ? event.target.closest('.token-breakdown-info')
+    : null;
+  if (!container) return;
+  window.requestAnimationFrame(() => positionTokenBreakdownPopover(container));
+}
+
+function handleTokenBreakdownExit(event) {
+  const container = event.target instanceof Element
+    ? event.target.closest('.token-breakdown-info')
+    : null;
+  if (!container) return;
+
+  const relatedTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null;
+  if (relatedTarget && container.contains(relatedTarget)) return;
+  hideTokenBreakdownPopover();
+}
+
+function handleTokenBreakdownViewportChange() {
+  if (!activeTokenBreakdownContainer?.isConnected) {
+    hideTokenBreakdownPopover();
+    return;
+  }
+  const layer = document.querySelector('#token-breakdown-popover-layer');
+  if (!layer || layer.hidden) return;
+  positionFloatingTokenBreakdownPopover(layer, activeTokenBreakdownContainer);
+}
+
+function summaryTokenBreakdownMarkup(breakdown, fallbackTotal = 0) {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  const entries = tokenBreakdownEntries(normalized).slice(0, 3);
+  if (!normalized.total || !entries.length) return '';
+
+  return `
+    <div class="summary-token-breakdown">
+      ${tokenBreakdownBarMarkup(normalized)}
+      <div class="summary-token-breakdown-lines">
+        ${entries.map((item) => `
+          <span>
+            <i class="token-breakdown-dot token-breakdown-${escapeHtml(item.key)}" aria-hidden="true"></i>
+            ${escapeHtml(item.label)} ${escapeHtml(formatTokenCount(item.value))}
+          </span>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function detailTokenBreakdownMarkup(breakdown, fallbackTotal = 0) {
+  const normalized = normalizeTokenBreakdownForDisplay(breakdown, fallbackTotal);
+  const entries = tokenBreakdownEntries(normalized);
+  if (!normalized.total || !entries.length) return '';
+
+  return `
+    <div class="detail-token-breakdown">
+      ${tokenBreakdownBarMarkup(normalized)}
+      <div class="detail-token-breakdown-lines">
+        ${entries.map((item) => `
+          <span>
+            <i class="token-breakdown-dot token-breakdown-${escapeHtml(item.key)}" aria-hidden="true"></i>
+            ${escapeHtml(item.label)} ${escapeHtml(formatTokenCount(item.value))}
+          </span>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function formatPercent(value) {
@@ -466,8 +731,14 @@ function tokenUsageMarkup(thread) {
 
   return `
     <span class="thread-token-inline">
-      <span class="token-label">今日 ${escapeHtml(formatTokens(todayTokens))}</span>
-      <span class="token-history">历史 ${escapeHtml(formatTokens(historyTokens))}</span>
+      <span class="token-label token-line">
+        今日 ${escapeHtml(formatTokens(todayTokens))}
+        ${tokenBreakdownInfoMarkup(thread?.todayTokenBreakdown, todayTokens, '今日 token 明细')}
+      </span>
+      <span class="token-history token-line">
+        历史 ${escapeHtml(formatTokens(historyTokens))}
+        ${tokenBreakdownInfoMarkup(thread?.tokenBreakdown, historyTokens, '历史 token 明细')}
+      </span>
     </span>
   `;
 }
@@ -584,7 +855,7 @@ function quotaSummaryCards(quota) {
   ];
 }
 
-function summaryCard({ label, value, note = '', tone = '', rows = [], title = '' }) {
+function summaryCard({ label, value, note = '', tone = '', rows = [], title = '', breakdown = null, breakdownTotal = 0 }) {
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const classes = [
     'summary-card',
@@ -606,6 +877,7 @@ function summaryCard({ label, value, note = '', tone = '', rows = [], title = ''
     : `
       <strong>${escapeHtml(value)}</strong>
       ${note ? `<small>${escapeHtml(note)}</small>` : ''}
+      ${breakdown ? summaryTokenBreakdownMarkup(breakdown, breakdownTotal) : ''}
     `;
 
   return `
@@ -616,11 +888,14 @@ function summaryCard({ label, value, note = '', tone = '', rows = [], title = ''
   `;
 }
 
-function summaryStripItem({ label, value, note = '' }) {
+function summaryStripItem({ label, value, note = '', breakdown = null, breakdownTotal = 0, breakdownTitle = '' }) {
   return `
     <span class="summary-strip-item">
       <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
+      <strong>
+        ${escapeHtml(value)}
+        ${breakdown ? tokenBreakdownInfoMarkup(breakdown, breakdownTotal, breakdownTitle || `${label} 明细`) : ''}
+      </strong>
       ${note ? `<small>${escapeHtml(note)}</small>` : ''}
     </span>
   `;
@@ -1319,6 +1594,8 @@ function renderSummary(summary) {
       label: '今日 token',
       value: formatTokens(summary.todayTokensUsed),
       note: `${summary.updatedToday || 0} 项任务今天更新`,
+      breakdown: summary.todayTokenBreakdown,
+      breakdownTotal: summary.todayTokensUsed,
     },
     {
       label: '工作中 Agent',
@@ -1332,6 +1609,9 @@ function renderSummary(summary) {
       label: '累计 token',
       value: formatTokens(summary.totalTokensUsed ?? summary.activeTokensUsed),
       note: '包含归档任务',
+      breakdown: summary.tokenBreakdown,
+      breakdownTotal: summary.totalTokensUsed ?? summary.activeTokensUsed,
+      breakdownTitle: '累计 token 明细',
     },
     {
       label: '累计任务',
@@ -1579,6 +1859,20 @@ function renderNotifications(notifications) {
   ` : '');
 }
 
+function projectTokenUsageMarkup(project, kind = 'history') {
+  const isToday = kind === 'today';
+  const label = isToday ? '今日' : '历史';
+  const value = isToday ? Number(project?.todayTokensUsed || 0) : Number(project?.tokensUsed || 0);
+  const breakdown = isToday ? project?.todayTokenBreakdown : project?.tokenBreakdown;
+
+  return `
+    <span class="project-token-meta">
+      ${escapeHtml(label)} ${escapeHtml(formatTokens(value))}
+      ${tokenBreakdownInfoMarkup(breakdown, value, `${label} token 明细`)}
+    </span>
+  `;
+}
+
 function renderProjectHistory(history) {
   const projects = history?.items || [];
   if (!projects.length) {
@@ -1599,8 +1893,8 @@ function renderProjectHistory(history) {
             <span>${project.threadCount} 项任务</span>
             ${Number.isFinite(Number(project.activeThreadCount)) ? `<span>${escapeHtml(project.activeThreadCount)} 活跃</span>` : ''}
             ${Number(project.archivedThreadCount || 0) > 0 ? `<span>${escapeHtml(project.archivedThreadCount)} 归档</span>` : ''}
-            <span>今日 ${escapeHtml(formatTokens(project.todayTokensUsed))}</span>
-            <span>历史 ${escapeHtml(formatTokens(project.tokensUsed))}</span>
+            ${projectTokenUsageMarkup(project, 'today')}
+            ${projectTokenUsageMarkup(project, 'history')}
             <span>${escapeHtml(relativeTime(project.latestUpdatedAtMs))}</span>
           </div>
           ${project.providers?.length ? `<div class="project-history-summary">${project.providers.map(escapeHtml).join(' · ')}</div>` : ''}
@@ -2696,14 +2990,17 @@ function threadDetailMarkup(thread) {
           <div class="detail-cell">
             <span>今日 token</span>
             <strong>${escapeHtml(formatTokens(thread.todayTokenUsage))}</strong>
+            ${detailTokenBreakdownMarkup(thread.todayTokenBreakdown, thread.todayTokenUsage)}
           </div>
           <div class="detail-cell">
             <span>历史 token</span>
             <strong>${escapeHtml(formatTokens(thread.tokensUsed))}</strong>
+            ${detailTokenBreakdownMarkup(thread.tokenBreakdown, thread.tokensUsed)}
           </div>
           <div class="detail-cell detail-cell-wide">
             <span>最近一轮</span>
             <strong>${escapeHtml(lastTokenUsageLabel(thread.lastTokenUsage))}</strong>
+            ${detailTokenBreakdownMarkup(thread.lastTokenBreakdown, thread.lastTokenUsage?.total_tokens || thread.lastTokenUsage?.totalTokens || 0)}
           </div>
         </div>
       </section>
@@ -4529,6 +4826,10 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && activeTokenBreakdownContainer) {
+    hideTokenBreakdownPopover();
+  }
+
   if (event.key === 'Escape' && isArtifactDetailModalOpen()) {
     closeArtifactDetailModal();
     return;
@@ -4589,6 +4890,12 @@ document.addEventListener('input', (event) => {
   }
 });
 
+document.addEventListener('pointerover', handleTokenBreakdownPosition);
+document.addEventListener('pointerout', handleTokenBreakdownExit);
+document.addEventListener('focusin', handleTokenBreakdownPosition);
+document.addEventListener('focusout', handleTokenBreakdownExit);
+window.addEventListener('resize', handleTokenBreakdownViewportChange);
+window.addEventListener('scroll', handleTokenBreakdownViewportChange, true);
 window.addEventListener('hashchange', syncPageViewFromLocation);
 syncPageViewFromLocation();
 initializeInstallPrompt();

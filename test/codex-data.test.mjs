@@ -201,6 +201,15 @@ test('parses latest token-count and rate-limit signals from rollout jsonl', () =
 
   assert.equal(signals.totalTokenUsage.total_tokens, 112);
   assert.equal(signals.totalTokenUsage.cached_input_tokens, 40);
+  assert.deepEqual(signals.totalTokenBreakdown, {
+    total: 112,
+    input: 60,
+    cacheRead: 40,
+    cacheWrite: 0,
+    output: 9,
+    reasoning: 3,
+    uncategorized: 0,
+  });
   assert.equal(signals.rateLimits.primary.used_percent, 6);
   assert.equal(signals.completionHint, true);
   assert.equal(signals.latestAgentFinalAtMs, 1777444508583);
@@ -306,7 +315,12 @@ test('sums today token usage from token-count events without duplicate limit row
         type: 'token_count',
         info: {
           total_token_usage: { total_tokens: 1500 },
-          last_token_usage: { total_tokens: 500 },
+          last_token_usage: {
+            input_tokens: 300,
+            cached_input_tokens: 100,
+            output_tokens: 200,
+            total_tokens: 500,
+          },
           model_context_window: 258400,
         },
         rate_limits: {
@@ -322,7 +336,12 @@ test('sums today token usage from token-count events without duplicate limit row
         type: 'token_count',
         info: {
           total_token_usage: { total_tokens: 1500 },
-          last_token_usage: { total_tokens: 500 },
+          last_token_usage: {
+            input_tokens: 300,
+            cached_input_tokens: 100,
+            output_tokens: 200,
+            total_tokens: 500,
+          },
           model_context_window: 258400,
         },
         rate_limits: {
@@ -338,6 +357,15 @@ test('sums today token usage from token-count events without duplicate limit row
   });
 
   assert.equal(signals.todayTokenUsage, 500);
+  assert.deepEqual(signals.todayTokenBreakdown, {
+    total: 500,
+    input: 200,
+    cacheRead: 100,
+    cacheWrite: 0,
+    output: 200,
+    reasoning: 0,
+    uncategorized: 0,
+  });
   assert.equal(signals.latestRateLimitAtMs, 1777428000001);
   assert.equal(signals.modelContextWindow, 258400);
 });
@@ -560,13 +588,68 @@ test('uses rollout user context only when the stored Codex title is missing or p
   );
 });
 
+test('summarizes Codex rich user messages with media and link placeholders', () => {
+  const jsonl = [
+    JSON.stringify({
+      timestamp: '2026-06-18T07:56:48.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: [
+          '# Files mentioned by the user:',
+          '',
+          '## codex-clipboard-b73d2d87-e49e-4fbe-9aec-e7630d68f492.png: /var/folders/tmp/codex-clipboard-b73d2d87-e49e-4fbe-9aec-e7630d68f492.png',
+          '',
+          '## My request for Codex:',
+          'https://git.example.com/rich-media-technology/toy-issue-tracker/-/issues/5',
+          '',
+          '给我们设计师加一下这个gitlab（rich-media-technology）读写权限',
+          '',
+          '设计师是',
+          '',
+          '零卡、渣渣喵、天才大人',
+          '<image name=[Image #1] path="/var/folders/tmp/codex-clipboard-b73d2d87-e49e-4fbe-9aec-e7630d68f492.png">',
+          '</image>',
+        ].join('\n'),
+      },
+    }),
+  ].join('\n');
+
+  const signals = parseRolloutSignals(jsonl);
+
+  assert.equal(
+    signals.firstUserMessage,
+    '[图片] [外部链接] 给我们设计师加一下这个gitlab（rich-media-technology）读写权限 设计师是 零卡、渣渣喵、天才大人',
+  );
+  assert.equal(signals.latestMeaningfulUserMessage, signals.firstUserMessage);
+  assert.doesNotMatch(signals.firstUserMessage, /codex-clipboard|\/var\/folders|https?:\/\//);
+});
+
+test('uses rich user context instead of Codex clipboard image filenames for titles', () => {
+  assert.equal(
+    deriveCodexThreadTitle('codex-clipboard-b73d2d87-e49e-4fbe-9aec-e7630d68f492.png · 图片', {
+      latestMeaningfulUserMessage: '[图片] [外部链接] 给我们设计师加一下这个gitlab（rich-media-technology）读写权限',
+    }),
+    '[图片] [外部链接] 给我们设计师加一下这个gitlab（rich-media-technology）读写权限',
+  );
+});
+
+test('keeps media placeholders in titles derived from stored link text', () => {
+  assert.equal(
+    deriveCodexThreadTitle('https://git.example.com/rich-media-technology/issues/5 给我们设计师加一下这个gitlab（rich-media-technology）读写权限', {
+      firstUserMessage: '[图片] [外部链接] 给我们设计师加一下这个gitlab（rich-media-technology）读写权限',
+    }),
+    '[图片] [外部链接] 给我们设计师加一下这个gitlab（rich-media-technology）读写权限',
+  );
+});
+
 test('preserves stored Codex thread titles instead of replacing them with recent user text', () => {
   const storedThreadName = [
     'https://x.com/i/status/2065005648060797155',
     '',
     '调研一下，生成高辨识度，易用理解的网页报告',
   ].join('\n');
-  const displayThreadName = 'https://x.com/i/status/2065005648060797155 调研一下，生成高辨识度，易用理解的网页报告';
+  const displayThreadName = '[外部链接] 调研一下，生成高辨识度，易用理解的网页报告';
 
   assert.equal(
     deriveCodexThreadTitle(storedThreadName, {

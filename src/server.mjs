@@ -1006,7 +1006,14 @@ export function createServer({
     const indexedAtMs = Number(current?.indexedAtMs || 0);
     const ageMs = indexedAtMs ? now() - indexedAtMs : Number.POSITIVE_INFINITY;
 
-    if (!force && current?.available && indexedAtMs > 0 && ageMs >= 0 && ageMs < searchIndexMaxAgeMs) {
+    if (
+      !force
+      && current?.available
+      && !current.needsRebuild
+      && indexedAtMs > 0
+      && ageMs >= 0
+      && ageMs < searchIndexMaxAgeMs
+    ) {
       return current;
     }
 

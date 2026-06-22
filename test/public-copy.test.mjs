@@ -398,6 +398,75 @@ test('renders today and history token usage together in thread rows', async () =
   assert.match(styles, /\.token-history/);
 });
 
+test('renders token breakdown bars and info affordances', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /const TOKEN_BREAKDOWN_ITEMS = \[/);
+  assert.match(app, /label: '新输入'/);
+  assert.match(app, /label: '缓存复用'/);
+  assert.match(app, /label: '缓存写入'/);
+  assert.match(app, /label: '未细分'/);
+  assert.match(app, /function tokenBreakdownBarMarkup\(breakdown/);
+  assert.match(app, /function tokenBreakdownInfoMarkup\(breakdown/);
+  assert.match(app, /function positionTokenBreakdownPopover\(container\)/);
+  assert.match(app, /handleTokenBreakdownPosition/);
+  assert.match(app, /class="token-info-button"/);
+  assert.match(app, /class="summary-token-breakdown"/);
+  assert.match(app, /projectTokenUsageMarkup\(project, 'today'\)/);
+  assert.match(styles, /\.token-breakdown-bar/);
+  assert.match(styles, /\.token-breakdown-popover/);
+  assert.match(styles, /\.token-info-button/);
+  assert.match(styles, /\.summary-token-breakdown/);
+  assert.match(styles, /\.detail-token-breakdown/);
+});
+
+test('renders token breakdown hover popovers in a viewport-level layer', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(app, /function ensureTokenBreakdownPopoverLayer\(\)/);
+  assert.match(app, /document\.body\.append\(layer\)/);
+  assert.match(app, /function renderFloatingTokenBreakdownPopover\(container\)/);
+  assert.match(app, /document\.addEventListener\('pointerout', handleTokenBreakdownExit\)/);
+  assert.match(styles, /\.token-breakdown-popover-layer\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.token-breakdown-popover-layer\s*\{[\s\S]*z-index:\s*120;/);
+  assert.match(styles, /\.token-breakdown-popover-layer\s+\.token-breakdown-popover\s*\{[\s\S]*display:\s*grid;/);
+});
+
+test('uses visually distinct token breakdown colors with segment dividers', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const tokenColorEntries = [...styles.matchAll(/--token-(input|cache-read|cache-write|output|reasoning|uncategorized):\s*(#[0-9a-f]{6});/gi)];
+  const tokenColors = Object.fromEntries(tokenColorEntries.map((match) => [match[1], match[2].toLowerCase()]));
+
+  for (const key of ['input', 'cache-read', 'cache-write', 'output', 'reasoning', 'uncategorized']) {
+    assert.ok(tokenColors[key], `missing --token-${key} color`);
+  }
+
+  const rgb = (hex) => hex
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16));
+  const distance = (left, right) => {
+    const [lr, lg, lb] = rgb(left);
+    const [rr, rg, rb] = rgb(right);
+    return Math.hypot(lr - rr, lg - rg, lb - rb);
+  };
+  const pairs = Object.entries(tokenColors).flatMap(([leftKey, leftColor], index, entries) => (
+    entries.slice(index + 1).map(([rightKey, rightColor]) => [leftKey, rightKey, distance(leftColor, rightColor)])
+  ));
+
+  for (const [leftKey, rightKey, colorDistance] of pairs) {
+    assert.ok(colorDistance >= 80, `${leftKey} and ${rightKey} token colors are too similar`);
+  }
+
+  assert.match(styles, /\.token-breakdown-segment\s*\+\s*\.token-breakdown-segment\s*\{[\s\S]*box-shadow:/);
+});
+
 test('search controls only request hidden thread classes when their toggles are checked', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const start = app.indexOf('function searchParamsFromControls');
@@ -1186,6 +1255,16 @@ test('renders search result match metadata and project history', async () => {
   assert.match(styles, /\.search-result-row \.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
   assert.match(styles, /\.search-result-row\.has-artifacts \.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
   assert.match(styles, /\.project-history-summary/);
+});
+
+test('uses yellow marker styling for highlighted search terms', async () => {
+  const styles = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const markerBlock = styles.match(/\.thread-title mark,[\s\S]*?\.search-match mark\s*\{(?<body>[^}]*)\}/)?.groups?.body || '';
+
+  assert.match(markerBlock, /background:\s*#fff200;/);
+  assert.match(markerBlock, /color:\s*#111111;/);
+  assert.match(markerBlock, /box-shadow:\s*none;/);
+  assert.doesNotMatch(markerBlock, /var\(--red\)/);
 });
 
 test('lets project history rows expand to fit metadata and usage bars', async () => {

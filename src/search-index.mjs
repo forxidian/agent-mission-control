@@ -2,10 +2,15 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  addTokenBreakdowns,
+  tokenBreakdownWithFallbackTotal,
+} from './token-usage.mjs';
 
 const DEFAULT_INDEX_PATH = path.join(os.homedir(), '.agent-mission-control', 'search-index.sqlite');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+const SEARCH_INDEX_VERSION = 2;
 
 function coerceNumber(value, fallback = 0) {
   const number = Number(value);
@@ -39,6 +44,26 @@ function artifactSummaryJson(thread = {}) {
     return JSON.stringify(thread.artifacts);
   } catch {
     return '';
+  }
+}
+
+function tokenBreakdownJson(breakdown, total) {
+  const normalized = tokenBreakdownWithFallbackTotal(breakdown, total);
+  if (normalized.total <= 0) return '';
+  try {
+    return JSON.stringify(normalized);
+  } catch {
+    return '';
+  }
+}
+
+function parseTokenBreakdown(value = '', total = 0) {
+  if (!value) return tokenBreakdownWithFallbackTotal(null, total);
+
+  try {
+    return tokenBreakdownWithFallbackTotal(JSON.parse(value), total);
+  } catch {
+    return tokenBreakdownWithFallbackTotal(null, total);
   }
 }
 
@@ -160,6 +185,8 @@ function schemaSql() {
       createdAtMs INTEGER NOT NULL DEFAULT 0,
       tokensUsed INTEGER NOT NULL DEFAULT 0,
       todayTokenUsage INTEGER NOT NULL DEFAULT 0,
+      tokenBreakdownJson TEXT NOT NULL DEFAULT '',
+      todayTokenBreakdownJson TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
       appDeepLink TEXT NOT NULL DEFAULT '',
       resumeCommand TEXT NOT NULL DEFAULT '',
@@ -235,7 +262,8 @@ function threadValuesSql(thread = {}) {
   return `
     INSERT INTO threads (
       id, provider, providerLabel, title, projectName, cwd, status, archived,
-      isSubagent, isAutomation, updatedAtMs, createdAtMs, tokensUsed, todayTokenUsage, model,
+      isSubagent, isAutomation, updatedAtMs, createdAtMs, tokensUsed, todayTokenUsage,
+      tokenBreakdownJson, todayTokenBreakdownJson, model,
       appDeepLink, resumeCommand, defaultOpenMode, inCodexSidebar, rolloutPath, artifactsJson,
       firstUserMessage, latestUserMessage, latestMeaningfulUserMessage, lastAgentMessage,
       relationText, searchText
@@ -254,6 +282,8 @@ function threadValuesSql(thread = {}) {
       ${sqlNumber(thread.createdAtMs)},
       ${sqlNumber(thread.tokensUsed)},
       ${sqlNumber(thread.todayTokenUsage)},
+      ${sqlString(tokenBreakdownJson(thread.tokenBreakdown, thread.tokensUsed))},
+      ${sqlString(tokenBreakdownJson(thread.todayTokenBreakdown, thread.todayTokenUsage))},
       ${sqlString(thread.model || '')},
       ${sqlString(thread.appDeepLink || '')},
       ${sqlString(thread.resumeCommand || '')},
@@ -381,6 +411,8 @@ function normalizeRow(row = {}) {
     createdAtMs: coerceNumber(row.createdAtMs),
     tokensUsed: coerceNumber(row.tokensUsed),
     todayTokenUsage: coerceNumber(row.todayTokenUsage),
+    tokenBreakdown: parseTokenBreakdown(row.tokenBreakdownJson || '', row.tokensUsed),
+    todayTokenBreakdown: parseTokenBreakdown(row.todayTokenBreakdownJson || '', row.todayTokenUsage),
     model: row.model || '',
     appDeepLink: row.appDeepLink || '',
     resumeCommand: row.resumeCommand || '',
@@ -456,6 +488,8 @@ export function createSearchIndex({
     await ensureThreadColumn(databasePath, 'isSubagent', 'isSubagent INTEGER NOT NULL DEFAULT 0', runCommand);
     await ensureThreadColumn(databasePath, 'isAutomation', 'isAutomation INTEGER NOT NULL DEFAULT 0', runCommand);
     await ensureThreadColumn(databasePath, 'artifactsJson', "artifactsJson TEXT NOT NULL DEFAULT ''", runCommand);
+    await ensureThreadColumn(databasePath, 'tokenBreakdownJson', "tokenBreakdownJson TEXT NOT NULL DEFAULT ''", runCommand);
+    await ensureThreadColumn(databasePath, 'todayTokenBreakdownJson', "todayTokenBreakdownJson TEXT NOT NULL DEFAULT ''", runCommand);
     initialized = true;
   };
 
@@ -477,6 +511,8 @@ export function createSearchIndex({
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
       INSERT INTO meta(key, value) VALUES('threadCount', ${sqlString(threads.length)})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+      INSERT INTO meta(key, value) VALUES('indexVersion', ${sqlString(SEARCH_INDEX_VERSION)})
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
       COMMIT;
     `, { runCommand });
 
@@ -492,11 +528,15 @@ export function createSearchIndex({
       await init();
       const rows = await querySql(databasePath, 'SELECT key, value FROM meta;', { runCommand });
       const meta = new Map(rows.map((row) => [row.key, row.value]));
+      const indexVersion = coerceNumber(meta.get('indexVersion'));
       return {
         available: true,
         databasePath,
         indexedAtMs: coerceNumber(meta.get('indexedAtMs')),
         threadCount: coerceNumber(meta.get('threadCount')),
+        indexVersion,
+        currentIndexVersion: SEARCH_INDEX_VERSION,
+        needsRebuild: indexVersion !== SEARCH_INDEX_VERSION,
       };
     } catch (error) {
       return {
@@ -504,6 +544,9 @@ export function createSearchIndex({
         databasePath,
         indexedAtMs: 0,
         threadCount: 0,
+        indexVersion: 0,
+        currentIndexVersion: SEARCH_INDEX_VERSION,
+        needsRebuild: true,
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -570,6 +613,8 @@ export function createSearchIndex({
         archivedThreadCount: 0,
         tokensUsed: 0,
         todayTokensUsed: 0,
+        tokenBreakdown: addTokenBreakdowns(),
+        todayTokenBreakdown: addTokenBreakdowns(),
         latestUpdatedAtMs: 0,
         providerSet: new Set(),
       };
@@ -578,6 +623,8 @@ export function createSearchIndex({
       else existing.activeThreadCount += 1;
       existing.tokensUsed += row.tokensUsed;
       existing.todayTokensUsed += row.todayTokenUsage;
+      existing.tokenBreakdown = addTokenBreakdowns(existing.tokenBreakdown, row.tokenBreakdown);
+      existing.todayTokenBreakdown = addTokenBreakdowns(existing.todayTokenBreakdown, row.todayTokenBreakdown);
       existing.latestUpdatedAtMs = Math.max(existing.latestUpdatedAtMs, row.updatedAtMs);
       if (row.providerLabel || row.provider) existing.providerSet.add(row.providerLabel || row.provider);
       groups.set(key, existing);
