@@ -6,9 +6,9 @@
 
 ## 功能截图
 
-### 线程列表与素材摘要
+### Prompt 打包与工作台总览
 
-![线程列表与素材摘要](docs/assets/agent-mission-control-real-ui.png)
+![Prompt 打包与工作台总览](docs/assets/agent-mission-control-real-ui.png)
 
 ### 全历史搜索
 

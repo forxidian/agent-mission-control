@@ -15,6 +15,58 @@ const host = '127.0.0.1';
 const port = process.env.PORT || '46291';
 const debugPort = process.env.CHROME_DEBUG_PORT || String(Number(port) + 1);
 const serverUrl = `http://${host}:${port}`;
+const promptPackStorageKey = 'agent-mission-control:prompt-pack';
+const promptPackScreenshotFixture = {
+  id: 'pack-readme-demo-20260624',
+  createdAtMs: Date.UTC(2026, 5, 24, 6, 0, 0),
+  segments: [
+    {
+      id: 'segment-a-readme',
+      code: 'A',
+      title: 'README 首屏更新',
+      body: '把首页截图改成能直接看懂 Prompt 打包器的价值：展示多段修改要求、附件引用和复制 Markdown 包入口。',
+      attachments: [
+        {
+          id: 'A1',
+          kind: 'image',
+          fileName: 'A1-current-dashboard.png',
+          originalName: 'current-dashboard.png',
+          path: '/Users/example/workspaces/agent-mission-control/mock/current-dashboard.png',
+          contentType: 'image/png',
+          size: 482_000,
+          status: 'saved',
+          error: '',
+        },
+      ],
+    },
+    {
+      id: 'segment-b-release',
+      code: 'B',
+      title: 'Release notes 双语补充',
+      body: '补一段中英文 update log，说明 0.4.5 新增 token 明细、Prompt 打包、多线程操作菜单和置顶 badge。',
+      attachments: [
+        {
+          id: 'B1',
+          kind: 'file',
+          fileName: 'B1-changelog-draft.md',
+          originalName: 'changelog-draft.md',
+          path: '/Users/example/workspaces/agent-mission-control/mock/changelog-draft.md',
+          contentType: 'text/markdown',
+          size: 18_400,
+          status: 'saved',
+          error: '',
+        },
+      ],
+    },
+    {
+      id: 'segment-c-polish',
+      code: 'C',
+      title: '视觉验收重点',
+      body: '检查移动端和桌面端是否都能清楚看到段落编号、标题、正文和附件状态；如果空间不够，优先保留段落内容而不是空白说明。',
+      attachments: [],
+    },
+  ],
+};
 
 async function waitForServer(url, isServerAlive, timeoutMs = 10_000) {
   const startedAt = Date.now();
@@ -121,6 +173,17 @@ async function capture(client, outputFile) {
   console.log(`Wrote ${outputFile}`);
 }
 
+async function seedPromptPackFixture(client) {
+  await client.send('Runtime.evaluate', {
+    expression: `
+      localStorage.setItem(
+        ${JSON.stringify(promptPackStorageKey)},
+        ${JSON.stringify(JSON.stringify(promptPackScreenshotFixture))}
+      );
+    `,
+  });
+}
+
 async function captureScreenshots(chromeProfileDir) {
   const debugUrl = `http://${host}:${debugPort}`;
   const chrome = spawn(chromePath, [
@@ -157,7 +220,10 @@ async function captureScreenshots(chromeProfileDir) {
     });
 
     await navigate(client, serverUrl);
+    await seedPromptPackFixture(client);
+    await navigate(client, serverUrl);
     await waitForExpression(client, 'document.querySelectorAll(".thread-row").length >= 2 && document.querySelector(".thread-artifact-module")');
+    await waitForExpression(client, 'document.querySelectorAll(".prompt-pack-segment").length >= 3 && document.querySelectorAll(".prompt-pack-attachment").length >= 2');
     await capture(client, outputPath);
 
     await navigate(client, `${serverUrl}/#search`);

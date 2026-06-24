@@ -198,7 +198,7 @@ test('documents the 0.4 mock screenshot set for thread list, search, and artifac
   ]);
 
   for (const expected of [
-    '线程列表与素材摘要',
+    'Prompt 打包与工作台总览',
     '全历史搜索',
     '线程素材时间线',
     'docs/assets/agent-mission-control-real-ui.png',
@@ -211,6 +211,12 @@ test('documents the 0.4 mock screenshot set for thread list, search, and artifac
   assert.match(readme, /不包含本机线程、路径、消息、token、素材文件或 quota 细节/);
   assert.match(screenshotScript, /searchOutputPath/);
   assert.match(screenshotScript, /artifactsOutputPath/);
+  assert.match(screenshotScript, /promptPackScreenshotFixture/);
+  assert.match(screenshotScript, /README 首屏更新/);
+  assert.match(screenshotScript, /Release notes 双语补充/);
+  assert.match(screenshotScript, /视觉验收重点/);
+  assert.match(screenshotScript, /prompt-pack-segment"\)\.length >= 3/);
+  assert.match(screenshotScript, /prompt-pack-attachment"\)\.length >= 2/);
   assert.match(screenshotScript, /#search/);
   assert.match(screenshotScript, /artifact-timeline-modal/);
 });
