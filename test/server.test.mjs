@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer, hideInstalledPwaApp, openThreadInCodexCli, openThreadInProvider } from '../src/server.mjs';
@@ -685,6 +685,162 @@ test('opens indexed history threads when they are not in the dashboard snapshot'
     assert.equal(body.resumeCommand, indexedThread.resumeCommand);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('reveals a known thread location in the file manager', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'amc-thread-reveal-'));
+  const resolvedDir = await realpath(dir);
+  const revealed = [];
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [{
+        id: 'thread-with-cwd',
+        provider: 'codex',
+        title: 'Show location',
+        cwd: resolvedDir,
+      }],
+      projects: [],
+      inbox: [],
+    }),
+    revealThread: async (selectedThread, targetPath) => {
+      revealed.push({ selectedThread, targetPath });
+      return { revealed: true, method: 'test-reveal' };
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/threads/thread-with-cwd/reveal`, {
+      method: 'POST',
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(revealed.length, 1);
+    assert.equal(revealed[0].selectedThread.id, 'thread-with-cwd');
+    assert.equal(revealed[0].targetPath, resolvedDir);
+    assert.deepEqual(body, {
+      revealed: true,
+      method: 'test-reveal',
+      threadId: 'thread-with-cwd',
+      path: resolvedDir,
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('returns not found when revealing an unknown thread', async () => {
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [],
+      projects: [],
+      inbox: [],
+    }),
+    revealThread: async () => {
+      throw new Error('should not reveal unknown threads');
+    },
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(`http://${address.address}:${address.port}/api/threads/missing/reveal`, {
+      method: 'POST',
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.equal(body.error, 'Thread not found');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('saves prompt pack attachments in the local AMC prompt-pack directory', async () => {
+  const promptPackRoot = await mkdtemp(path.join(os.tmpdir(), 'amc-prompt-packs-'));
+  const server = createServer({
+    promptPackRoot,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [],
+      projects: [],
+      inbox: [],
+    }),
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(
+      `http://${address.address}:${address.port}/api/prompt-packs/pack-20260623-153012/attachments`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'image/png',
+          'x-amc-segment-id': 'A',
+          'x-amc-attachment-id': 'A1',
+          'x-amc-filename': encodeURIComponent('Home Screen?.png'),
+        },
+        body: Buffer.from('fake image bytes'),
+      },
+    );
+    const body = await response.json();
+
+    const expectedPath = path.join(
+      promptPackRoot,
+      'pack-20260623-153012',
+      'attachments',
+      'A1-home-screen.png',
+    );
+    assert.equal(response.status, 200);
+    assert.equal(body.packId, 'pack-20260623-153012');
+    assert.equal(body.segmentId, 'A');
+    assert.equal(body.attachmentId, 'A1');
+    assert.equal(body.path, expectedPath);
+    assert.equal(body.fileName, 'A1-home-screen.png');
+    assert.equal(body.contentType, 'image/png');
+    assert.equal(body.size, 'fake image bytes'.length);
+    assert.equal(await readFile(expectedPath, 'utf8'), 'fake image bytes');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(promptPackRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects invalid prompt pack ids before writing attachments', async () => {
+  const promptPackRoot = await mkdtemp(path.join(os.tmpdir(), 'amc-prompt-packs-invalid-'));
+  const server = createServer({
+    promptPackRoot,
+    loadDashboard: async () => ({
+      summary: {},
+      threads: [],
+      projects: [],
+      inbox: [],
+    }),
+  });
+
+  const address = await listen(server);
+  try {
+    const response = await fetch(
+      `http://${address.address}:${address.port}/api/prompt-packs/..%2Fbad/attachments`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'text/plain',
+          'x-amc-filename': encodeURIComponent('../secret.txt'),
+        },
+        body: 'nope',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'Prompt pack id is invalid');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(promptPackRoot, { recursive: true, force: true });
   }
 });
 

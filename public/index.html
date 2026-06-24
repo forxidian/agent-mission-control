@@ -41,6 +41,11 @@
         </div>
         <div class="topbar-actions">
           <div id="topbar-metrics" class="topbar-metrics" aria-label="关键指标"></div>
+          <button id="open-search-page" class="search-launcher topbar-search-launcher" type="button" aria-label="打开历史线程搜索">
+            <span class="search-launcher-label">搜索历史</span>
+            <span class="search-launcher-placeholder">搜索线程、项目、路径、最近信号</span>
+            <span class="search-launcher-action">打开搜索</span>
+          </button>
           <p id="last-updated" class="timestamp" aria-live="polite">等待数据</p>
           <p id="monitor-status" class="timestamp" aria-live="polite" tabindex="0">
             <span class="monitor-status-label">监控未启动</span>
@@ -81,6 +86,29 @@
       </header>
 
       <section id="status-banner" class="status-banner" hidden></section>
+
+      <section class="prompt-pack-stage dashboard-view" aria-labelledby="prompt-pack-heading">
+        <section id="prompt-pack-panel" class="prompt-pack-panel" aria-labelledby="prompt-pack-heading">
+          <div class="prompt-pack-top">
+            <div class="panel-heading prompt-pack-heading">
+              <div>
+                <p class="eyebrow">编排</p>
+                <h2 id="prompt-pack-heading">Prompt 打包</h2>
+              </div>
+              <div class="panel-heading-actions prompt-pack-actions">
+                <p id="prompt-pack-count" class="panel-note">1 段</p>
+                <button id="prompt-pack-add-segment" class="prompt-pack-toolbar-add" type="button" aria-label="在末尾新增段落" title="在末尾新增段落">
+                  <span aria-hidden="true" class="prompt-pack-toolbar-add-icon">+</span>
+                  <span>新增段落</span>
+                </button>
+                <button id="prompt-pack-copy" class="action-button primary" type="button">复制 Markdown 包</button>
+                <button id="prompt-pack-clear" class="action-button secondary" type="button">清空</button>
+              </div>
+            </div>
+          </div>
+          <div id="prompt-pack-segments" class="prompt-pack-segments" aria-live="polite"></div>
+        </section>
+      </section>
 
       <section class="panel priority-inbox-panel dashboard-view" aria-labelledby="inbox-heading">
         <div class="panel-heading">
@@ -228,11 +256,6 @@
               <p id="thread-count" class="panel-note">0 项</p>
             </div>
           </div>
-          <button id="open-search-page" class="search-launcher" type="button" aria-label="打开历史线程搜索">
-            <span class="search-launcher-label">搜索历史</span>
-            <span class="search-launcher-placeholder">搜索线程、项目、路径、最近信号</span>
-            <span class="search-launcher-action">打开搜索</span>
-          </button>
           <div id="threads" class="thread-list" aria-live="polite"></div>
         </section>
 

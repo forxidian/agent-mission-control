@@ -7,8 +7,10 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import {
   applySessionIndexTitles,
+  applyCodexPinnedThreadIds,
   deriveCodexThreadTitle,
   loadCodexDashboard,
+  parseCodexPinnedThreadIds,
   parseRolloutArtifacts,
   parseSessionIndex,
   parseRolloutSignals,
@@ -688,6 +690,23 @@ test('marks threads missing from the Codex sidebar index', () => {
   assert.equal(rows[0].in_codex_sidebar, true);
   assert.equal(rows[1].thread_name, undefined);
   assert.equal(rows[1].in_codex_sidebar, false);
+});
+
+test('reads Codex native pinned thread ids from global state', () => {
+  assert.deepEqual(parseCodexPinnedThreadIds({
+    'pinned-thread-ids': ['thread-a', '', 12, 'thread-b', 'thread-a'],
+  }), ['thread-a', 'thread-b']);
+  assert.deepEqual(parseCodexPinnedThreadIds({}), []);
+});
+
+test('marks rows with Codex native pinned state', () => {
+  const rows = applyCodexPinnedThreadIds([
+    { id: 'thread-a', title: 'A' },
+    { id: 'thread-b', title: 'B' },
+  ], ['thread-b']);
+
+  assert.equal(rows[0].pinned, false);
+  assert.equal(rows[1].pinned, true);
 });
 
 test('keeps a thread in progress when commentary follows the latest user message', () => {

@@ -22,9 +22,12 @@
 
 ## 最近更新
 
+- 新增 token 用量拆分：在线程、项目、搜索详情和总览中展示新输入、缓存复用 / 写入、输出、推理和未细分占比。
+- 新增 Prompt 打包器：可在 AMC 内分段整理给 Agent 的修改要求，粘贴图片或选择文件后保存为本地附件路径，并复制成 Markdown 包。
 - 新增全历史搜索：本地 SQLite FTS 索引支持按标题、项目、路径、最近输入、Agent 输出和 artifact 信息检索历史线程。
 - 新增 Codex artifact 视图：可从 rollout 中识别本地文件、图片、HTML、Markdown 和 URL，并在搜索结果或线程详情中预览 / 打开。
-- 更新 README 脱敏截图组，分别呈现 0.4 的线程列表、全历史搜索和线程素材时间线体验。
+- 最近线程和搜索结果新增弱化的更多操作菜单，可在 Finder / 文件管理器中显示、复制 deep link，主操作仍是打开；Codex 原生置顶状态会显示为 badge。
+- 更新 README 脱敏截图组，分别呈现 0.4.5 的线程列表、全历史搜索和线程素材时间线体验。
 - Codex 默认读取窗口提升到 5000，并补充读取近期未进入 sqlite 的 rollout-only 会话，隐藏历史线程可用 `codex resume` 恢复。
 - 已安装 PWA 的窗口操作从“最小化”改为“隐藏”，避免在 Dock 右侧留下缩略图。
 - 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。
@@ -39,9 +42,12 @@
 - 汇总 OpenCode CLI / Desktop 会话，并识别待授权工具调用和 todo。
 - 汇总 Claude Code CLI、Claude Desktop Code、Claude Cowork 会话。
 - 按 GPT、Claude 等模型家族展示实时和本周 quota 可用量。
+- 支持 token 用量拆分，将输入、缓存复用 / 写入、输出、推理和未细分 token 汇总到总览、项目、线程和搜索视图。
 - 支持按来源、状态、项目和关键词筛选。
 - 支持全历史搜索和项目历史视图，搜索索引写在本机 `~/.agent-mission-control/search-index.sqlite`。
+- 支持 Prompt 打包：将多段文字、粘贴图片和文件附件整理成带编号的 Markdown 请求包，附件副本保存在本机 `~/.agent-mission-control/prompt-packs`。
 - 支持打开 Codex / OpenCode / Claude Desktop Code deep link，或在 macOS Terminal 恢复 CLI 会话。
+- 支持在线程列表和搜索结果中通过更多菜单显示线程本地目录 / rollout 文件、复制 deep link，并显示 Codex 原生置顶 badge。
 - 支持查看 Codex 线程里提到的本地文件、图片、HTML、Markdown 和 URL artifact，并按需预览图片或打开本地文件。
 - 支持从线程详情发起 Agent 评审：选择输入范围、目标 Agent、评审模板或自定义审查要求，并查看评审历史、复制结果或修复 Prompt。
 - 支持安装为本地 PWA 应用窗口；service worker 只缓存静态前端壳，不缓存 `/api/*` 本机 Agent 元数据。
@@ -110,6 +116,7 @@ Claude：
 - `~/.agent-mission-control/notifications.json`
 - `~/.agent-mission-control/reviews.jsonl`
 - `~/.agent-mission-control/search-index.sqlite`
+- `~/.agent-mission-control/prompt-packs/**`
 
 Agent 评审：
 

@@ -15,6 +15,8 @@ const DEFAULT_CODEX_DIR = path.join(os.homedir(), '.codex');
 const DEFAULT_STATE_DB = path.join(DEFAULT_CODEX_DIR, 'state_5.sqlite');
 const DEFAULT_SESSION_INDEX = path.join(DEFAULT_CODEX_DIR, 'session_index.jsonl');
 const DEFAULT_SESSIONS_DIR = path.join(DEFAULT_CODEX_DIR, 'sessions');
+const DEFAULT_GLOBAL_STATE = path.join(DEFAULT_CODEX_DIR, '.codex-global-state.json');
+const CODEX_PINNED_THREAD_IDS_KEY = 'pinned-thread-ids';
 const DEFAULT_THREAD_LIMIT = 5000;
 const DEFAULT_ORPHAN_ROLLOUT_LIMIT = 160;
 const DEFAULT_INITIAL_ROLLOUT_BYTES = 512 * 1024;
@@ -118,6 +120,45 @@ export function applySessionIndexTitles(rows, titleByThreadId) {
     ...row,
     thread_name: titleByThreadId.get(String(row.id || '')) || row.thread_name,
     in_codex_sidebar: titleByThreadId.has(String(row.id || '')),
+  }));
+}
+
+export function parseCodexPinnedThreadIds(globalState = {}) {
+  const rawIds = Array.isArray(globalState?.[CODEX_PINNED_THREAD_IDS_KEY])
+    ? globalState[CODEX_PINNED_THREAD_IDS_KEY]
+    : [];
+  const seen = new Set();
+  const threadIds = [];
+
+  for (const rawId of rawIds) {
+    if (typeof rawId !== 'string') continue;
+    const threadId = rawId.trim();
+    if (!threadId || seen.has(threadId)) continue;
+    seen.add(threadId);
+    threadIds.push(threadId);
+  }
+
+  return threadIds;
+}
+
+async function readCodexGlobalState(globalStatePath = DEFAULT_GLOBAL_STATE) {
+  try {
+    return JSON.parse(await fs.readFile(globalStatePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
+export async function readCodexPinnedThreadIds(globalStatePath = DEFAULT_GLOBAL_STATE) {
+  return parseCodexPinnedThreadIds(await readCodexGlobalState(globalStatePath));
+}
+
+export function applyCodexPinnedThreadIds(rows, pinnedThreadIds = []) {
+  const pinned = new Set(pinnedThreadIds.map(String));
+  return rows.map((row) => ({
+    ...row,
+    pinned: pinned.has(String(row.id || '')),
   }));
 }
 
@@ -1186,9 +1227,11 @@ export async function loadCodexDashboard(options = {}) {
     limit: options.maxOrphanRollouts ?? DEFAULT_ORPHAN_ROLLOUT_LIMIT,
   });
   const sessionIndex = await readSessionIndex(options.sessionIndexPath || DEFAULT_SESSION_INDEX);
+  const pinnedThreadIds = await readCodexPinnedThreadIds(options.globalStatePath || DEFAULT_GLOBAL_STATE);
   const indexedRows = applySessionIndexTitles([...rows, ...rolloutOnlyRows]
     .sort((a, b) => threadRowUpdatedAtMs(b) - threadRowUpdatedAtMs(a)), sessionIndex);
-  const threads = enrichThreads(indexedRows, nowMs);
+  const pinnedRows = applyCodexPinnedThreadIds(indexedRows, pinnedThreadIds);
+  const threads = enrichThreads(pinnedRows, nowMs);
   const enrichedThreads = await attachRolloutSignals(threads, {
     ...options,
     todayStartMs: options.todayStartMs || todayStart.getTime(),

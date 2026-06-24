@@ -3,6 +3,33 @@ import { buildDashboard } from '../src/insights.mjs';
 const minute = 60 * 1000;
 const hour = 60 * minute;
 
+function syntheticTokenBreakdown(total = 0, profile = {}) {
+  const value = Math.max(0, Math.round(Number(total || 0)));
+  const ratios = {
+    input: profile.input ?? 0.24,
+    cacheRead: profile.cacheRead ?? 0.42,
+    cacheWrite: profile.cacheWrite ?? 0.06,
+    output: profile.output ?? 0.2,
+    reasoning: profile.reasoning ?? 0.06,
+  };
+  const breakdown = {
+    total: value,
+    input: Math.round(value * ratios.input),
+    cacheRead: Math.round(value * ratios.cacheRead),
+    cacheWrite: Math.round(value * ratios.cacheWrite),
+    output: Math.round(value * ratios.output),
+    reasoning: Math.round(value * ratios.reasoning),
+    uncategorized: 0,
+  };
+  const knownTotal = breakdown.input
+    + breakdown.cacheRead
+    + breakdown.cacheWrite
+    + breakdown.output
+    + breakdown.reasoning;
+  breakdown.uncategorized = Math.max(0, value - knownTotal);
+  return breakdown;
+}
+
 function thread({
   id,
   provider = 'codex',
@@ -14,6 +41,8 @@ function thread({
   updatedAgoMs,
   tokensUsed,
   todayTokenUsage,
+  tokenBreakdown = null,
+  todayTokenBreakdown = null,
   status = '',
   appDeepLink = '',
   resumeCommand = '',
@@ -46,6 +75,14 @@ function thread({
     source: provider,
     tokensUsed,
     todayTokenUsage,
+    tokenBreakdown: tokenBreakdown || syntheticTokenBreakdown(tokensUsed),
+    todayTokenBreakdown: todayTokenBreakdown || syntheticTokenBreakdown(todayTokenUsage, {
+      input: 0.28,
+      cacheRead: 0.36,
+      cacheWrite: 0.07,
+      output: 0.21,
+      reasoning: 0.06,
+    }),
     archived,
     createdAtMs: nowMs - 5 * 24 * hour,
     updatedAtMs,
@@ -106,7 +143,7 @@ export function createMockThreads(nowMs = Date.now()) {
   return [
     thread({
       id: 'mock-codex-release-notes',
-      title: '整理 v0.4.0 release notes 和搜索发布说明',
+      title: '整理 v0.4.5 release notes、截图和发布说明',
       projectName: 'agent-mission-control',
       cwd: '/Users/example/workspaces/agent-mission-control',
       model: 'gpt-5.2',

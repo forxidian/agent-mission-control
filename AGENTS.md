@@ -24,6 +24,7 @@ The release target is a GitHub-friendly open-source version. Be conservative abo
 - Keep the app dependency-light unless the user explicitly approves adding a package.
 - Run `npm test` after behavior changes.
 - If a local dev server is needed, default to `npm start` and `http://127.0.0.1:4629`.
+- After completing user-visible features, behavior changes, data source/API changes, notification semantics, or release work, check whether `SYSTEM_OVERVIEW.md`, `README.md`, and `CHANGELOG.md` need to be updated so future threads inherit the current project memory.
 - Preserve user edits in the working tree; this repo is often dirty during iteration.
 
 ## Current Notification Stance

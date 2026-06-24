@@ -18,6 +18,8 @@ What it reads:
 - Its own review job state under `~/.agent-mission-control/reviews.jsonl`
 - Its own local search index under
   `~/.agent-mission-control/search-index.sqlite`
+- Prompt Pack drafts in browser `localStorage`, plus attachment copies that you
+  explicitly paste or select under `~/.agent-mission-control/prompt-packs`
 
 What it may display locally:
 
@@ -30,6 +32,8 @@ What it may display locally:
 - Review job status, source/target Agent metadata, selected input preview,
   stderr snippets, and truncated review results stored locally in
   `~/.agent-mission-control/reviews.jsonl`
+- Prompt Pack segment titles, segment text, attachment names, and local
+  attachment paths while you prepare a Markdown handoff package
 - The optional macOS menu bar helper shows only aggregate pending/progress
   counts and does not display thread titles or message text
 
@@ -68,12 +72,27 @@ Review workflow:
   beyond P1 and should require an explicit confirmation before sending that
   larger content to a target CLI Agent.
 
+Prompt Pack workflow:
+
+- Prompt Pack is a local drafting tool. It does not send content to Codex,
+  Claude, OpenCode, or any external service by itself.
+- Images pasted from the clipboard and files selected in the browser are copied
+  into `~/.agent-mission-control/prompt-packs/<pack-id>/attachments/`.
+- The copied Markdown package references those attachments by local absolute
+  path. The receiving Agent only sees the attachment content if you paste the
+  package into that Agent and the Agent can read the referenced local files.
+- Clearing the browser draft removes the visible pack metadata from
+  `localStorage`; it does not automatically delete attachment files already
+  copied under `~/.agent-mission-control/prompt-packs`.
+
 What it avoids:
 
 - Writing to Codex, OpenCode, or Claude state
 - Publishing data externally
 - Caching dashboard API payloads in the PWA service worker
 - Caching local image previews or search API payloads in the PWA service worker
+- Embedding Prompt Pack attachment bytes or base64 file contents into copied
+  Markdown prompts
 - Sending desktop/system notifications in the public release
 
 Keep `HOST` at the default `127.0.0.1` unless you fully understand the privacy

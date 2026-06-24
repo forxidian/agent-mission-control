@@ -2,6 +2,44 @@
 
 All notable changes to Agent Mission Control are documented here.
 
+## [0.4.5] - 2026-06-24
+
+### English
+
+#### Added
+
+- Added token usage breakdowns for dashboard summaries, project rows, thread rows, and search details, separating fresh input, cache reads, cache writes, output, reasoning, and uncategorized tokens.
+- Added a local Prompt Pack composer that lets users organize segmented instructions, paste or select attachments, save them under `~/.agent-mission-control/prompt-packs`, and copy a Markdown handoff package for another Agent.
+- Added `POST /api/prompt-packs/:id/attachments` for same-origin local attachment persistence with safe pack ids, sanitized filenames, and size limits.
+- Added a lower-emphasis grouped row action menu for recent threads and search results, with reveal-in-file-manager and deep-link copy actions while keeping open as the primary action.
+- Added Codex native pinned-state badges from `pinned-thread-ids`; the unavailable direct pin/unpin menu action is not shown.
+- Added `POST /api/threads/:id/reveal` to reveal known thread working directories or rollout files through the system file manager.
+
+#### Changed
+
+- Normalized token breakdown data from Codex, Claude, and OpenCode usage payloads, then carried the aggregates through project, search, and dashboard API responses.
+- Refined the Prompt Pack composer so it starts collapsed until a segment is added, with lightweight between-segment insert controls and drag sorting while keeping arrow controls as a keyboard-friendly fallback.
+- Moved the history search launcher beside, but outside of, the Prompt Pack shell, then reshaped the Prompt Pack composer as a notched module so the header and full-width segment area read as one unit without the search block being wrapped into it.
+- Refreshed the README mock screenshot set with synthetic data for the 0.4.5 dashboard, history search, and artifact timeline UI.
+
+### 中文
+
+#### 新增
+
+- 新增 token 用量拆分，在汇总、项目、线程和搜索详情中区分新输入、缓存复用、缓存写入、输出、推理和未细分 token。
+- 新增本地 Prompt 打包器，可分段整理修改要求、粘贴或选择附件，将附件保存到 `~/.agent-mission-control/prompt-packs`，并一键复制给其他 Agent 的 Markdown 交接包。
+- 新增 `POST /api/prompt-packs/:id/attachments`，用于同源本地附件保存，并限制 pack id、清理文件名和控制大小。
+- 在最近线程和搜索结果右侧新增低权重的合并操作菜单，支持在文件管理器中显示和复制 deep link，同时保留“打开”为主操作。
+- 新增从 `pinned-thread-ids` 读取的 Codex 原生置顶 badge；不可用的直接置顶 / 取消置顶菜单项不再展示。
+- 新增 `POST /api/threads/:id/reveal`，可对已知线程的工作目录或 rollout 文件调用系统文件管理器显示。
+
+#### 调整
+
+- 统一解析 Codex、Claude、OpenCode 的 token 明细，并把聚合结果带入项目、搜索和 dashboard API。
+- 优化 Prompt 打包器交互：默认不展开空段落，点击新增后再出现待填写段落；段落之间新增轻量插入控件，并支持拖拽排序，同时保留上 / 下箭头作为键盘友好的备用操作。
+- 将历史搜索入口放到 Prompt 打包器右侧但保持为独立模块，并把 Prompt 打包器调整为缺口式一体模块：头部和下方通栏段落连成一体，但搜索不被包进 Prompt 外框。
+- 更新 README 脱敏 mock 截图组，用虚构数据呈现 0.4.5 的 dashboard、历史搜索和素材时间线界面。
+
 ## [0.4.0] - 2026-06-18
 
 ### English

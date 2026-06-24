@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { mkdir, open, realpath, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
 import os from 'node:os';
@@ -46,6 +46,8 @@ const DEFAULT_SEARCH_INDEX_PROVIDER_LIMIT = 1000;
 const DEFAULT_SEARCH_INDEX_ROLLOUT_LIMIT = 160;
 const SEARCH_ARTIFACT_SUMMARY_LIMIT = 3;
 const SEARCH_ARTIFACT_HYDRATION_CONCURRENCY = 6;
+const DEFAULT_PROMPT_PACK_ROOT = path.join(os.homedir(), '.agent-mission-control', 'prompt-packs');
+const MAX_PROMPT_PACK_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_LOCAL_PREVIEW_BYTES = 25 * 1024 * 1024;
 const LOCAL_PREVIEW_IMAGE_TYPES = new Map([
   ['.bmp', 'image/bmp'],
@@ -54,6 +56,17 @@ const LOCAL_PREVIEW_IMAGE_TYPES = new Map([
   ['.jpg', 'image/jpeg'],
   ['.png', 'image/png'],
   ['.webp', 'image/webp'],
+]);
+const CONTENT_TYPE_EXTENSIONS = new Map([
+  ['image/png', '.png'],
+  ['image/jpeg', '.jpg'],
+  ['image/gif', '.gif'],
+  ['image/webp', '.webp'],
+  ['application/pdf', '.pdf'],
+  ['text/plain', '.txt'],
+  ['text/markdown', '.md'],
+  ['text/html', '.html'],
+  ['application/json', '.json'],
 ]);
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -98,6 +111,22 @@ async function readJsonBody(request) {
 
   if (!raw.trim()) return {};
   return JSON.parse(raw);
+}
+
+async function readBinaryBody(request, maxBytes = MAX_PROMPT_PACK_ATTACHMENT_BYTES) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      const error = new Error('Prompt pack attachment is too large');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks, total);
 }
 
 function isCrossOriginLocalRequest(request) {
@@ -615,6 +644,145 @@ function normalizeLocalPreviewPath(value = '') {
   return text;
 }
 
+function decodeHeaderValue(value = '') {
+  const text = String(Array.isArray(value) ? value[0] || '' : value || '').trim();
+  if (!text) return '';
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+function promptPackIdFromPath(value = '') {
+  const id = decodeHeaderValue(value);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$/.test(id)) {
+    const error = new Error('Prompt pack id is invalid');
+    error.statusCode = 400;
+    throw error;
+  }
+  return id;
+}
+
+function sanitizeAttachmentToken(value = '', fallback = 'attachment') {
+  const token = String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+  return token || fallback;
+}
+
+function extensionForAttachment(fileName = '', contentType = '') {
+  const cleanName = String(fileName || '').replace(/\\/g, '/').split(/[?#]/)[0];
+  const extension = cleanName.match(/\.([A-Za-z0-9]{1,12})$/)?.[0]?.toLowerCase() || '';
+  if (extension) return extension;
+  return CONTENT_TYPE_EXTENSIONS.get(String(contentType || '').split(';')[0].toLowerCase()) || '';
+}
+
+function sanitizeAttachmentFileName(fileName = '', contentType = '') {
+  const decoded = decodeHeaderValue(fileName) || 'attachment';
+  const cleanPath = decoded.replace(/\\/g, '/').split(/[?#]/)[0];
+  const baseName = path.basename(cleanPath) || 'attachment';
+  const extension = extensionForAttachment(baseName, contentType);
+  const baseWithoutExtension = extension && baseName.toLowerCase().endsWith(extension)
+    ? baseName.slice(0, -extension.length)
+    : baseName;
+  const safeBase = baseWithoutExtension
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}._ -]+/gu, '-')
+    .replace(/[\s._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .toLowerCase()
+    || 'attachment';
+  return `${safeBase}${extension}`;
+}
+
+function storedAttachmentFileName({
+  attachmentId = '',
+  fileName = '',
+  contentType = '',
+} = {}) {
+  const safeAttachmentId = sanitizeAttachmentToken(attachmentId, 'A1');
+  const safeFileName = sanitizeAttachmentFileName(fileName, contentType);
+  return safeFileName.toLowerCase().startsWith(`${safeAttachmentId.toLowerCase()}-`)
+    ? safeFileName
+    : `${safeAttachmentId}-${safeFileName}`;
+}
+
+async function savePromptPackAttachment({
+  promptPackRoot = DEFAULT_PROMPT_PACK_ROOT,
+  packId,
+  segmentId = '',
+  attachmentId = '',
+  fileName = '',
+  contentType = '',
+  content = Buffer.alloc(0),
+} = {}) {
+  const safePackId = promptPackIdFromPath(packId);
+  const root = path.resolve(promptPackRoot);
+  const packDir = path.resolve(root, safePackId);
+  if (packDir !== root && !packDir.startsWith(`${root}${path.sep}`)) {
+    const error = new Error('Prompt pack path is invalid');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const attachmentsDir = path.join(packDir, 'attachments');
+  const safeAttachmentId = sanitizeAttachmentToken(attachmentId, 'A1');
+  const safeSegmentId = sanitizeAttachmentToken(segmentId, '');
+  const storedName = storedAttachmentFileName({
+    attachmentId: safeAttachmentId,
+    fileName,
+    contentType,
+  });
+  const targetPath = path.join(attachmentsDir, storedName);
+
+  await mkdir(attachmentsDir, { recursive: true });
+  await writeFile(targetPath, content);
+
+  return {
+    packId: safePackId,
+    segmentId: safeSegmentId,
+    attachmentId: safeAttachmentId,
+    fileName: storedName,
+    contentType: String(contentType || 'application/octet-stream').split(';')[0],
+    size: content.length,
+    packDir,
+    path: targetPath,
+    relativePath: path.join('attachments', storedName),
+  };
+}
+
+async function servePromptPackAttachment(request, response, packId, {
+  promptPackRoot = DEFAULT_PROMPT_PACK_ROOT,
+} = {}) {
+  if (request.method !== 'POST') {
+    response.writeHead(405, { allow: 'POST' });
+    response.end('Method not allowed');
+    return;
+  }
+  if (rejectCrossOriginLocalRequest(request, response)) return;
+
+  try {
+    const contentType = String(request.headers['content-type'] || 'application/octet-stream');
+    const content = await readBinaryBody(request);
+    const saved = await savePromptPackAttachment({
+      promptPackRoot,
+      packId,
+      segmentId: decodeHeaderValue(request.headers['x-amc-segment-id']),
+      attachmentId: decodeHeaderValue(request.headers['x-amc-attachment-id']),
+      fileName: decodeHeaderValue(request.headers['x-amc-filename']) || 'attachment',
+      contentType,
+      content,
+    });
+    sendJson(response, 200, saved);
+  } catch (error) {
+    sendError(response, error, 'Failed to save prompt pack attachment');
+  }
+}
+
 export async function openLocalFilePath(filePath, {
   platform = process.platform,
   runCommand = execFileAsync,
@@ -633,6 +801,35 @@ export async function openLocalFilePath(filePath, {
 
   await runCommand('xdg-open', [filePath], { timeout: 5000 });
   return { opened: true, method: 'xdg-open' };
+}
+
+export async function revealPathInFileManager(filePath, {
+  platform = process.platform,
+  runCommand = execFileAsync,
+  isDirectory = false,
+} = {}) {
+  if (!filePath) throw new Error('Local path is required');
+
+  if (platform === 'darwin') {
+    await runCommand('open', ['-R', filePath], { timeout: 5000 });
+    return { revealed: true, method: 'macos-finder' };
+  }
+
+  if (platform === 'win32') {
+    await runCommand(
+      'explorer.exe',
+      isDirectory ? [filePath] : [`/select,${filePath}`],
+      { timeout: 5000 },
+    );
+    return { revealed: true, method: 'windows-explorer' };
+  }
+
+  await runCommand('xdg-open', [isDirectory ? filePath : path.dirname(filePath)], { timeout: 5000 });
+  return { revealed: true, method: 'xdg-open' };
+}
+
+export async function revealThreadInFileManager(thread, targetPath, options = {}) {
+  return revealPathInFileManager(targetPath, options);
 }
 
 async function readFileHeader(filePath, length = 16) {
@@ -778,6 +975,32 @@ async function serveLocalFileOpen(request, response, {
   }
 }
 
+async function resolveThreadRevealTarget(thread = {}) {
+  const requestedPath = normalizeLocalPreviewPath(thread.cwd || thread.rolloutPath || '');
+  if (!requestedPath) {
+    const error = new Error('Thread does not have a local path to reveal');
+    error.statusCode = 422;
+    throw error;
+  }
+
+  const filePath = await realpath(requestedPath);
+  const info = await stat(filePath);
+  if (!info.isFile() && !info.isDirectory()) {
+    const error = new Error('Thread local path is not revealable');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return {
+    path: filePath,
+    isDirectory: info.isDirectory(),
+  };
+}
+
+function threadNotFound(response) {
+  sendJson(response, 404, { error: 'Thread not found' });
+}
+
 async function executeReviewJob({
   job,
   prompt,
@@ -842,6 +1065,7 @@ export function createServer({
   now = Date.now,
   openThread = openThreadInProvider,
   openLocalFile = openLocalFilePath,
+  revealThread = revealThreadInFileManager,
   openInstalledApp = openInstalledPwaApp,
   hideInstalledApp = hideInstalledPwaApp,
   minimizeInstalledApp = hideInstalledApp,
@@ -851,6 +1075,7 @@ export function createServer({
   loadReviewTargets = listReviewTargets,
   loadCodexThreadArtifacts = getCodexThreadArtifacts,
   publicDir = DEFAULT_PUBLIC_DIR,
+  promptPackRoot = DEFAULT_PROMPT_PACK_ROOT,
   searchIndex = createSearchIndex(),
   searchIndexMaxAgeMs = positiveInteger(process.env.SEARCH_INDEX_MAX_AGE_MS, DEFAULT_SEARCH_INDEX_MAX_AGE_MS),
   searchIndexThreadLimit = positiveInteger(process.env.SEARCH_INDEX_THREAD_LIMIT, DEFAULT_SEARCH_INDEX_THREAD_LIMIT),
@@ -1021,6 +1246,20 @@ export function createServer({
     return searchIndex.status();
   };
 
+  const findThreadForAction = async (threadId) => {
+    const dashboard = await dashboardForRequest();
+    let thread = dashboard.threads?.find((candidate) => candidate.id === threadId);
+    if (thread) return thread;
+
+    const indexed = await searchIndex.searchThreads({
+      query: threadId,
+      includeArchived: true,
+      limit: 5,
+    }).catch(() => null);
+    thread = indexed?.items?.find((candidate) => candidate.id === threadId) || null;
+    return thread;
+  };
+
   const notificationsForDashboard = async (dashboard, { force = false } = {}) => {
     if (!notificationCenter) return null;
 
@@ -1139,6 +1378,12 @@ export function createServer({
 
     if (url.pathname === '/api/local-file-open') {
       await serveLocalFileOpen(request, response, { openLocalFile });
+      return;
+    }
+
+    const promptPackAttachmentMatch = url.pathname.match(/^\/api\/prompt-packs\/([^/]+)\/attachments$/);
+    if (promptPackAttachmentMatch) {
+      await servePromptPackAttachment(request, response, promptPackAttachmentMatch[1], { promptPackRoot });
       return;
     }
 
@@ -1508,19 +1753,10 @@ export function createServer({
       try {
         const body = await readJsonBody(request);
         const threadId = decodeURIComponent(openThreadMatch[1]);
-        const dashboard = await dashboardForRequest();
-        let thread = dashboard.threads?.find((candidate) => candidate.id === threadId);
-        if (!thread) {
-          const indexed = await searchIndex.searchThreads({
-            query: threadId,
-            includeArchived: true,
-            limit: 5,
-          }).catch(() => null);
-          thread = indexed?.items?.find((candidate) => candidate.id === threadId) || null;
-        }
+        const thread = await findThreadForAction(threadId);
 
         if (!thread) {
-          sendJson(response, 404, { error: 'Thread not found' });
+          threadNotFound(response);
           return;
         }
 
@@ -1542,6 +1778,37 @@ export function createServer({
           error: 'Failed to open thread',
           detail: error instanceof Error ? error.message : String(error),
         });
+      }
+      return;
+    }
+
+    const revealThreadMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/reveal$/);
+    if (revealThreadMatch) {
+      if (request.method !== 'POST') {
+        response.writeHead(405, { allow: 'POST' });
+        response.end('Method not allowed');
+        return;
+      }
+      if (rejectCrossOriginLocalRequest(request, response)) return;
+
+      try {
+        const threadId = decodeURIComponent(revealThreadMatch[1]);
+        const thread = await findThreadForAction(threadId);
+
+        if (!thread) {
+          threadNotFound(response);
+          return;
+        }
+
+        const target = await resolveThreadRevealTarget(thread);
+        const result = await revealThread(thread, target.path, { isDirectory: target.isDirectory });
+        sendJson(response, 200, {
+          ...result,
+          threadId: thread.id,
+          path: target.path,
+        });
+      } catch (error) {
+        sendError(response, error, 'Failed to reveal thread');
       }
       return;
     }

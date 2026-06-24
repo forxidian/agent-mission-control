@@ -54,6 +54,8 @@ const state = {
     isLoading: false,
     pollTimer: null,
   },
+  promptPack: null,
+  promptPackDraggingSegmentId: '',
 };
 
 const elements = {
@@ -84,6 +86,11 @@ const elements = {
   notificationToggle: document.querySelector('#notification-toggle'),
   openSearchPage: document.querySelector('#open-search-page'),
   providerFilter: document.querySelector('#provider-filter'),
+  promptPackAddSegment: document.querySelector('#prompt-pack-add-segment'),
+  promptPackClear: document.querySelector('#prompt-pack-clear'),
+  promptPackCopy: document.querySelector('#prompt-pack-copy'),
+  promptPackCount: document.querySelector('#prompt-pack-count'),
+  promptPackSegments: document.querySelector('#prompt-pack-segments'),
   projectFilter: document.querySelector('#project-filter'),
   refreshInterval: document.querySelector('#refresh-interval'),
   projects: document.querySelector('#projects'),
@@ -118,6 +125,7 @@ const INBOX_PREVIEW_LIMIT = 4;
 const MONITOR_STORAGE_KEY = 'codex-mission-control:monitor';
 const REFRESH_INTERVAL_STORAGE_KEY = 'codex-mission-control:refresh-interval-ms';
 const PWA_INSTALLED_STORAGE_KEY = 'codex-mission-control:pwa-installed';
+const PROMPT_PACK_STORAGE_KEY = 'agent-mission-control:prompt-pack';
 const PWA_OPEN_PROTOCOL_URL = 'web+agentmissioncontrol:open';
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric',
@@ -1174,6 +1182,7 @@ function threadKindBadgesMarkup(thread) {
   const isSubagent = isSubagentThread(thread);
   const subagentCount = Number(thread?.subagentCount || 0);
   const badges = [
+    isThreadPinned(thread) ? '置顶' : '',
     isSubagent ? 'Sub' : '',
     !isSubagent && subagentCount > 0 ? 'Host' : '',
     !isSubagent && subagentCount > 0 ? `${subagentCount} Sub` : '',
@@ -1241,7 +1250,28 @@ function threadSupportMetaItems(thread) {
   ].filter(Boolean);
 }
 
+function isThreadPinned(threadOrId) {
+  const thread = typeof threadOrId === 'string' ? findThread(threadOrId) : threadOrId;
+  return Boolean(thread?.pinned);
+}
+
+function canRevealThread(thread) {
+  return Boolean(thread?.cwd || thread?.rolloutPath);
+}
+
+function threadDeepLink(thread) {
+  return String(thread?.appDeepLink || '').trim();
+}
+
+function canCopyThreadDeepLink(thread) {
+  return Boolean(threadDeepLink(thread));
+}
+
 function threadSideMarkup(thread, openDisabled) {
+  const threadId = escapeHtml(thread.id);
+  const revealDisabled = canRevealThread(thread) ? '' : ' disabled';
+  const copyLinkDisabled = canCopyThreadDeepLink(thread) ? '' : ' disabled';
+
   return `
     <aside class="thread-side" aria-label="线程属性">
       <div class="thread-side-metrics">
@@ -1254,6 +1284,15 @@ function threadSideMarkup(thread, openDisabled) {
       </div>
       <div class="row-actions" aria-label="任务操作">
         <button class="action-button primary" type="button" data-open-thread-id="${escapeHtml(thread.id)}"${openDisabled}>${escapeHtml(openLabel(thread))}</button>
+        <details class="thread-more-menu">
+          <summary class="thread-more-trigger" data-thread-action-menu-id="${threadId}" aria-label="更多线程操作" title="更多线程操作">
+            <span aria-hidden="true">...</span>
+          </summary>
+          <div class="thread-action-popover" role="menu" aria-label="更多线程操作">
+            <button class="thread-action-item" type="button" role="menuitem" data-thread-action="reveal" data-thread-action-id="${threadId}"${revealDisabled}>在 Finder 中显示</button>
+            <button class="thread-action-item" type="button" role="menuitem" data-thread-action="copy-link" data-thread-action-id="${threadId}"${copyLinkDisabled}>复制深度链接</button>
+          </div>
+        </details>
       </div>
     </aside>
   `;
@@ -1470,19 +1509,20 @@ function arrangeThreadRows(threads) {
 
   const roots = threads
     .filter((thread) => !childIds.has(thread.id))
-    .sort((a, b) => (
-      Number(b.groupUpdatedAtMs || b.updatedAtMs || 0)
-      - Number(a.groupUpdatedAtMs || a.updatedAtMs || 0)
-    ));
+    .sort(compareThreadsForList);
   const arranged = [];
 
   for (const root of roots) {
     arranged.push(root);
     const children = childrenByParent.get(root.id) || [];
-    arranged.push(...children.sort((a, b) => Number(b.updatedAtMs || 0) - Number(a.updatedAtMs || 0)));
+    arranged.push(...children.sort(compareThreadsForList));
   }
 
   return arranged;
+}
+
+function compareThreadsForList(a, b) {
+  return Number(b?.groupUpdatedAtMs || b?.updatedAtMs || 0) - Number(a?.groupUpdatedAtMs || a?.updatedAtMs || 0);
 }
 
 function openLabel(thread) {
@@ -1565,6 +1605,573 @@ async function copyText(value) {
   textarea.select();
   document.execCommand('copy');
   textarea.remove();
+}
+
+function createPromptPackId() {
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `pack-${stamp}-${suffix}`;
+}
+
+function promptPackSegmentCodeForIndex(index) {
+  let value = Number(index || 0);
+  let code = '';
+  do {
+    code = String.fromCharCode(65 + (value % 26)) + code;
+    value = Math.floor(value / 26) - 1;
+  } while (value >= 0);
+  return code;
+}
+
+function nextPromptPackSegmentCode(segments = []) {
+  const used = new Set(segments.map((segment) => segment.code).filter(Boolean));
+  for (let index = 0; index < 500; index += 1) {
+    const code = promptPackSegmentCodeForIndex(index);
+    if (!used.has(code)) return code;
+  }
+  return `S${segments.length + 1}`;
+}
+
+function createPromptPackSegment(segments = []) {
+  const code = nextPromptPackSegmentCode(segments);
+  return {
+    id: `segment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    code,
+    title: '',
+    body: '',
+    attachments: [],
+  };
+}
+
+function createPromptPack() {
+  return {
+    id: createPromptPackId(),
+    createdAtMs: Date.now(),
+    segments: [],
+  };
+}
+
+function isPromptPackSegmentBlank(segment = {}) {
+  return !String(segment.title || '').trim()
+    && !String(segment.body || '').trim()
+    && !(Array.isArray(segment.attachments) && segment.attachments.length);
+}
+
+function normalizePromptPack(rawPack) {
+  const pack = rawPack && typeof rawPack === 'object' ? rawPack : {};
+  const segments = Array.isArray(pack.segments) ? pack.segments : [];
+  const normalized = {
+    id: typeof pack.id === 'string' && pack.id ? pack.id : createPromptPackId(),
+    createdAtMs: Number(pack.createdAtMs || Date.now()),
+    segments: segments.map((segment, index) => ({
+      id: typeof segment?.id === 'string' && segment.id
+        ? segment.id
+        : `segment-${Date.now()}-${index}`,
+      code: typeof segment?.code === 'string' && segment.code
+        ? segment.code
+        : promptPackSegmentCodeForIndex(index),
+      title: typeof segment?.title === 'string' ? segment.title : '',
+      body: typeof segment?.body === 'string' ? segment.body : '',
+      attachments: Array.isArray(segment?.attachments)
+        ? segment.attachments.map((attachment) => ({
+          id: String(attachment?.id || ''),
+          kind: attachment?.kind === 'image' ? 'image' : 'file',
+          fileName: String(attachment?.fileName || attachment?.originalName || 'attachment'),
+          originalName: String(attachment?.originalName || attachment?.fileName || 'attachment'),
+          path: String(attachment?.path || ''),
+          contentType: String(attachment?.contentType || ''),
+          size: Math.max(0, Number(attachment?.size || 0)),
+          status: attachment?.status === 'saved' ? 'saved' : attachment?.status === 'uploading' ? 'failed' : String(attachment?.status || 'saved'),
+          error: String(attachment?.error || ''),
+        }))
+        : [],
+    })),
+  };
+  if (normalized.segments.length === 1 && isPromptPackSegmentBlank(normalized.segments[0])) {
+    normalized.segments = [];
+  }
+  return normalized;
+}
+
+function loadStoredPromptPack() {
+  try {
+    const raw = localStorage.getItem(PROMPT_PACK_STORAGE_KEY);
+    if (!raw) return createPromptPack();
+    return normalizePromptPack(JSON.parse(raw));
+  } catch {
+    return createPromptPack();
+  }
+}
+
+function ensurePromptPack() {
+  if (!state.promptPack) state.promptPack = loadStoredPromptPack();
+  if (!Array.isArray(state.promptPack.segments)) state.promptPack.segments = [];
+  return state.promptPack;
+}
+
+function persistPromptPack() {
+  if (!state.promptPack) return;
+  localStorage.setItem(PROMPT_PACK_STORAGE_KEY, JSON.stringify(state.promptPack));
+}
+
+function findPromptPackSegment(segmentId) {
+  return ensurePromptPack().segments.find((segment) => segment.id === segmentId) || null;
+}
+
+function promptPackAttachmentKind(fileOrAttachment = {}) {
+  return String(fileOrAttachment.type || fileOrAttachment.contentType || '').startsWith('image/')
+    ? 'image'
+    : 'file';
+}
+
+function promptPackAttachmentSizeLabel(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Number((bytes / 1024).toFixed(1))} KB`;
+  return formatBytes(bytes);
+}
+
+function nextPromptPackAttachmentId(segment) {
+  const number = (segment.attachments || []).length + 1;
+  return `${segment.code || 'A'}${number}`;
+}
+
+function promptPackAttachmentLabel(attachment) {
+  return attachment.kind === 'image' ? '图片' : '文件';
+}
+
+function promptPackAttachmentStatusText(attachment) {
+  if (attachment.status === 'uploading') return '保存中';
+  if (attachment.status === 'failed') return attachment.error ? `保存失败：${attachment.error}` : '保存失败';
+  return attachment.path || '已保存';
+}
+
+function promptPackAttachmentMarkup(segment, attachment) {
+  const statusClass = attachment.status === 'failed' ? ' is-error' : '';
+  return `
+    <li class="prompt-pack-attachment${statusClass}">
+      <div>
+        <strong>${escapeHtml(promptPackAttachmentLabel(attachment))} ${escapeHtml(attachment.id)}</strong>
+        <span>${escapeHtml(attachment.fileName || attachment.originalName || 'attachment')} · ${escapeHtml(promptPackAttachmentSizeLabel(attachment.size))}</span>
+        <code>${escapeHtml(promptPackAttachmentStatusText(attachment))}</code>
+      </div>
+      <button class="text-button" type="button" data-prompt-pack-remove-attachment-id="${escapeHtml(attachment.id)}" data-prompt-pack-remove-attachment-segment-id="${escapeHtml(segment.id)}">移除</button>
+    </li>
+  `;
+}
+
+function promptPackInsertRowMarkup(segment) {
+  const code = segment.code || '这一段';
+  const label = `在 ${code} 后新增段落`;
+  return `
+    <div class="prompt-pack-insert-row" data-prompt-pack-insert-after-id="${escapeHtml(segment.id)}">
+      <button class="prompt-pack-icon-button prompt-pack-insert-button" type="button" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">+</button>
+    </div>
+  `;
+}
+
+function renderPromptPackSegment(segment, index, total) {
+  const code = segment.code || promptPackSegmentCodeForIndex(index);
+  const dragLabel = `拖拽调整段落 ${code} 顺序`;
+  const moveUpLabel = `上移段落 ${code}`;
+  const moveDownLabel = `下移段落 ${code}`;
+  const removeLabel = `删除段落 ${code}`;
+  return `
+    <article class="prompt-pack-segment" data-prompt-pack-segment-id="${escapeHtml(segment.id)}">
+      <div class="prompt-pack-segment-rail" aria-hidden="true">${escapeHtml(code)}</div>
+      <div class="prompt-pack-segment-main">
+        <div class="prompt-pack-segment-bar">
+          <label>
+            <span>标题</span>
+            <input type="text" value="${escapeHtml(segment.title)}" placeholder="段落标题" data-prompt-pack-title-id="${escapeHtml(segment.id)}">
+          </label>
+          <div class="prompt-pack-segment-actions">
+            <button class="prompt-pack-icon-button prompt-pack-drag-handle" type="button" draggable="true" data-prompt-pack-drag-id="${escapeHtml(segment.id)}" aria-label="${escapeHtml(dragLabel)}" title="${escapeHtml(dragLabel)}">↕</button>
+            <button class="prompt-pack-icon-button" type="button" data-prompt-pack-move-id="${escapeHtml(segment.id)}" data-prompt-pack-move-direction="up" aria-label="${escapeHtml(moveUpLabel)}" title="${escapeHtml(moveUpLabel)}"${index === 0 ? ' disabled' : ''}>↑</button>
+            <button class="prompt-pack-icon-button" type="button" data-prompt-pack-move-id="${escapeHtml(segment.id)}" data-prompt-pack-move-direction="down" aria-label="${escapeHtml(moveDownLabel)}" title="${escapeHtml(moveDownLabel)}"${index === total - 1 ? ' disabled' : ''}>↓</button>
+            <button class="prompt-pack-icon-button prompt-pack-remove-button" type="button" data-prompt-pack-remove-segment-id="${escapeHtml(segment.id)}" aria-label="${escapeHtml(removeLabel)}" title="${escapeHtml(removeLabel)}">×</button>
+          </div>
+        </div>
+        <textarea placeholder="这一段要 Agent 修改什么" data-prompt-pack-body-id="${escapeHtml(segment.id)}">${escapeHtml(segment.body)}</textarea>
+        <div class="prompt-pack-dropzone" data-prompt-pack-drop-id="${escapeHtml(segment.id)}">
+          <button class="action-button secondary" type="button" data-prompt-pack-add-file-id="${escapeHtml(segment.id)}">粘贴图片或选择文件</button>
+          <input class="prompt-pack-file-input" type="file" multiple data-prompt-pack-file-input-id="${escapeHtml(segment.id)}" aria-label="选择附件">
+          <span>${escapeHtml((segment.attachments || []).length)} 个附件</span>
+        </div>
+        <ul class="prompt-pack-attachment-list">
+          ${(segment.attachments || []).map((attachment) => promptPackAttachmentMarkup(segment, attachment)).join('')}
+        </ul>
+      </div>
+    </article>
+  `;
+}
+
+function renderPromptPack() {
+  if (!elements.promptPackSegments) return;
+  const pack = ensurePromptPack();
+  const attachmentCount = pack.segments.reduce((count, segment) => count + (segment.attachments || []).length, 0);
+  elements.promptPackSegments.innerHTML = pack.segments
+    .map((segment, index) => {
+      const segmentMarkup = renderPromptPackSegment(segment, index, pack.segments.length);
+      const insertMarkup = index < pack.segments.length - 1 ? promptPackInsertRowMarkup(segment) : '';
+      return `${segmentMarkup}${insertMarkup}`;
+    })
+    .join('');
+  if (elements.promptPackCount) {
+    elements.promptPackCount.textContent = `${pack.segments.length} 段 · ${attachmentCount} 附件`;
+  }
+}
+
+function addPromptPackSegment(afterSegmentId = '') {
+  const pack = ensurePromptPack();
+  const segmentId = typeof afterSegmentId === 'string' ? afterSegmentId : '';
+  const insertIndex = segmentId
+    ? pack.segments.findIndex((segment) => segment.id === segmentId) + 1
+    : pack.segments.length;
+  const safeInsertIndex = insertIndex > 0 ? insertIndex : pack.segments.length;
+  pack.segments.splice(safeInsertIndex, 0, createPromptPackSegment(pack.segments));
+  persistPromptPack();
+  renderPromptPack();
+}
+
+function movePromptPackSegmentToIndex(segmentId, targetIndex) {
+  const pack = ensurePromptPack();
+  const currentIndex = pack.segments.findIndex((segment) => segment.id === segmentId);
+  if (currentIndex < 0) return;
+
+  const numericTargetIndex = Number(targetIndex);
+  if (!Number.isFinite(numericTargetIndex)) return;
+  const boundedTargetIndex = Math.max(0, Math.min(numericTargetIndex, pack.segments.length));
+  const insertIndex = currentIndex < boundedTargetIndex ? boundedTargetIndex - 1 : boundedTargetIndex;
+  if (insertIndex === currentIndex) return;
+
+  const [segment] = pack.segments.splice(currentIndex, 1);
+  pack.segments.splice(insertIndex, 0, segment);
+  persistPromptPack();
+  renderPromptPack();
+}
+
+function movePromptPackSegment(segmentId, direction) {
+  const pack = ensurePromptPack();
+  const index = pack.segments.findIndex((segment) => segment.id === segmentId);
+  if (index < 0) return;
+  const nextIndex = direction === 'up' ? index - 1 : index + 1;
+  if (nextIndex < 0 || nextIndex >= pack.segments.length) return;
+  movePromptPackSegmentToIndex(segmentId, direction === 'up' ? index - 1 : index + 2);
+}
+
+function removePromptPackSegment(segmentId) {
+  const pack = ensurePromptPack();
+  pack.segments = pack.segments.filter((segment) => segment.id !== segmentId);
+  persistPromptPack();
+  renderPromptPack();
+}
+
+function removePromptPackAttachment(segmentId, attachmentId) {
+  const segment = findPromptPackSegment(segmentId);
+  if (!segment) return;
+  segment.attachments = (segment.attachments || []).filter((attachment) => attachment.id !== attachmentId);
+  persistPromptPack();
+  renderPromptPack();
+}
+
+function resetPromptPack() {
+  state.promptPack = createPromptPack();
+  persistPromptPack();
+  renderPromptPack();
+}
+
+function promptPackFilesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+  const files = [];
+  if (dataTransfer.items?.length) {
+    for (const item of dataTransfer.items) {
+      if (item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  if (!files.length && dataTransfer.files?.length) {
+    files.push(...Array.from(dataTransfer.files));
+  }
+  return files;
+}
+
+async function uploadPromptPackAttachment(segmentId, file) {
+  const segment = findPromptPackSegment(segmentId);
+  if (!segment || !file) return null;
+
+  const attachmentId = nextPromptPackAttachmentId(segment);
+  const attachment = {
+    id: attachmentId,
+    kind: promptPackAttachmentKind(file),
+    fileName: file.name || `${attachmentId}`,
+    originalName: file.name || `${attachmentId}`,
+    path: '',
+    contentType: file.type || 'application/octet-stream',
+    size: file.size || 0,
+    status: 'uploading',
+    error: '',
+  };
+  segment.attachments.push(attachment);
+  persistPromptPack();
+  renderPromptPack();
+
+  try {
+    const response = await fetch(`/api/prompt-packs/${encodeURIComponent(state.promptPack.id)}/attachments`, {
+      method: 'POST',
+      headers: {
+        'content-type': attachment.contentType,
+        'x-amc-segment-id': encodeURIComponent(segment.code || ''),
+        'x-amc-attachment-id': encodeURIComponent(attachment.id),
+        'x-amc-filename': encodeURIComponent(attachment.originalName || attachment.fileName),
+      },
+      body: file,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = response.status === 405
+        ? '本地 AMC 服务还是旧版本，请重启 AMC 后再粘贴附件。'
+        : body.error || body.detail || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    Object.assign(attachment, {
+      fileName: body.fileName || attachment.fileName,
+      path: body.path || '',
+      contentType: body.contentType || attachment.contentType,
+      size: Number(body.size || attachment.size || 0),
+      status: 'saved',
+      error: '',
+    });
+    persistPromptPack();
+    renderPromptPack();
+    return attachment;
+  } catch (error) {
+    Object.assign(attachment, {
+      status: 'failed',
+      error: error.message,
+    });
+    persistPromptPack();
+    renderPromptPack();
+    showError(`附件保存失败：${error.message}`);
+    return null;
+  }
+}
+
+function uploadPromptPackFiles(segmentId, files = []) {
+  for (const file of files) {
+    void uploadPromptPackAttachment(segmentId, file);
+  }
+}
+
+function handlePromptPackFileChange(event) {
+  const input = event.target instanceof Element ? event.target.closest('[data-prompt-pack-file-input-id]') : null;
+  if (!input) return;
+  const files = Array.from(input.files || []);
+  if (files.length) uploadPromptPackFiles(input.dataset.promptPackFileInputId, files);
+  input.value = '';
+}
+
+function handlePromptPackPaste(event) {
+  const target = event.target instanceof Element ? event.target.closest('[data-prompt-pack-segment-id]') : null;
+  if (!target) return;
+  const files = promptPackFilesFromDataTransfer(event.clipboardData);
+  if (!files.length) return;
+  event.preventDefault();
+  uploadPromptPackFiles(target.dataset.promptPackSegmentId, files);
+}
+
+function handlePromptPackDrop(event) {
+  const target = event.target instanceof Element ? event.target.closest('[data-prompt-pack-segment-id]') : null;
+  if (!target) return;
+  const files = promptPackFilesFromDataTransfer(event.dataTransfer);
+  if (!files.length) return;
+  event.preventDefault();
+  uploadPromptPackFiles(target.dataset.promptPackSegmentId, files);
+}
+
+function clearPromptPackDragClasses() {
+  document.querySelectorAll('.prompt-pack-segment.is-dragging, .prompt-pack-segment.is-drop-before, .prompt-pack-segment.is-drop-after')
+    .forEach((element) => {
+      element.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after');
+    });
+  document.querySelectorAll('.prompt-pack-insert-row.is-drop-target')
+    .forEach((element) => element.classList.remove('is-drop-target'));
+}
+
+function promptPackDraggedSegmentId(event) {
+  return event.dataTransfer?.getData('text/plain') || state.promptPackDraggingSegmentId || '';
+}
+
+function promptPackDropIndexFromEvent(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return -1;
+
+  const pack = ensurePromptPack();
+  const insertTarget = target.closest('[data-prompt-pack-insert-after-id]');
+  if (insertTarget) {
+    const afterIndex = pack.segments.findIndex((segment) => segment.id === insertTarget.dataset.promptPackInsertAfterId);
+    return afterIndex >= 0 ? afterIndex + 1 : pack.segments.length;
+  }
+
+  const segmentTarget = target.closest('[data-prompt-pack-segment-id]');
+  if (!segmentTarget) return -1;
+  const targetIndex = pack.segments.findIndex((segment) => segment.id === segmentTarget.dataset.promptPackSegmentId);
+  if (targetIndex < 0) return -1;
+  const bounds = segmentTarget.getBoundingClientRect();
+  const dropAfter = event.clientY > bounds.top + bounds.height / 2;
+  return targetIndex + (dropAfter ? 1 : 0);
+}
+
+function markPromptPackDropTarget(event, targetIndex) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+
+  const insertTarget = target.closest('[data-prompt-pack-insert-after-id]');
+  if (insertTarget) {
+    insertTarget.classList.add('is-drop-target');
+    return;
+  }
+
+  const segmentTarget = target.closest('[data-prompt-pack-segment-id]');
+  if (!segmentTarget) return;
+  const pack = ensurePromptPack();
+  const segmentIndex = pack.segments.findIndex((segment) => segment.id === segmentTarget.dataset.promptPackSegmentId);
+  segmentTarget.classList.add(targetIndex > segmentIndex ? 'is-drop-after' : 'is-drop-before');
+}
+
+function handlePromptPackSegmentDragStart(event) {
+  const handle = event.target instanceof Element ? event.target.closest('[data-prompt-pack-drag-id]') : null;
+  if (!handle) return;
+  const segmentId = handle.dataset.promptPackDragId;
+  if (!segmentId || !event.dataTransfer) return;
+
+  state.promptPackDraggingSegmentId = segmentId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', segmentId);
+  handle.closest('[data-prompt-pack-segment-id]')?.classList.add('is-dragging');
+}
+
+function handlePromptPackSegmentDragEnd() {
+  state.promptPackDraggingSegmentId = '';
+  clearPromptPackDragClasses();
+}
+
+function handlePromptPackSegmentDragOver(event) {
+  const draggedSegmentId = promptPackDraggedSegmentId(event);
+  if (!draggedSegmentId) return false;
+
+  const targetIndex = promptPackDropIndexFromEvent(event);
+  if (targetIndex < 0) return false;
+
+  const pack = ensurePromptPack();
+  const currentIndex = pack.segments.findIndex((segment) => segment.id === draggedSegmentId);
+  if (currentIndex < 0) return false;
+
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  clearPromptPackDragClasses();
+  document.querySelector(`[data-prompt-pack-segment-id="${CSS.escape(draggedSegmentId)}"]`)?.classList.add('is-dragging');
+  if (targetIndex !== currentIndex && targetIndex !== currentIndex + 1) {
+    markPromptPackDropTarget(event, targetIndex);
+  }
+  return true;
+}
+
+function handlePromptPackSegmentDrop(event) {
+  const draggedSegmentId = promptPackDraggedSegmentId(event);
+  if (!draggedSegmentId) return false;
+
+  const targetIndex = promptPackDropIndexFromEvent(event);
+  if (targetIndex < 0) return false;
+
+  event.preventDefault();
+  movePromptPackSegmentToIndex(draggedSegmentId, targetIndex);
+  state.promptPackDraggingSegmentId = '';
+  clearPromptPackDragClasses();
+  return true;
+}
+
+function handlePromptPackDocumentDragOver(event) {
+  if (handlePromptPackSegmentDragOver(event)) return;
+
+  const target = event.target instanceof Element ? event.target.closest('[data-prompt-pack-segment-id]') : null;
+  if (target) event.preventDefault();
+}
+
+function handlePromptPackDocumentDrop(event) {
+  if (handlePromptPackSegmentDrop(event)) return;
+  handlePromptPackDrop(event);
+}
+
+function promptPackMarkdown(pack = ensurePromptPack()) {
+  const lines = [
+    '# Agent 修改请求包',
+    '',
+    '请按段落编号处理，每个附件只对应所在段落。',
+    '如果你能读取本机文件，请按附件路径查看图片/文件；如果无法读取，请先告诉我需要我手动重新粘贴哪个附件。',
+    '',
+  ];
+
+  for (const segment of pack.segments) {
+    const title = segment.title.trim() || '未命名段落';
+    lines.push(`## ${segment.code}. ${title}`);
+    lines.push('');
+    const body = segment.body.trim();
+    if (body) {
+      lines.push(body);
+      lines.push('');
+    }
+    lines.push('附件：');
+    if (segment.attachments?.length) {
+      for (const attachment of segment.attachments) {
+        if (attachment.status === 'saved' && attachment.path) {
+          lines.push(`- ${promptPackAttachmentLabel(attachment)} ${attachment.id}：\`${attachment.path}\``);
+        } else {
+          lines.push(`- ${promptPackAttachmentLabel(attachment)} ${attachment.id}：${promptPackAttachmentStatusText(attachment)}（${attachment.fileName || attachment.originalName || 'attachment'}）`);
+        }
+      }
+    } else {
+      lines.push('- 无');
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+async function copyPromptPackMarkdown() {
+  try {
+    await copyText(promptPackMarkdown());
+    showNotice('已复制 Markdown 包。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制 Prompt 包。');
+  }
+}
+
+function updatePromptPackInput(input) {
+  const titleTarget = input.closest('[data-prompt-pack-title-id]');
+  if (titleTarget) {
+    const segment = findPromptPackSegment(titleTarget.dataset.promptPackTitleId);
+    if (segment) {
+      segment.title = titleTarget.value;
+      persistPromptPack();
+    }
+    return true;
+  }
+
+  const bodyTarget = input.closest('[data-prompt-pack-body-id]');
+  if (bodyTarget) {
+    const segment = findPromptPackSegment(bodyTarget.dataset.promptPackBodyId);
+    if (segment) {
+      segment.body = bodyTarget.value;
+      persistPromptPack();
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function statusMarkup(status) {
@@ -1692,10 +2299,7 @@ function filteredThreads() {
 
   return [...state.dashboard.threads]
     .filter((thread) => !thread.archived)
-    .sort((a, b) => (
-      Number(b.groupUpdatedAtMs || b.updatedAtMs || 0)
-      - Number(a.groupUpdatedAtMs || a.updatedAtMs || 0)
-    ))
+    .sort(compareThreadsForList)
     .slice(0, RECENT_THREAD_LIMIT);
 }
 
@@ -4179,6 +4783,63 @@ async function copyResumeCommand(threadId) {
   }
 }
 
+function closeThreadActionMenus(exceptMenu = null) {
+  for (const menu of document.querySelectorAll('.thread-more-menu[open]')) {
+    if (menu !== exceptMenu) menu.removeAttribute('open');
+  }
+}
+
+async function revealThreadLocation(threadId, sourceButton) {
+  const thread = findThread(threadId);
+  if (!thread) {
+    showError('找不到这个任务，先刷新看板再试。');
+    return;
+  }
+  if (!canRevealThread(thread)) {
+    showError('这个任务没有可显示的本地路径。');
+    return;
+  }
+
+  disableButtonBriefly(sourceButton);
+  try {
+    const response = await fetch(`/api/threads/${encodeURIComponent(thread.id)}/reveal`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 405) {
+        throw new Error('请重启本地服务后再使用 Finder 显示。');
+      }
+      throw new Error(body.error || body.detail || `HTTP ${response.status}`);
+    }
+    showNotice('已在 Finder 中显示。');
+  } catch (error) {
+    showError(`无法在 Finder 中显示：${error.message}`);
+  }
+}
+
+async function copyThreadDeepLink(threadId) {
+  const thread = findThread(threadId);
+  if (!thread) {
+    showError('找不到这个任务，先刷新看板再试。');
+    return;
+  }
+
+  const deepLink = threadDeepLink(thread);
+  if (!deepLink) {
+    showError('这个任务没有可复制的深度链接。');
+    return;
+  }
+
+  try {
+    await copyText(deepLink);
+    showNotice('已复制深度链接。');
+  } catch {
+    showError('无法写入剪贴板，请手动复制详情里的深度链接。');
+  }
+}
+
 async function copyThreadSummary(threadId) {
   const thread = findThread(threadId);
   if (!thread) {
@@ -4577,6 +5238,11 @@ elements.refreshButton.addEventListener('click', () => {
 });
 elements.openSearchPage?.addEventListener('click', () => openSearchPage());
 elements.closeSearchPage?.addEventListener('click', () => closeSearchPage());
+elements.promptPackAddSegment?.addEventListener('click', addPromptPackSegment);
+elements.promptPackCopy?.addEventListener('click', copyPromptPackMarkdown);
+elements.promptPackClear?.addEventListener('click', () => {
+  if (window.confirm('清空当前 Prompt 包？')) resetPromptPack();
+});
 elements.searchInput.addEventListener('input', handleSearchControlsChanged);
 elements.providerFilter.addEventListener('change', handleSearchControlsChanged);
 elements.statusFilter.addEventListener('change', handleSearchControlsChanged);
@@ -4618,6 +5284,52 @@ document.addEventListener('error', (event) => {
 document.addEventListener('click', (event) => {
   const clicked = event.target instanceof Element ? event.target : null;
   if (!clicked) return;
+
+  const currentThreadMenu = clicked.closest('.thread-more-menu');
+  closeThreadActionMenus(currentThreadMenu);
+
+  const insertPromptPackTarget = clicked.closest('[data-prompt-pack-insert-after-id]');
+  if (insertPromptPackTarget) {
+    event.preventDefault();
+    addPromptPackSegment(insertPromptPackTarget.dataset.promptPackInsertAfterId);
+    return;
+  }
+
+  const addPromptPackFileTarget = clicked.closest('[data-prompt-pack-add-file-id]');
+  if (addPromptPackFileTarget) {
+    event.preventDefault();
+    const segmentId = addPromptPackFileTarget.dataset.promptPackAddFileId;
+    document.querySelector(`[data-prompt-pack-file-input-id="${CSS.escape(segmentId)}"]`)?.click();
+    return;
+  }
+
+  const movePromptPackTarget = clicked.closest('[data-prompt-pack-move-id]');
+  if (movePromptPackTarget) {
+    event.preventDefault();
+    if (movePromptPackTarget.hasAttribute('disabled')) return;
+    movePromptPackSegment(
+      movePromptPackTarget.dataset.promptPackMoveId,
+      movePromptPackTarget.dataset.promptPackMoveDirection,
+    );
+    return;
+  }
+
+  const removePromptPackSegmentTarget = clicked.closest('[data-prompt-pack-remove-segment-id]');
+  if (removePromptPackSegmentTarget) {
+    event.preventDefault();
+    removePromptPackSegment(removePromptPackSegmentTarget.dataset.promptPackRemoveSegmentId);
+    return;
+  }
+
+  const removePromptPackAttachmentTarget = clicked.closest('[data-prompt-pack-remove-attachment-id]');
+  if (removePromptPackAttachmentTarget) {
+    event.preventDefault();
+    removePromptPackAttachment(
+      removePromptPackAttachmentTarget.dataset.promptPackRemoveAttachmentSegmentId,
+      removePromptPackAttachmentTarget.dataset.promptPackRemoveAttachmentId,
+    );
+    return;
+  }
 
   const closeSearchDetailTarget = clicked.closest('[data-close-search-detail]');
   if (closeSearchDetailTarget) {
@@ -4692,6 +5404,24 @@ document.addEventListener('click', (event) => {
     state.inboxExpanded = !state.inboxExpanded;
     renderNotifications(state.notifications || state.dashboard?.notifications);
     return;
+  }
+
+  const threadActionTarget = clicked.closest('[data-thread-action][data-thread-action-id]');
+  if (threadActionTarget) {
+    event.preventDefault();
+    threadActionTarget.closest('.thread-more-menu')?.removeAttribute('open');
+    if (threadActionTarget.hasAttribute('disabled')) return;
+
+    const threadId = threadActionTarget.dataset.threadActionId;
+    const action = threadActionTarget.dataset.threadAction;
+    if (action === 'reveal') {
+      revealThreadLocation(threadId, threadActionTarget);
+      return;
+    }
+    if (action === 'copy-link') {
+      copyThreadDeepLink(threadId);
+      return;
+    }
   }
 
   const openTarget = clicked.closest('[data-open-thread-id]');
@@ -4826,6 +5556,10 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeThreadActionMenus();
+  }
+
   if (event.key === 'Escape' && activeTokenBreakdownContainer) {
     hideTokenBreakdownPopover();
   }
@@ -4862,6 +5596,12 @@ document.addEventListener('change', (event) => {
   const changed = event.target instanceof Element ? event.target : null;
   if (!changed) return;
 
+  const promptPackFileInput = changed.closest('[data-prompt-pack-file-input-id]');
+  if (promptPackFileInput) {
+    handlePromptPackFileChange(event);
+    return;
+  }
+
   const inputModeTarget = changed.closest('[data-review-input-mode-id]');
   if (inputModeTarget) {
     changeReviewInputMode(inputModeTarget.dataset.reviewInputModeId, inputModeTarget.value);
@@ -4884,12 +5624,19 @@ document.addEventListener('input', (event) => {
   const changed = event.target instanceof Element ? event.target : null;
   if (!changed) return;
 
+  if (updatePromptPackInput(changed)) return;
+
   const customInstruction = changed.closest('[data-review-custom-instruction-id]');
   if (customInstruction) {
     updateCustomReviewInstruction(customInstruction.dataset.reviewCustomInstructionId, customInstruction.value);
   }
 });
 
+document.addEventListener('paste', handlePromptPackPaste);
+document.addEventListener('dragstart', handlePromptPackSegmentDragStart);
+document.addEventListener('dragend', handlePromptPackSegmentDragEnd);
+document.addEventListener('dragover', handlePromptPackDocumentDragOver);
+document.addEventListener('drop', handlePromptPackDocumentDrop);
 document.addEventListener('pointerover', handleTokenBreakdownPosition);
 document.addEventListener('pointerout', handleTokenBreakdownExit);
 document.addEventListener('focusin', handleTokenBreakdownPosition);
@@ -4901,6 +5648,7 @@ syncPageViewFromLocation();
 initializeInstallPrompt();
 initializeLaunchHandling();
 registerServiceWorker();
+renderPromptPack();
 initializeMonitor();
 startPendingSummarySync();
 loadDashboard({ force: true });

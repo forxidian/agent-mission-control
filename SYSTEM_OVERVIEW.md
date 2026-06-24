@@ -1,6 +1,6 @@
 # Agent Mission Control 系统交接文档
 
-更新日期：2026-06-18
+更新日期：2026-06-24
 
 这个文件用于新开 Codex 线程时快速接手本项目。建议新线程先读本文件，再根据具体需求查看相关源码和测试。
 
@@ -19,6 +19,7 @@ http://127.0.0.1:4629/
 - 读取 Codex 全量线程窗口（默认上限 5000）、项目、标题、归档状态、更新时间、模型、累计 token、今日 token、当前轮运行时长。
 - 补充读取近期尚未进入 Codex sqlite 的 rollout-only 会话，用于历史搜索和 CLI resume 恢复。
 - 读取 Codex rollout JSONL，解析 token_count、rate_limits、latest user message、latest final answer、今日 token 用量。
+- 读取并聚合 Codex、OpenCode、Claude 的 token 明细，在线程、项目、搜索和总览中展示新输入、缓存复用 / 写入、输出、推理和未细分 token。
 - 从 Codex rollout 消息中抽取本地文件、图片、HTML、Markdown 和 URL artifact，支持摘要、时间线、图片预览和本地打开。
 - 读取 Codex `session_index.jsonl`，优先使用和 Codex 侧边栏一致的线程名，避免 sqlite 里的旧 prompt 标题误导。
 - 读取 OpenCode Desktop 状态，展示 OpenCode 会话，并识别 pending tool approval / todo。
@@ -29,12 +30,14 @@ http://127.0.0.1:4629/
 - 支持搜索线程、项目、来源、路径。
 - 支持独立全历史搜索页，使用本地 SQLite FTS 索引检索标题、项目、路径、最近输入、Agent 输出和 artifact 信息，并展示项目历史。
 - 支持按来源、状态、项目筛选，支持显示归档线程。
+- 支持 Prompt 打包器：在 AMC 内分段整理要交给 Agent 的修改要求，粘贴图片或选择文件后保存为本地附件，再复制成带编号的 Markdown 包。
 - 支持打开 Codex 线程 deep link：`codex://threads/<thread_id>`。
 - 支持打开 OpenCode Desktop 项目 deep link：`opencode://open-project?directory=...`。
 - 支持用 macOS Terminal 打开 Claude Code CLI resume 命令。
 - 支持通过 `claude://resume?session=...` 拉起 Claude Desktop Code 会话。
 - 支持打开 Claude Desktop 应用回到 Cowork 工作区入口；当前 Cowork 没有可靠的单线程 deep link。
 - 支持复制 resume / open 命令。
+- 最近线程和搜索结果右侧保留“打开”为主操作，并提供低权重更多菜单：在 Finder / 文件管理器中显示线程工作目录或 rollout 文件、复制 deep link。Codex 原生置顶状态会从 `pinned-thread-ids` 全局状态读取并显示 badge；菜单不提供置顶 / 取消置顶动作，因为该动作依赖 Codex Desktop 内部 `set-thread-pinned` / `pinned-threads-updated` 私有 IPC。
 - 支持作为 PWA 安装到 Chrome / Edge 的独立应用窗口；安装后浏览器页优先通过本地 API 打开 macOS PWA app shim，失败时再尝试 `web+agentmissioncontrol:` 协议；只缓存静态前端壳，不缓存 `/api/*` Agent 元数据。
 - PWA 独立窗口内提供“隐藏”按钮，通过本地 API 隐藏 macOS app shim，避免在 Dock 右侧留下最小化缩略图；原生红色关闭按钮不能被网页改写，且不使用 `beforeunload` 拦截，避免误伤 deep link 跳转。
 - 桌面提醒暂时屏蔽：当前 macOS 脚本通知投递不够可靠，发布版本只保留站内待处理提醒。
@@ -136,6 +139,8 @@ Claude：
   - 前端评审面板按目标 Agent 能力展示 repo 读取/写入保护标识，并可按 Fix Loop 状态筛选历史评审。
 - `~/.agent-mission-control/search-index.sqlite`
   - 全历史搜索的本地 SQLite FTS 索引，只存储 dashboard 已标准化出的线程字段、截断信号和 artifact 摘要。
+- `~/.agent-mission-control/prompt-packs/<pack-id>/attachments/*`
+  - Prompt 打包器保存的本地附件副本。前端只把分段草稿和附件路径存入浏览器 `localStorage`，复制 Markdown 时引用这些本机绝对路径。
 
 ## 核心概念
 
@@ -151,6 +156,7 @@ token：
 
 - `tokensUsed`：线程历史累计 token，来自 sqlite `tokens_used`。
 - `todayTokenUsage`：今天新增 token，从 rollout token_count 的 `last_token_usage.total_tokens` 累加。
+- `tokenBreakdown` / `todayTokenBreakdown`：按新输入、缓存复用、缓存写入、输出、推理和未细分 token 汇总；Codex、Claude、OpenCode 会尽量从各自 usage 字段归一化。
 - 列表 UX 当前以今日 token 为主数字，历史 token 为副行。
 - token 显示单位：小于 1B 用 M，大于等于 1B 用 B，例如 `223M`、`2.02B`。
 
@@ -185,6 +191,7 @@ quota：
 - 通知必须隐私化，不在系统 Push 正文显示具体回话。
 - Codex 侧边栏蓝点是“等待验收”的更可靠信号；纯 rollout completion 只能算“新进展”。
 - 打开 Codex 线程优先走前端 `window.location.href = codex://...`，不要等本地 server round trip，否则体验慢。
+- Prompt 打包器只做本地编排和复制，不自动发送到任何 Agent；附件以文件路径进入 Markdown，避免把图片或文件内容 base64 塞进 prompt 浪费 token。
 
 ## 最近修过的坑
 
@@ -221,10 +228,14 @@ quota：
   - 从搜索索引返回历史项目列表、线程数、provider 和 token 聚合。
 - `GET /api/threads/:id/artifacts`
   - 懒加载 Codex rollout artifact 时间线。
+- `POST /api/prompt-packs/:id/attachments`
+  - 保存 Prompt 打包器里粘贴或选择的图片/文件到 `~/.agent-mission-control/prompt-packs/<id>/attachments/`，返回本机绝对路径；仅接受同源本地请求，限制 pack id、文件名和上传大小。
 - `GET /api/local-file/preview`
   - 只预览受支持的本地 raster 图片，响应不缓存。
 - `POST /api/local-file/open`
   - 调用系统打开本地 artifact 文件。
+- `POST /api/threads/:id/reveal`
+  - 对 dashboard 或搜索索引中已知线程，解析其 `cwd` 或 `rolloutPath`，并通过系统文件管理器显示。此接口不接受任意前端传入路径。
 - `GET /api/notifications`
   - 刷新并返回通知，不触发桌面提醒。
 - `POST /api/notifications`

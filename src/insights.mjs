@@ -314,6 +314,7 @@ export function normalizeThread(row, nowMs = Date.now()) {
     reasoningEffort: row.reasoning_effort || '',
     tokensUsed: coerceNumber(row.tokens_used),
     hasUnreadTurn: Boolean(coerceNumber(row.has_unread_turn ?? row.hasUnreadTurn ?? row.awaiting_review ?? row.awaitingReview)),
+    pinned: coerceBoolean(row.pinned ?? row.isPinned, false),
     archived,
     createdAtMs,
     updatedAtMs,

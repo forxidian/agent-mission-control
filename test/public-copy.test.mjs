@@ -234,6 +234,171 @@ test('uses topbar metrics as panel shortcuts', async () => {
   assert.match(styles, /\.topbar-metric-button:focus-visible\s*\{/);
 });
 
+test('renders a local prompt pack composer for segmented copy-and-paste requests', async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(html, /id="prompt-pack-panel"/);
+  assert.match(html, /id="prompt-pack-segments"/);
+  assert.match(html, /id="prompt-pack-add-segment"/);
+  assert.match(html, /id="prompt-pack-copy"/);
+  assert.match(html, /id="prompt-pack-clear"/);
+  assert.match(html, /Prompt 打包/);
+  assert.match(html, /class="prompt-pack-stage dashboard-view"/);
+  assert.match(html, /class="[^"]*prompt-pack-top[^"]*"/);
+  assert.doesNotMatch(html, /class="panel prompt-pack-top"/);
+  assert.doesNotMatch(html, /class="panel prompt-pack-segments"/);
+  assert.doesNotMatch(
+    html.slice(html.indexOf('<section id="prompt-pack-panel"'), html.indexOf('</section>', html.indexOf('<section id="prompt-pack-panel"'))),
+    /id="open-search-page"/,
+  );
+  assert.match(
+    html.slice(html.indexOf('<section id="prompt-pack-panel"'), html.indexOf('</section>', html.indexOf('<section id="prompt-pack-panel"'))),
+    /id="prompt-pack-segments"/,
+  );
+  assert.match(`${html}\n${app}`, /粘贴图片或选择文件/);
+  assert.match(app, /PROMPT_PACK_STORAGE_KEY/);
+  assert.match(app, /function createPromptPackSegment/);
+  assert.match(app, /function uploadPromptPackAttachment/);
+  assert.match(app, /\/api\/prompt-packs\/\$\{encodeURIComponent\(state\.promptPack\.id\)\}\/attachments/);
+  assert.match(app, /function promptPackMarkdown/);
+  assert.match(app, /请按段落编号处理/);
+  assert.match(app, /如果你能读取本机文件/);
+  assert.match(app, /function handlePromptPackPaste/);
+  assert.match(app, /function handlePromptPackFileChange/);
+  assert.match(app, /data-prompt-pack-add-file-id/);
+  assert.match(styles, /\.prompt-pack-stage\s*\{/);
+  assert.match(styles, /\.prompt-pack-panel\s*\{/);
+  assert.match(styles, /\.prompt-pack-panel\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-column:\s*1 \/ -1;/);
+  assert.match(styles, /\.prompt-pack-panel\s*\{[\s\S]*grid-template-areas:[\s\S]*"prompt"[\s\S]*"segments";/);
+  assert.match(styles, /\.prompt-pack-panel\s*\{[\s\S]*filter:\s*drop-shadow\(0 18px 50px rgba\(25,\s*23,\s*18,\s*0\.08\)\);/);
+  assert.match(styles, /\.prompt-pack-top\s*\{[\s\S]*grid-area:\s*prompt;[\s\S]*border:\s*1px solid var\(--line\);[\s\S]*border-radius:\s*8px;/);
+  assert.match(styles, /\.prompt-pack-panel:has\(\.prompt-pack-segments:not\(:empty\)\) \.prompt-pack-top\s*\{[\s\S]*border-bottom:\s*0;/);
+  assert.match(styles, /\.prompt-pack-segments\s*\{[\s\S]*grid-area:\s*segments;[\s\S]*padding:\s*16px;/);
+  assert.match(styles, /\.prompt-pack-segments\s*\{[\s\S]*border:\s*1px solid var\(--line\);[\s\S]*border-radius:\s*0 0 8px 8px;/);
+  assert.match(styles, /\.prompt-pack-segment\s*\{/);
+  assert.match(styles, /\.prompt-pack-dropzone\s*\{/);
+  assert.match(styles, /\.prompt-pack-attachment-list\s*\{/);
+});
+
+test('supports lightweight prompt pack insertion and drag sorting between segments', async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(html, /prompt-pack-toolbar-add/);
+  assert.match(html, /id="prompt-pack-add-segment"[\s\S]*<span aria-hidden="true" class="prompt-pack-toolbar-add-icon">\+<\/span>[\s\S]*<span>新增段落<\/span>/);
+  assert.match(app, /function promptPackInsertRowMarkup/);
+  assert.match(app, /data-prompt-pack-insert-after-id/);
+  assert.match(app, /data-prompt-pack-drag-id/);
+  assert.match(app, /draggable="true"/);
+  assert.match(app, /function movePromptPackSegmentToIndex/);
+  assert.match(app, /function handlePromptPackSegmentDragStart/);
+  assert.match(app, /function handlePromptPackDocumentDragOver/);
+  assert.match(app, /function handlePromptPackDocumentDrop/);
+  assert.match(styles, /\.prompt-pack-toolbar-add\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*gap:\s*6px;[\s\S]*padding:\s*0 10px 0 8px;/);
+  assert.match(styles, /\.prompt-pack-toolbar-add-icon\s*\{/);
+  assert.match(styles, /\.prompt-pack-insert-row\s*\{/);
+  assert.match(styles, /\.prompt-pack-insert-row\s*\{[\s\S]*min-height:\s*44px;[\s\S]*margin:\s*4px 0;/);
+  assert.match(styles, /\.prompt-pack-insert-button\s*\{/);
+  assert.match(styles, /\.prompt-pack-drag-handle\s*\{/);
+  assert.match(styles, /\.prompt-pack-segment\.is-dragging\s*\{/);
+});
+
+test('keeps the prompt pack composer collapsed until a segment is added', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function createPromptPackId');
+  const end = app.indexOf('\nfunction promptPackFilesFromDataTransfer', start);
+  const localStorageStore = new Map();
+  const context = {
+    state: { promptPack: null },
+    elements: {
+      promptPackSegments: { innerHTML: '' },
+      promptPackCount: { textContent: '' },
+    },
+    localStorage: {
+      getItem(key) { return localStorageStore.get(key) || null; },
+      setItem(key, value) { localStorageStore.set(key, String(value)); },
+    },
+    Date,
+    Math,
+    Number,
+    String,
+    Set,
+    Array,
+    formatBytes(value) { return `${value} B`; },
+    escapeHtml(value = '') { return String(value); },
+    result: null,
+  };
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  vm.runInNewContext(`
+    const PROMPT_PACK_STORAGE_KEY = 'agent-mission-control:prompt-pack';
+    ${app.slice(start, end)}
+    const created = createPromptPack();
+    state.promptPack = created;
+    renderPromptPack();
+    const initial = {
+      segmentCount: created.segments.length,
+      renderedSegments: elements.promptPackSegments.innerHTML.match(/<article class="prompt-pack-segment"/g)?.length || 0,
+      countText: elements.promptPackCount.textContent,
+    };
+    addPromptPackSegment();
+    const afterAdd = {
+      segmentCount: state.promptPack.segments.length,
+      renderedSegments: elements.promptPackSegments.innerHTML.match(/<article class="prompt-pack-segment"/g)?.length || 0,
+      countText: elements.promptPackCount.textContent,
+    };
+    removePromptPackSegment(state.promptPack.segments[0].id);
+    const afterRemoveLast = {
+      segmentCount: state.promptPack.segments.length,
+      renderedSegments: elements.promptPackSegments.innerHTML.match(/<article class="prompt-pack-segment"/g)?.length || 0,
+      countText: elements.promptPackCount.textContent,
+    };
+    result = { initial, afterAdd, afterRemoveLast };
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+
+  assert.deepEqual(result.initial, {
+    segmentCount: 0,
+    renderedSegments: 0,
+    countText: '0 段 · 0 附件',
+  });
+  assert.deepEqual(result.afterAdd, {
+    segmentCount: 1,
+    renderedSegments: 1,
+    countText: '1 段 · 0 附件',
+  });
+  assert.deepEqual(result.afterRemoveLast, {
+    segmentCount: 0,
+    renderedSegments: 0,
+    countText: '0 段 · 0 附件',
+  });
+});
+
+test('explains stale local server when prompt pack attachment endpoint is unavailable', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('async function uploadPromptPackAttachment');
+  const end = app.indexOf('\nfunction uploadPromptPackFiles', start);
+  const source = app.slice(start, end);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(source, /response\.status === 405/);
+  assert.match(source, /本地 AMC 服务还是旧版本/);
+  assert.match(source, /error: error\.message/);
+  assert.match(app, /保存失败：/);
+  assert.match(app, /attachment\.error/);
+});
+
 test('counts soft progress notifications in the same pending work copy', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -377,7 +542,7 @@ test('lets the desktop thread list fill the stretched left panel', async () => {
   assert.match(styles, /--work-panel-height:\s*min\(960px,\s*max\(640px,\s*calc\(100vh - 180px\)\)\);/);
   assert.doesNotMatch(styles, /\.layout\s*\{[^}]*align-items:\s*start;/);
   assert.match(styles, /\.layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
-  assert.match(styles, /\.thread-panel\s*\{[\s\S]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/);
+  assert.match(styles, /\.thread-panel\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/);
   assert.match(styles, /\.thread-panel\s*\{[\s\S]*height:\s*var\(--work-panel-height\);/);
   assert.match(styles, /\.thread-list\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*auto;/);
   assert.match(styles, /\.project-history-panel\s*\{[\s\S]*grid-template-rows:\s*auto auto;/);
@@ -605,7 +770,7 @@ test('renders recent thread rows with the same detail style as search results', 
   assert.match(styles, /\.thread-side\s*\{[\s\S]*border-left:\s*1px solid var\(--line\);/);
   assert.match(styles, /\.thread-side\s*\{[\s\S]*grid-column:\s*4;/);
   assert.match(styles, /\.thread-side-provider\s*\{[\s\S]*text-overflow:\s*ellipsis;/);
-  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-width:\s*86px;[\s\S]*min-height:\s*54px;/);
+  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-width:\s*92px;[\s\S]*min-height:\s*44px;/);
   assert.match(styles, /\.thread-mention\s*\{[\s\S]*-webkit-line-clamp:\s*2;/);
   assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.thread-row\.has-artifacts \.thread-main,[\s\S]*\.search-result-row\.has-artifacts \.search-result-main[\s\S]*grid-column:\s*auto;/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.thread-side \.row-actions\s*\{[\s\S]*justify-content:\s*stretch;[\s\S]*width:\s*100%;/);
@@ -879,7 +1044,7 @@ test('keeps search result image attachments compact', async () => {
   assert.match(styles, /\.attachment-thumb-button img\s*\{[\s\S]*width:\s*42px;/);
   assert.match(styles, /\.attachment-thumb-button img\s*\{[\s\S]*height:\s*42px;/);
   assert.match(styles, /\.thread-side\s*\{[\s\S]*gap:\s*18px;[\s\S]*padding:\s*14px 18px;/);
-  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-height:\s*54px;/);
+  assert.match(styles, /\.thread-side \.action-button\.primary\s*\{[\s\S]*min-height:\s*44px;/);
   assert.match(styles, /@media \(max-width: 1180px\)[\s\S]*\.search-result-row\.has-artifacts \.thread-side[\s\S]*grid-column:\s*auto;/);
 });
 
@@ -1134,29 +1299,57 @@ test('moves thread search into a dedicated full-width search page', async () => 
   const returnButtonIndex = html.indexOf('id="close-search-page"');
   const searchControlsIndex = html.indexOf('<section class="controls search-controls"');
   const searchControlsSource = html.slice(searchControlsIndex, html.indexOf('</section>', searchControlsIndex));
+  const topbarActionsIndex = html.indexOf('<div class="topbar-actions">');
+  const promptStageIndex = html.indexOf('<section class="prompt-pack-stage dashboard-view"');
+  const promptPackIndex = html.indexOf('<section id="prompt-pack-panel"');
+  const promptPackSegmentsIndex = html.indexOf('<div id="prompt-pack-segments"');
+  const searchLauncherIndex = html.indexOf('id="open-search-page"');
+  const promptPackPanelSource = html.slice(promptPackIndex, html.indexOf('</section>', promptPackIndex));
+  const promptStageSource = html.slice(promptStageIndex, html.indexOf('</section>', promptStageIndex));
+  const statusBannerIndex = html.indexOf('<section id="status-banner"');
+  const topbarActionsSource = html.slice(topbarActionsIndex, statusBannerIndex);
   const threadPanelIndex = html.indexOf('<section class="panel thread-panel"');
   const defaultPanelSource = html.slice(threadPanelIndex, html.indexOf('<section class="panel project-history-panel"', threadPanelIndex));
 
   assert.notEqual(searchPageIndex, -1);
   assert.notEqual(windowControlsIndex, -1);
   assert.notEqual(topbarIndex, -1);
+  assert.notEqual(topbarActionsIndex, -1);
   assert.notEqual(hideButtonIndex, -1);
   assert.notEqual(returnButtonIndex, -1);
   assert.notEqual(searchControlsIndex, -1);
+  assert.notEqual(promptStageIndex, -1);
+  assert.notEqual(promptPackIndex, -1);
+  assert.notEqual(promptPackSegmentsIndex, -1);
+  assert.notEqual(searchLauncherIndex, -1);
+  assert.notEqual(statusBannerIndex, -1);
   assert.notEqual(threadPanelIndex, -1);
   assert.ok(windowControlsIndex < topbarIndex);
   assert.ok(windowControlsIndex < hideButtonIndex);
   assert.ok(hideButtonIndex < returnButtonIndex);
+  assert.ok(topbarActionsIndex < searchLauncherIndex);
+  assert.ok(searchLauncherIndex < statusBannerIndex);
+  assert.ok(promptStageIndex < promptPackIndex);
+  assert.ok(promptPackIndex < promptPackSegmentsIndex);
   assert.ok(searchPageIndex < threadPanelIndex);
   assert.doesNotMatch(defaultPanelSource, /id="search-input"/);
+  assert.doesNotMatch(defaultPanelSource, /id="open-search-page"/);
+  assert.doesNotMatch(promptPackPanelSource, /id="open-search-page"/);
+  assert.doesNotMatch(promptStageSource, /id="open-search-page"/);
   assert.doesNotMatch(searchControlsSource, /id="close-search-page"/);
+  assert.match(topbarActionsSource, /id="open-search-page"/);
   assert.match(html, /id="open-search-page"/);
   assert.match(html, /id="close-search-page"/);
   assert.match(html, /id="search-load-sentinel"/);
   assert.match(html, /id="search-detail-modal"/);
   assert.match(html, /id="search-detail-content"/);
-  assert.match(html, /class="search-launcher"/);
+  assert.match(html, /class="search-launcher[^"]*"/);
   assert.match(styles, /\[hidden\],[\s\S]*\.dashboard-view\[hidden\]\s*\{[\s\S]*display:\s*none !important;/);
+  assert.match(styles, /\.topbar-search-launcher\s*\{[\s\S]*grid-column:\s*2;/);
+  assert.match(styles, /\.topbar-search-launcher\s*\{[\s\S]*min-height:\s*38px;/);
+  assert.match(styles, /\.topbar-search-launcher \.search-launcher-placeholder\s*\{[\s\S]*font-size:\s*13px;/);
+  assert.match(styles, /\.prompt-pack-panel\s*\{[\s\S]*grid-template-areas:[\s\S]*"prompt"[\s\S]*"segments";/);
+  assert.doesNotMatch(styles, /\.prompt-pack-search-launcher\s*\{/);
   assert.match(styles, /\.search-launcher\s*\{[\s\S]*min-height:\s*58px;/);
   assert.match(styles, /\.search-field\s*\{[\s\S]*grid-column:\s*1 \/ -1;/);
   assert.match(styles, /\.search-page\s*\{/);
@@ -1341,6 +1534,103 @@ test('uses clear visible labels for thread open actions', async () => {
     ];
   `, context);
   assert.deepEqual(Array.from(context.labels), ['打开', '打开会话', '打开']);
+});
+
+test('adds a weaker grouped thread action menu beside the primary open action', async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  const sideStart = app.indexOf('function threadSideMarkup');
+  const sideEnd = app.indexOf('\nfunction searchResultMetaItems', sideStart);
+  const sideSource = app.slice(sideStart, sideEnd);
+
+  assert.notEqual(sideStart, -1);
+  assert.notEqual(sideEnd, -1);
+  assert.match(sideSource, /class="action-button primary"[\s\S]*data-open-thread-id/);
+  assert.match(sideSource, /class="thread-more-menu"/);
+  assert.match(sideSource, /data-thread-action-menu-id/);
+  assert.match(sideSource, /aria-label="更多线程操作"/);
+  assert.match(sideSource, /data-thread-action="reveal"/);
+  assert.match(sideSource, /data-thread-action="copy-link"/);
+  assert.doesNotMatch(sideSource, /data-thread-action="pin"/);
+  assert.doesNotMatch(sideSource, /置顶对话/);
+  assert.match(sideSource, /在 Finder 中显示/);
+  assert.match(sideSource, /复制深度链接/);
+  assert.match(styles, /\.thread-more-trigger\s*\{[\s\S]*width:\s*44px;[\s\S]*min-height:\s*44px;[\s\S]*aspect-ratio:\s*1;[\s\S]*opacity:\s*0\.72;/);
+  assert.match(styles, /\.thread-action-popover\s*\{/);
+});
+
+test('does not keep a browser-local pin list or sort rows by pin', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function compareThreadsForList');
+  const end = app.indexOf('\nfunction openLabel', start);
+  const context = {
+    state: { dashboard: null },
+    Number,
+  };
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.doesNotMatch(app, /PINNED_THREADS_STORAGE_KEY/);
+  assert.doesNotMatch(app, /pinnedThreadIds/);
+
+  vm.runInNewContext(`
+    ${app.slice(start, end)}
+    result = [
+      { id: 'fresh', updatedAtMs: 200 },
+      { id: 'pinned', pinned: true, updatedAtMs: 100 },
+    ].sort(compareThreadsForList).map((thread) => thread.id);
+  `, context);
+
+  assert.deepEqual(Array.from(context.result), ['fresh', 'pinned']);
+});
+
+test('renders a visible badge for Codex native pinned threads', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('function threadKindBadgesMarkup');
+  const end = app.indexOf('\nfunction threadProjectRailMarkup', start);
+  const context = {
+    html: '',
+  };
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  vm.runInNewContext(`
+    function escapeHtml(value = '') { return String(value); }
+    function isSubagentThread() { return false; }
+    function isThreadPinned(threadOrId) {
+      return Boolean(threadOrId?.pinned);
+    }
+    ${app.slice(start, end)}
+    html = threadKindBadgesMarkup({ id: 'thread-1', pinned: true, subagentCount: 0 });
+  `, context);
+
+  assert.match(context.html, /置顶/);
+  assert.match(context.html, /thread-kind-badge/);
+});
+
+test('does not render an unavailable Codex pin menu action', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(app, /function canPinThreadInCodex/);
+  assert.doesNotMatch(app, /toggleThreadPinned/);
+  assert.doesNotMatch(app, /data-thread-action="pin"/);
+  assert.doesNotMatch(app, /pinnedThreadIds/);
+});
+
+test('explains stale local server when Finder reveal endpoint is unavailable', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('async function revealThreadLocation');
+  const end = app.indexOf('\nasync function copyThreadDeepLink', start);
+  const source = app.slice(start, end);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.match(source, /response\.status === 405/);
+  assert.match(source, /重启本地服务/);
 });
 
 test('opens notification cards through the same source task opener', async () => {
