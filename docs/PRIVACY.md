@@ -5,6 +5,9 @@ Agent Mission Control runs locally and does not send telemetry.
 What it reads:
 
 - Codex local state under `~/.codex`
+- Codex ChatGPT auth at `~/.codex/auth.json` only when Codex reset-credit
+  display is enabled. The access token is used only as an Authorization header
+  for the ChatGPT reset-credit endpoint and is not returned to the browser.
 - OpenCode CLI output or desktop state under
   `~/Library/Application Support/ai.opencode.desktop`
 - Claude Code and Claude Desktop metadata under `~/.claude` and
@@ -36,6 +39,30 @@ What it may display locally:
   attachment paths while you prepare a Markdown handoff package
 - The optional macOS menu bar helper shows only aggregate pending/progress
   counts and does not display thread titles or message text
+
+Network requests:
+
+- Agent Mission Control does not send telemetry.
+- By default, when a dashboard scan runs and Codex ChatGPT auth is available,
+  it may call `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
+  to read aggregate gifted Codex reset-credit count and expiry timestamps.
+- Set `AMC_CODEX_RESET_CREDITS=0` to disable that ChatGPT reset-credit request.
+- The request uses the local Codex/ChatGPT access token only in the outbound
+  Authorization header. The token is not logged, persisted by Agent Mission
+  Control, sent to the frontend, included in test fixtures, or included in
+  visible error payloads.
+
+File watching:
+
+- The local server can watch provider state directories such as `~/.codex`,
+  `~/.codex/sessions`, `~/.claude/projects`, Claude Desktop metadata/cache
+  folders, OpenCode Desktop state, and Agent Mission Control notification
+  state.
+- Watchers only invalidate the in-process dashboard cache and notify connected
+  local browser clients over `/api/events`; they do not upload file contents.
+- Missing provider directories are ignored. A periodic browser refresh remains
+  the fallback when a platform or filesystem cannot provide recursive watch
+  events reliably.
 
 Review workflow:
 
@@ -89,6 +116,7 @@ What it avoids:
 
 - Writing to Codex, OpenCode, or Claude state
 - Publishing data externally
+- Logging or exposing Codex/ChatGPT access tokens
 - Caching dashboard API payloads in the PWA service worker
 - Caching local image previews or search API payloads in the PWA service worker
 - Embedding Prompt Pack attachment bytes or base64 file contents into copied

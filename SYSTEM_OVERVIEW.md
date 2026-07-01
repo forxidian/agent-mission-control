@@ -42,7 +42,7 @@ http://127.0.0.1:4629/
 - PWA 独立窗口内提供“隐藏”按钮，通过本地 API 隐藏 macOS app shim，避免在 Dock 右侧留下最小化缩略图；原生红色关闭按钮不能被网页改写，且不使用 `beforeunload` 拦截，避免误伤 deep link 跳转。
 - 桌面提醒暂时屏蔽：当前 macOS 脚本通知投递不够可靠，发布版本只保留站内待处理提醒。
 - 支持通知中心：等待验收、等待授权、标记已处理、稍后提醒。
-- 性能保护：前端自动刷新默认每 30 秒一次，可切到 10 秒或 60 秒；页面在后台时暂停拉取，窗口失焦时自动降频到 60 秒；dashboard 数据未变化时跳过整页重绘。后端 `/api/dashboard` 对同一进程内请求做 10 秒共享快照，`/api/pending-summary` 复用最近 dashboard 快照避免菜单栏/轻量轮询触发全量扫描，通知刷新默认缓存 30 秒，Codex rollout、Claude JSONL 和 Claude Desktop usage cache 读取都有短 TTL / mtime 有界缓存。
+- 性能保护：前端自动刷新默认每 30 秒一次，可切到 10 秒或 60 秒；页面在后台时暂停拉取，窗口失焦时自动降频到 60 秒；dashboard 数据未变化时跳过整页重绘。后端 `/api/dashboard` 对同一进程内请求做 10 秒共享快照，`/api/pending-summary` 复用最近 dashboard 快照避免菜单栏/轻量轮询触发全量扫描，通知刷新默认缓存 30 秒，Codex rollout、Claude JSONL 和 Claude Desktop usage cache 读取都有短 TTL / mtime 有界缓存。服务端可通过本地文件 watch + `/api/events` 通知已打开页面强制刷新；watch 不上传文件内容，缺失目录会被忽略，浏览器轮询仍是平台不支持 recursive watch 时的兜底。
 - 性能指标：`/api/dashboard` 返回 `performance` 字段，`/api/performance` 可单独读取当前进程 RSS/heap、dashboard 扫描耗时、通知刷新耗时、cache 命中率和缓存条目数。
 - 后端 notification monitor 默认关闭；如果启用，会复用 dashboard 共享快照，避免和前端重复全量扫描。
 
@@ -107,6 +107,10 @@ Codex：
 - `~/.codex/sessions/**/rollout-*.jsonl`
   - token_count、rate_limits、user_message、agent_message、final_answer 等。
   - 用于解析今日 token、quota、运行中状态、软提醒。
+- `~/.codex/auth.json`
+  - 仅用于 ChatGPT 登录态下读取 Codex 赠送 reset-credit 到期时间。
+  - 默认在 dashboard 扫描时可能请求 `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`；可用 `AMC_CODEX_RESET_CREDITS=0` 关闭。
+  - access token 只作为请求 Authorization header 使用，不进入日志、前端 payload、测试夹具或可见错误信息。
 
 OpenCode：
 
@@ -165,6 +169,8 @@ quota：
 - 从最新 rollout `token_count.rate_limits` 获取。
 - Claude Desktop/Cowork 额外读取本地 Chromium Cache 里的 `https://claude.ai/api/organizations/.../usage` 响应，解压 zstd 后映射 `five_hour` / `seven_day` 为统一 quota 信号；如果未来 statusline JSONL 直接落 `rate_limits`，也走同一解析链路。
 - 当前展示实时可用 quota、本周可用 quota、刷新时间；存在多个 LLM 家族时按 GPT、Claude 等分组显示，每组取最新 rate limit 信号。
+- 如果检测到 Codex 且 ChatGPT 账号返回可用的赠送 rate-limit reset credits，摘要区展示剩余赠送重置次数，并列出每次赠送重置的到期时间。
+- reset-credit 数据来自 ChatGPT backend，属于唯一默认可能联网的数据源；关闭方式是启动时设置 `AMC_CODEX_RESET_CREDITS=0`。
 - 不再展示“单线程限流用量”，因为实际限制看总 quota。
 
 通知：

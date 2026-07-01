@@ -36,6 +36,90 @@ test('serves dashboard json from injected loader', async () => {
   }
 });
 
+test('caches dashboard payloads and supports forced refresh aliases', async () => {
+  let calls = 0;
+  const server = createServer({
+    loadDashboard: async () => ({
+      summary: { calls: ++calls },
+      threads: [],
+      projects: [],
+      inbox: [],
+    }),
+  });
+
+  const address = await listen(server);
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const first = await fetch(`${base}/api/dashboard`).then((response) => response.json());
+    const second = await fetch(`${base}/api/dashboard`).then((response) => response.json());
+    const forced = await fetch(`${base}/api/dashboard?force=1`).then((response) => response.json());
+    const refreshed = await fetch(`${base}/api/dashboard?refresh=1`).then((response) => response.json());
+
+    assert.equal(first.summary.calls, 1);
+    assert.equal(second.summary.calls, 1);
+    assert.equal(forced.summary.calls, 2);
+    assert.equal(refreshed.summary.calls, 3);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('serves dashboard change notifications as server-sent events', async () => {
+  const notificationCenter = {
+    refresh: async () => ({ summary: { activeCount: 0 }, items: [] }),
+    updateNotification: async (id, body) => ({ id, ...body }),
+  };
+  const server = createServer({
+    notificationCenter,
+    loadDashboard: async () => ({
+      summary: { inboxCount: 0 },
+      threads: [],
+      projects: [],
+      inbox: [],
+    }),
+  });
+
+  const address = await listen(server);
+  const controller = new AbortController();
+  try {
+    const base = `http://${address.address}:${address.port}`;
+    const eventResponse = await fetch(`${base}/api/events`, { signal: controller.signal });
+    assert.equal(eventResponse.status, 200);
+
+    const eventTextPromise = (async () => {
+      const reader = eventResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      while (!text.includes('event: dashboard')) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      return text;
+    })();
+
+    const patchResponse = await fetch(`${base}/api/notifications/test-notification`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    });
+    assert.equal(patchResponse.status, 200);
+
+    let timeoutId = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('Timed out waiting for dashboard event')), 2000);
+    });
+    const eventText = await Promise.race([eventTextPromise, timeoutPromise]);
+    clearTimeout(timeoutId);
+    assert.match(eventText, /event: connected/);
+    assert.match(eventText, /event: dashboard/);
+    assert.match(eventText, /"reason":"notification-update"/);
+  } finally {
+    controller.abort();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('serves search results from a dedicated search index', async () => {
   const calls = [];
   const searchIndex = {

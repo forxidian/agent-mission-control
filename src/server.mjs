@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, watch } from 'node:fs';
 import { mkdir, open, realpath, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import http from 'node:http';
@@ -77,6 +77,28 @@ const MIME_TYPES = new Map([
   ['.png', 'image/png'],
   ['.svg', 'image/svg+xml'],
 ]);
+
+export function defaultDashboardWatchPaths(homeDir = os.homedir()) {
+  return [
+    { path: path.join(homeDir, '.codex'), recursive: false },
+    path.join(homeDir, '.codex', 'state_5.sqlite'),
+    path.join(homeDir, '.codex', 'state_5.sqlite-wal'),
+    path.join(homeDir, '.codex', 'session_index.jsonl'),
+    { path: path.join(homeDir, '.codex', 'sessions'), recursive: true },
+    { path: path.join(homeDir, '.codex', 'browser', 'sessions'), recursive: true },
+    path.join(homeDir, '.agent-mission-control', 'notifications.json'),
+    { path: path.join(homeDir, 'Library', 'Application Support', 'ai.opencode.desktop'), recursive: true },
+    { path: path.join(homeDir, '.claude', 'projects'), recursive: true },
+    {
+      path: path.join(homeDir, 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions'),
+      recursive: true,
+    },
+    {
+      path: path.join(homeDir, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data'),
+      recursive: false,
+    },
+  ];
+}
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
@@ -1057,6 +1079,7 @@ export function createServer({
   monitorNotifications = false,
   notificationScanIntervalMs = 20_000,
   dashboardCacheTtlMs = positiveInteger(process.env.DASHBOARD_CACHE_TTL_MS, DEFAULT_DASHBOARD_CACHE_TTL_MS),
+  dashboardWatchPaths = [],
   notificationCacheTtlMs = positiveInteger(process.env.NOTIFICATION_CACHE_TTL_MS, DEFAULT_NOTIFICATION_CACHE_TTL_MS),
   pendingSummaryDashboardMaxAgeMs = positiveInteger(
     process.env.PENDING_SUMMARY_DASHBOARD_MAX_AGE_MS,
@@ -1085,6 +1108,10 @@ export function createServer({
   let dashboardLoadPromise = null;
   let dashboardCache = null;
   let notificationCache = null;
+  const dashboardEventClients = new Set();
+  const dashboardWatchers = [];
+  let dashboardEventVersion = 0;
+  let dashboardInvalidationTimer = null;
   const serverMetrics = {
     dashboardCacheHits: 0,
     dashboardCacheMisses: 0,
@@ -1193,6 +1220,56 @@ export function createServer({
     return dashboardLoadPromise;
   };
 
+  const sendDashboardEvent = (response, event, payload) => {
+    response.write(`event: ${event}\n`);
+    response.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  const broadcastDashboardEvent = (event, payload) => {
+    for (const client of dashboardEventClients) {
+      sendDashboardEvent(client, event, payload);
+    }
+  };
+
+  const invalidateDashboard = (reason = 'dashboard-change') => {
+    dashboardCache = null;
+    notificationCache = null;
+    dashboardEventVersion += 1;
+    broadcastDashboardEvent('dashboard', {
+      version: dashboardEventVersion,
+      reason,
+      observedAtMs: now(),
+    });
+  };
+
+  const scheduleDashboardInvalidation = (reason = 'dashboard-change') => {
+    if (dashboardInvalidationTimer) clearTimeout(dashboardInvalidationTimer);
+    dashboardInvalidationTimer = setTimeout(() => {
+      dashboardInvalidationTimer = null;
+      invalidateDashboard(reason);
+    }, 250);
+    dashboardInvalidationTimer.unref?.();
+  };
+
+  const createDashboardWatchers = async () => {
+    for (const entry of dashboardWatchPaths || []) {
+      const spec = typeof entry === 'string' ? { path: entry, recursive: false } : entry;
+      const targetPath = spec?.path;
+      if (!targetPath) continue;
+
+      try {
+        await stat(targetPath);
+        const watcher = watch(targetPath, { recursive: Boolean(spec.recursive) }, () => {
+          scheduleDashboardInvalidation('file-change');
+        });
+        watcher.on?.('error', () => {});
+        dashboardWatchers.push(watcher);
+      } catch {
+        // Missing provider directories are expected when a provider is not installed.
+      }
+    }
+  };
+
   const dashboardForRequest = async (options = {}) => {
     const dashboard = await loadSharedDashboard(options);
     return {
@@ -1292,9 +1369,34 @@ export function createServer({
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
 
+    if (url.pathname === '/api/events') {
+      if (request.method !== 'GET') {
+        response.writeHead(405, { allow: 'GET' });
+        response.end('Method not allowed');
+        return;
+      }
+
+      response.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+      });
+      response.write('\n');
+      dashboardEventClients.add(response);
+      sendDashboardEvent(response, 'connected', {
+        version: dashboardEventVersion,
+        observedAtMs: now(),
+      });
+      request.on('close', () => {
+        dashboardEventClients.delete(response);
+      });
+      return;
+    }
+
     if (url.pathname === '/api/dashboard') {
       try {
-        const force = url.searchParams.get('force') === '1';
+        const force = parseBooleanSearchParam(url.searchParams.get('force'))
+          || parseBooleanSearchParam(url.searchParams.get('refresh'));
         const dashboard = await dashboardForRequest({ force });
         if (notificationCenter) {
           dashboard.notifications = await notificationsForDashboard(dashboard, { force });
@@ -1518,7 +1620,7 @@ export function createServer({
         const body = await readJsonBody(request);
         const id = decodeURIComponent(notificationMatch[1]);
         const updated = await notificationCenter.updateNotification(id, body);
-        notificationCache = null;
+        invalidateDashboard('notification-update');
         sendJson(response, 200, updated);
       } catch (error) {
         sendError(response, error, 'Failed to update notification');
@@ -1764,7 +1866,7 @@ export function createServer({
         const notification = body.markNotificationDone && body.notificationId && notificationCenter
           ? await notificationCenter.updateNotification(String(body.notificationId), { status: 'done' })
           : null;
-        if (notification) notificationCache = null;
+        if (notification) invalidateDashboard('notification-update');
         sendJson(response, 200, {
           ...result,
           threadId: thread.id,
@@ -1822,6 +1924,18 @@ export function createServer({
     await serveStatic(request, response, publicDir);
   });
 
+  if (dashboardWatchPaths?.length) {
+    createDashboardWatchers().catch((error) => {
+      console.warn('Dashboard watcher setup failed:', error instanceof Error ? error.message : String(error));
+    });
+  }
+
+  server.once('close', () => {
+    if (dashboardInvalidationTimer) clearTimeout(dashboardInvalidationTimer);
+    for (const watcher of dashboardWatchers) watcher.close?.();
+    dashboardEventClients.clear();
+  });
+
   if (monitorNotifications && notificationCenter) {
     let firstScan = true;
     const scan = async () => {
@@ -1848,6 +1962,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = createServer({
     notificationCenter: new NotificationCenter(),
     monitorNotifications: false,
+    dashboardWatchPaths: defaultDashboardWatchPaths(),
   });
 
   server.listen(port, host, () => {

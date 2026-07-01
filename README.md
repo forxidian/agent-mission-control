@@ -31,6 +31,7 @@
 - Codex 默认读取窗口提升到 5000，并补充读取近期未进入 sqlite 的 rollout-only 会话，隐藏历史线程可用 `codex resume` 恢复。
 - 已安装 PWA 的窗口操作从“最小化”改为“隐藏”，避免在 Dock 右侧留下缩略图。
 - 自动刷新默认 30 秒，可切到 10 秒或 60 秒；后台页面暂停拉取，窗口失焦自动降频到 60 秒，服务端用 dashboard / 通知快照和性能指标降低持续读盘与 JSON 解析压力。
+- Codex quota 总览可显示 ChatGPT 返回的赠送重置次数和每次到期时间；可通过 `AMC_CODEX_RESET_CREDITS=0` 关闭这个联网读取。
 - 新增 Agent 评审工作流：可把线程输出交给本机可用的 Codex / Claude / OpenCode 进行二次评审，支持多种评审模板、自定义审查要求、评审历史和完成提醒。
 - quota 总览支持按 GPT、Claude 等模型家族分组，Claude Desktop / Cowork 可从本地 Claude usage cache 读取聚合限额信号。
 
@@ -39,6 +40,7 @@
 ## 功能
 
 - 汇总 Codex 本地全量线程窗口、标题、项目、归档状态、模型、token 和 quota 信息。
+- 如果本机 Codex 使用 ChatGPT 登录，可读取 ChatGPT reset-credit 接口返回的赠送重置次数和到期时间。
 - 汇总 OpenCode CLI / Desktop 会话，并识别待授权工具调用和 todo。
 - 汇总 Claude Code CLI、Claude Desktop Code、Claude Cowork 会话。
 - 按 GPT、Claude 等模型家族展示实时和本周 quota 可用量。
@@ -88,6 +90,12 @@ http://127.0.0.1:4629
 PORT=4629 HOST=127.0.0.1 npm start
 ```
 
+如果不希望 dashboard 加载时向 ChatGPT 查询 Codex 赠送重置次数，可关闭该数据源：
+
+```bash
+AMC_CODEX_RESET_CREDITS=0 npm start
+```
+
 不要把 `HOST` 绑定到公网或不可信局域网地址，除非你已经评估过本机 Agent 元数据暴露风险。
 
 ## 数据来源
@@ -97,6 +105,7 @@ Codex：
 - `~/.codex/state_5.sqlite`
 - `~/.codex/session_index.jsonl`
 - `~/.codex/sessions/**/rollout-*.jsonl`
+- `~/.codex/auth.json`：仅在 `AMC_CODEX_RESET_CREDITS` 未关闭时读取 access token，用来请求 `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`；token 不会写入日志、测试夹具或前端 API payload。
 
 OpenCode：
 
